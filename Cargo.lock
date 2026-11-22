@@ -1080,8 +1080,9 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 name = "openwoot"
 version = "0.0.0"
 dependencies = [
- "embassy-executor",
+ "critical-section",
  "embassy-futures",
+ "embassy-sync",
  "embassy-usb",
  "embassy-usb-driver",
  "openwoot-image",
@@ -1104,6 +1105,7 @@ dependencies = [
  "openwoot-image",
  "openwoot-protocol",
  "predicates",
+ "serde",
  "thiserror 2.0.21",
 ]
 
@@ -1492,6 +1494,15 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "static_cell"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0530892bb4fa575ee0da4b86f86c667132a94b74bb72160f58ee5a4afec74c23"
+dependencies = [
+ "portable-atomic",
+]
 
 [[package]]
 name = "strsim"
@@ -1930,9 +1941,11 @@ version = "0.0.0"
 dependencies = [
  "cortex-m-rt",
  "embassy-executor",
+ "embassy-usb",
  "openwoot",
  "openwoot-gd32f3",
  "openwoot-image",
+ "static_cell",
 ]
 
 [[package]]
@@ -1941,9 +1954,11 @@ version = "0.0.0"
 dependencies = [
  "cortex-m-rt",
  "embassy-executor",
+ "embassy-usb",
  "openwoot",
  "openwoot-gd32f4",
  "openwoot-image",
+ "static_cell",
 ]
 
 [[package]]

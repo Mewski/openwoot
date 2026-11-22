@@ -9,13 +9,23 @@ use hal::{
     system::Bootloader,
     usb,
 };
-use openwoot::Keyboard;
+use openwoot::{
+    Keyboard,
+    usb::{Face, Identity, KeyboardFormat, Mode, PollingRate, serial_number_from_page},
+};
 pub use openwoot_gd32f4 as hal;
 use openwoot_image::{Descriptor, Region, UpdateMode, UsbIds};
 
 include!(concat!(env!("OUT_DIR"), "/memory_layout.rs"));
 
 pub const NAME: &str = "Wooting 80HE";
+pub const MANUFACTURER: &str = "Wooting";
+pub const FACE: Face = Face {
+    mode: Mode::NoGamepad,
+    keyboard: KeyboardFormat::NKeyRollover,
+    speed: openwoot::usb::Speed::High,
+    gamepad_polling: PollingRate::Every1Millisecond,
+};
 pub const USB_IDS: UsbIds = UsbIds {
     vendor_id: 0x31E3,
     product_id_base: 0x1400,
@@ -53,16 +63,17 @@ hal::bind_interrupts!(struct Irqs {
     USBHS => usb::InterruptHandler;
 });
 
+pub type UsbDriver = usb::Driver;
+
 #[derive(Debug)]
 pub struct Board {
     pub clocks: Clocks,
     pub bootloader: Bootloader,
-    pub usb: usb::Driver,
 }
 
 impl Board {
     #[must_use]
-    pub fn new(peripherals: pac::Peripherals) -> Self {
+    pub fn new(peripherals: pac::Peripherals) -> (Self, UsbDriver) {
         let clocks = CLOCK_TREE.configure(peripherals.rcu, &peripherals.pmu);
         hal::time::start(peripherals.timer4, &clocks);
         let port_a = Port::<'A'>::new(peripherals.gpioa);
@@ -94,13 +105,31 @@ impl Board {
                 .pin10
                 .into_output(OutputType::PushPull, Speed::High, Level::Low),
             Irqs,
-            usb::SpeedLimit::High,
+            match FACE.speed {
+                openwoot::usb::Speed::High => usb::SpeedLimit::High,
+                openwoot::usb::Speed::Full => usb::SpeedLimit::Full,
+            },
         );
-        Self {
+        let board = Self {
             clocks,
             bootloader: Bootloader::new(peripherals.pmu, peripherals.rtc),
-            usb,
-        }
+        };
+        (board, usb)
+    }
+}
+
+#[must_use]
+pub fn serial_number() -> Option<&'static str> {
+    hal::flash::read(SERIAL_PAGE).and_then(serial_number_from_page)
+}
+
+#[must_use]
+pub const fn identity(serial_number: Option<&'static str>) -> Identity<'static> {
+    Identity {
+        ids: USB_IDS,
+        manufacturer: MANUFACTURER,
+        product: NAME,
+        serial_number,
     }
 }
 
@@ -108,6 +137,10 @@ impl Keyboard for Board {
     const DESCRIPTOR: Descriptor = DESCRIPTOR;
     const KEY_COLUMNS: usize = KEY_COLUMNS;
     const KEY_ROWS: usize = KEY_ROWS;
+
+    fn enter_update_mode(&mut self, option: u8) {
+        self.bootloader.enter_update_mode(option)
+    }
 }
 
 #[cfg(test)]

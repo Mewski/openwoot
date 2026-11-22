@@ -20,6 +20,8 @@ openwoot-image = { workspace = true }
 
 [target.'cfg(target_os = "none")'.dependencies]
 embassy-executor = { workspace = true }
+embassy-usb = { workspace = true }
+static_cell = { workspace = true }
 
 [build-dependencies]
 openwoot-image = { workspace = true }
