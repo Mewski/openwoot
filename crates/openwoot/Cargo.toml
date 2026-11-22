@@ -7,8 +7,15 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+embassy-executor = { workspace = true }
 embassy-futures = { workspace = true }
+embassy-usb = { workspace = true }
 openwoot-image = { workspace = true }
+openwoot-protocol = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+embassy-usb-driver = { workspace = true }
 
 [lints]
 workspace = true
