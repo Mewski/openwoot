@@ -4,7 +4,7 @@ use openwoot::{
 };
 use openwoot_protocol::lighting::{Effects, Idle, Rgb};
 
-use super::engine::{Chip, START_MS, lighting, settle};
+use super::support::{Chip, START_MS, lighting, settle};
 
 #[test]
 fn idle_dims_then_switches_off_and_a_key_press_wakes_the_leds() {

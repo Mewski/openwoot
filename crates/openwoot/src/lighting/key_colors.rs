@@ -4,9 +4,9 @@ use super::{
     config::{KeyColors, Rgb},
 };
 
-pub const LAYER_COLOR_MAPS: usize = 3;
+pub(super) type KeyColorMap<const ROWS: usize, const COLUMNS: usize> = [[Rgb; COLUMNS]; ROWS];
 
-pub type KeyColorMap<const ROWS: usize, const COLUMNS: usize> = [[Rgb; COLUMNS]; ROWS];
+const LAYER_COLOR_MAPS: usize = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct LayerColors<const ROWS: usize, const COLUMNS: usize> {
@@ -102,7 +102,7 @@ pub(super) fn paint<const ROWS: usize, const COLUMNS: usize>(
     }
 }
 
-pub(super) fn color_map<const ROWS: usize, const COLUMNS: usize>(
+fn color_map<const ROWS: usize, const COLUMNS: usize>(
     colors: &KeyColors,
 ) -> KeyColorMap<ROWS, COLUMNS> {
     let mut map = [[BLACK; COLUMNS]; ROWS];

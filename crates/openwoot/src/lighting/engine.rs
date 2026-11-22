@@ -5,16 +5,16 @@ use super::{
     brightness::Brightness,
     canvas::Painter,
     color::opaque,
-    config::{Effect, Idle, KeyColors, Rgb, Settings},
+    config::{Idle, KeyColors, Rgb, Settings},
     dirty_pages::DirtyPages,
-    effects::Layers,
+    effects::EffectStack,
     frame::Frame,
     hooks::{Lightbar, Signals},
     idle,
     indicators::{Indicator, LockIndicators, LockState},
     input::KeyEvent,
     key_colors::{LayerColors, paint},
-    leds::{Geometry, Led, LedMap, Variant},
+    leds::{Geometry, LedMap, Variant},
     overlay::{CLASS_GLOBAL, FADE_FULL, Overlay, OverlayId, Overlays, Span},
 };
 use crate::keys::Key;
@@ -46,7 +46,7 @@ pub struct Lighting<
     hooks: H,
     frame: Frame<PAGES, LENGTH>,
     dirty: DirtyPages<PAGES>,
-    layers: Layers<ROWS, COLUMNS>,
+    effects: EffectStack<ROWS, COLUMNS>,
     overlays: Overlays,
     colors: LayerColors<ROWS, COLUMNS>,
     brightness: Brightness,
@@ -81,7 +81,7 @@ where
             hooks,
             frame: Frame::new(),
             dirty: DirtyPages::new(),
-            layers: Layers::new(),
+            effects: EffectStack::new(),
             overlays: Overlays::new(),
             colors: LayerColors::new(),
             brightness: Brightness::new(),
@@ -137,36 +137,19 @@ where
     }
 
     #[must_use]
-    pub fn led_color(&self, led: Led) -> Option<Rgb> {
+    pub fn key_color(&self, key: Key) -> Option<Rgb> {
+        let led = self.variant.led(key.row(), key.column())?;
         self.map
             .position(led)
             .and_then(|position| self.frame.color(position))
     }
 
-    #[must_use]
-    pub fn key_color(&self, key: Key) -> Option<Rgb> {
-        self.variant
-            .led(key.row(), key.column())
-            .and_then(|led| self.led_color(led))
-    }
-
-    pub fn set_variant(&mut self, variant: &'static Variant<ROWS, COLUMNS>) {
-        self.variant = variant;
-        self.paint_base_colors(true);
-        self.refresh_lock_indicators(self.effect_stamp_ms);
-    }
-
     pub fn apply_settings(&mut self, settings: &Settings, now_ms: u32) {
         self.brightness.set(settings.brightness);
         self.indicators.set_colors(settings.indicators);
-        self.layers.apply(&settings.effects);
+        self.effects.apply(&settings.effects);
         self.paint_base_colors(false);
         self.refresh_lock_indicators(now_ms);
-    }
-
-    pub fn apply_effects(&mut self, effects: &[Effect]) {
-        self.layers.apply(effects);
-        self.paint_base_colors(false);
     }
 
     pub fn set_base_colors(&mut self, colors: &KeyColors) {
@@ -261,12 +244,8 @@ where
 
     pub fn key_event(&mut self, key: Key, event: KeyEvent, now_ms: u32) {
         if !self.host_control {
-            self.layers.event(key, event, now_ms, self.variant);
+            self.effects.event(key, event, now_ms, self.variant);
         }
-    }
-
-    pub fn release_all_keys(&mut self) {
-        self.layers.release_all();
     }
 
     pub fn reset_idle_timer(&mut self, now_ms: u32) {
@@ -316,7 +295,7 @@ where
     }
 
     fn effects_shown(&self) -> bool {
-        !self.fast_scan && !self.layers.is_empty()
+        !self.fast_scan && !self.effects.is_empty()
     }
 
     fn effects_enabled(&self) -> bool {

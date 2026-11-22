@@ -26,12 +26,6 @@ impl State {
         *self = Self::new(config);
     }
 
-    pub(super) const fn release_all(&mut self) {
-        self.red = 0;
-        self.green = 0;
-        self.blue = 0;
-    }
-
     pub(super) fn feed<const ROWS: usize, const COLUMNS: usize>(
         &mut self,
         key: Key,

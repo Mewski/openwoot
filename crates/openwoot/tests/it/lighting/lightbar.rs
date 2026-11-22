@@ -20,7 +20,7 @@ use openwoot_protocol::{
     lighting::{Color, Rgb},
 };
 
-use super::{COLUMNS, GEOMETRY, LENGTH, ROWS, VARIANT};
+use super::support::{COLUMNS, GEOMETRY, LENGTH, ROWS, VARIANT};
 
 const GOLDEN: &str = include_str!("lightbar.txt");
 const BAR_PAGES: usize = 10;

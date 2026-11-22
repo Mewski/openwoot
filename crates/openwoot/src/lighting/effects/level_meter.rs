@@ -38,11 +38,6 @@ impl State {
         self.dirty
     }
 
-    pub(super) const fn release_all(&mut self) {
-        self.level = 0;
-        self.dirty = true;
-    }
-
     pub(super) fn feed(&mut self, key: Key, travel: u16, input: &impl KeyTravel) {
         let level = travel_level_12(self.config.gamepad_curve, travel, input);
         if self.level < level {

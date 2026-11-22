@@ -6,7 +6,7 @@ pub const BLACK: Rgb = Rgb {
     blue: 0,
 };
 
-pub const PALETTE: [Rgb; 7] = [
+const PALETTE: [Rgb; 7] = [
     rgb(0xFF, 0x00, 0x00),
     rgb(0x00, 0xFF, 0x00),
     rgb(0x00, 0x00, 0xFF),
@@ -19,10 +19,6 @@ pub const PALETTE: [Rgb; 7] = [
 #[must_use]
 pub const fn rgb(red: u8, green: u8, blue: u8) -> Rgb {
     Rgb { red, green, blue }
-}
-
-pub(super) const fn opaque(color: Color) -> Rgb {
-    rgb(color.red, color.green, color.blue)
 }
 
 #[must_use]
@@ -39,14 +35,19 @@ pub const fn from_rgb565(value: u16) -> Rgb {
 }
 
 #[must_use]
-pub const fn to_rgb565(color: Rgb) -> u16 {
-    (((color.red as u16) << 8) & 0xF800)
-        | (((color.green as u16) << 3) & 0x07E0)
-        | ((color.blue as u16) >> 3)
+pub const fn scale(color: Rgb, factor: u8) -> Rgb {
+    rgb(
+        scale_channel(color.red, factor),
+        scale_channel(color.green, factor),
+        scale_channel(color.blue, factor),
+    )
 }
 
-#[must_use]
-pub fn blend(from: Rgb, to: Rgb, amount: u8) -> Rgb {
+pub(super) const fn opaque(color: Color) -> Rgb {
+    rgb(color.red, color.green, color.blue)
+}
+
+pub(super) fn blend(from: Rgb, to: Rgb, amount: u8) -> Rgb {
     match amount {
         0 => from,
         u8::MAX => to,
@@ -58,23 +59,12 @@ pub fn blend(from: Rgb, to: Rgb, amount: u8) -> Rgb {
     }
 }
 
-#[must_use]
-pub const fn scale(color: Rgb, factor: u8) -> Rgb {
-    rgb(
-        scale_channel(color.red, factor),
-        scale_channel(color.green, factor),
-        scale_channel(color.blue, factor),
-    )
-}
-
-#[must_use]
-pub const fn scale_channel(channel: u8, factor: u8) -> u8 {
+pub(super) const fn scale_channel(channel: u8, factor: u8) -> u8 {
     let factor = factor as u16;
     ((factor + channel as u16 * factor) >> 8) as u8
 }
 
-#[must_use]
-pub const fn mix_level(base_level: u8, level: u8) -> u8 {
+pub(super) const fn mix_level(base_level: u8, level: u8) -> u8 {
     (((base_level as u16) << 8).wrapping_add((255 - base_level as u16) * level as u16) >> 8) as u8
 }
 
@@ -106,8 +96,6 @@ mod tests {
         assert_eq!(from_rgb565(0xF800), rgb(255, 0, 0));
         assert_eq!(from_rgb565(0x0820), rgb(15, 7, 0));
         assert_eq!(from_rgb565(0x0001), rgb(0, 0, 15));
-        assert_eq!(to_rgb565(rgb(255, 255, 255)), 0xFFFF);
-        assert_eq!(to_rgb565(rgb(0x12, 0x34, 0x56)), 0x11AA);
     }
 
     #[test]

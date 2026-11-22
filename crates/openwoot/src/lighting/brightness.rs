@@ -1,6 +1,6 @@
-pub const BRIGHTNESS_STEP: u8 = 5;
-pub const BRIGHTNESS_MAX_FAST_SCAN: u8 = 179;
-pub const BRIGHTNESS_SAVE_DELAY_MS: u32 = 2000;
+const STEP: u8 = 5;
+const MAX_FAST_SCAN: u8 = 179;
+const SAVE_DELAY_MS: u32 = 2000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Brightness {
@@ -36,16 +36,12 @@ impl Brightness {
 
     pub(super) fn step(&mut self, increase: bool, fast_scan: bool, now_ms: u32) -> u8 {
         self.level = if increase {
-            let max = if fast_scan {
-                BRIGHTNESS_MAX_FAST_SCAN
-            } else {
-                u8::MAX
-            };
-            self.level.saturating_add(BRIGHTNESS_STEP).min(max)
+            let max = if fast_scan { MAX_FAST_SCAN } else { u8::MAX };
+            self.level.saturating_add(STEP).min(max)
         } else {
-            self.level.saturating_sub(BRIGHTNESS_STEP)
+            self.level.saturating_sub(STEP)
         };
-        self.save_due_ms = Some(now_ms.wrapping_add(BRIGHTNESS_SAVE_DELAY_MS));
+        self.save_due_ms = Some(now_ms.wrapping_add(SAVE_DELAY_MS));
         self.level
     }
 

@@ -1,9 +1,8 @@
 use heapless::Vec;
 use openwoot_protocol::lightbar::{Builtin, HostSignalIds, MAX_HOST_SIGNALS, Signal};
 
-pub(crate) const SUBSCRIBERS: usize = 8;
-pub(crate) const BUILTINS: usize = 11;
-
+const SUBSCRIBERS: usize = 8;
+const BUILTINS: usize = 11;
 const FAST_SCAN_SIGNALS: u16 = 0x05F9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

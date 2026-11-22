@@ -86,33 +86,12 @@ impl<const PAGES: usize, const LENGTH: usize> Frame<PAGES, LENGTH> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        keys::Key,
-        lighting::{
-            canvas::{Canvas, Painter},
-            leds::{Gains, Led, LedMap, Variant},
+    use crate::lighting::{
+        canvas::{Canvas, Painter},
+        leds::{
+            Led,
+            tests::{MAP, VARIANT},
         },
-    };
-
-    const POSITIONS: [Option<LedPosition>; 4] = [
-        None,
-        Some(LedPosition::new(0, 0)),
-        Some(LedPosition::new(0, 3)),
-        Some(LedPosition::new(1, 0)),
-    ];
-    const MAP: LedMap<2> = LedMap {
-        positions: &POSITIONS,
-        pages: [FramePage::new(0, 0, 6), FramePage::new(1, 90, 3)],
-        gains: Gains {
-            red: 232,
-            green: 255,
-            blue: 255,
-        },
-    };
-    const VARIANT: Variant<1, 3> = Variant {
-        leds: [[Some(Led(1)), Some(Led(3)), None]],
-        spacebar: Key::new(0, 0),
-        spacebar_fill: &[],
     };
 
     #[test]

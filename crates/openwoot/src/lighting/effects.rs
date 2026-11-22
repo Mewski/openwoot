@@ -8,7 +8,6 @@ mod hue;
 mod hue_cycle;
 mod key_ripple;
 mod key_test;
-mod layers;
 mod level_meter;
 mod polar_gradient;
 mod press_color;
@@ -16,6 +15,7 @@ mod rainbow_wave;
 mod reactive_fade;
 mod scanner;
 mod simplex_noise;
+mod stack;
 mod travel;
 
-pub use layers::Layers;
+pub use stack::EffectStack;

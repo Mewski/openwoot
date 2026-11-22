@@ -16,7 +16,7 @@ use crate::{
 };
 
 #[derive(Clone, Debug, PartialEq, Default)]
-pub struct Layers<const ROWS: usize, const COLUMNS: usize> {
+pub struct EffectStack<const ROWS: usize, const COLUMNS: usize> {
     layers: Vec<Layer<ROWS, COLUMNS>, MAX_EFFECTS>,
 }
 
@@ -37,7 +37,7 @@ enum Layer<const ROWS: usize, const COLUMNS: usize> {
     PolarGradient(polar_gradient::State<ROWS, COLUMNS>),
 }
 
-impl<const ROWS: usize, const COLUMNS: usize> Layers<ROWS, COLUMNS> {
+impl<const ROWS: usize, const COLUMNS: usize> EffectStack<ROWS, COLUMNS> {
     #[must_use]
     pub const fn new() -> Self {
         Self { layers: Vec::new() }
@@ -76,11 +76,6 @@ impl<const ROWS: usize, const COLUMNS: usize> Layers<ROWS, COLUMNS> {
         self.layers.iter().any(Layer::consumes_travel)
     }
 
-    pub fn reset(&mut self, effects: &[Effect]) {
-        self.layers.clear();
-        self.apply(effects);
-    }
-
     pub fn render(&mut self, canvas: &mut impl Canvas, geometry: Geometry, elapsed_ms: u32) {
         for layer in &mut self.layers {
             layer.render(canvas, geometry, elapsed_ms);
@@ -114,18 +109,6 @@ impl<const ROWS: usize, const COLUMNS: usize> Layers<ROWS, COLUMNS> {
                     state.feed(key, travel, input);
                 }
                 Layer::AnalogRgbFill(state) => state.feed::<ROWS, COLUMNS>(key, travel, input),
-                _ => {}
-            }
-        }
-    }
-
-    pub fn release_all(&mut self) {
-        for layer in &mut self.layers {
-            match layer {
-                Layer::LevelMeter(state) => state.release_all(),
-                Layer::AnalogSpotlight(state) => state.release_all(false),
-                Layer::AnalogGlow(state) => state.release_all(true),
-                Layer::AnalogRgbFill(state) => state.release_all(),
                 _ => {}
             }
         }

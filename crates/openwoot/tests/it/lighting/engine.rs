@@ -1,110 +1,12 @@
 use openwoot::{
     keys::Key,
-    lighting::{
-        Indicator, KeyEvent, Lighting, LockState, Overlay, OverlayId, Span, from_rgb565, rgb,
-    },
+    lighting::{Indicator, KeyEvent, LockState, Overlay, OverlayId, Span, rgb},
 };
-use openwoot_protocol::lighting::{Color, Effects, Indicators, KeyColors, Rgb, Settings};
+use openwoot_protocol::lighting::{Effects, Rgb};
 
-use super::{
-    COLUMNS, GEOMETRY, LENGTH, MAP, PAGES, ROWS, VARIANT, base_color,
-    effects::{effect, unpack},
-};
+use super::support::{Chip, PAGES, START_MS, TestLighting, effect, lighting, settle};
 
 const GOLDEN: &str = include_str!("outputs.txt");
-pub(super) const START_MS: u32 = 1000;
-
-pub(super) type TestLighting = Lighting<(), ROWS, COLUMNS, PAGES, LENGTH>;
-
-pub(super) struct Chip {
-    registers: [[u8; 256]; 2],
-}
-
-impl Chip {
-    pub(super) fn new() -> Self {
-        Self {
-            registers: [[0; 256]; 2],
-        }
-    }
-
-    pub(super) fn drain(&mut self, lighting: &mut TestLighting) -> usize {
-        let mut writes = 0;
-        while let Some(write) = lighting.next_write() {
-            let bank = usize::from(write.bank);
-            let first = usize::from(write.first_register);
-            self.registers[bank][first..first + write.values().len()]
-                .copy_from_slice(write.values());
-            writes += 1;
-        }
-        writes
-    }
-
-    pub(super) fn key(&self, row: usize, column: usize) -> Rgb {
-        let Some(position) = VARIANT.led(row, column).and_then(|led| MAP.position(led)) else {
-            return Rgb::default();
-        };
-        let page = MAP.page(usize::from(position.page)).unwrap();
-        let register = usize::from(page.first_register) + usize::from(position.offset);
-        let channels = &self.registers[usize::from(page.bank)][register..register + 3];
-        rgb(channels[0], channels[1], channels[2])
-    }
-
-    fn digest(&self) -> u64 {
-        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-        for row in 0..ROWS {
-            for column in 0..COLUMNS {
-                let color = self.key(row, column);
-                for byte in [color.red, color.green, color.blue] {
-                    hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
-                }
-            }
-        }
-        hash
-    }
-}
-
-fn key_colors(color: impl Fn(usize, usize) -> u16) -> KeyColors {
-    let mut colors = KeyColors::new();
-    for row in 0..ROWS {
-        for column in 0..COLUMNS {
-            colors.push(from_rgb565(color(row, column))).unwrap();
-        }
-    }
-    colors
-}
-
-fn white() -> Color {
-    Color {
-        red: 255,
-        green: 255,
-        blue: 255,
-        alpha: 255,
-    }
-}
-
-fn settings(brightness: u8, effects: Effects) -> Settings {
-    Settings {
-        brightness,
-        indicators: Indicators {
-            caps_lock: unpack(0x80FF_2000),
-            scroll_lock: white(),
-            num_lock: white(),
-            layer_lock: white(),
-        },
-        effects,
-    }
-}
-
-pub(super) fn lighting(brightness: u8, effects: Effects) -> TestLighting {
-    let mut lighting = Lighting::new(&MAP, &VARIANT, GEOMETRY, (), START_MS);
-    lighting.apply_settings(&settings(brightness, effects), START_MS);
-    lighting.set_base_colors(&key_colors(base_color));
-    lighting.set_layer_colors(
-        1,
-        Some(&key_colors(|row, column| base_color(column, row + 3))),
-    );
-    lighting
-}
 
 fn key(row: &str, column: &str) -> Key {
     Key::new(row.parse().unwrap(), column.parse().unwrap())
@@ -251,13 +153,6 @@ fn outputs_match_the_reference_firmware_through_fades_overlays_and_layers() {
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
-}
-
-pub(super) fn settle(lighting: &mut TestLighting, chip: &mut Chip, from_ms: u32, to_ms: u32) {
-    for now_ms in from_ms..=to_ms {
-        lighting.update(now_ms, &());
-        chip.drain(lighting);
-    }
 }
 
 #[test]

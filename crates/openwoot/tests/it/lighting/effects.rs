@@ -2,15 +2,13 @@ use std::{collections::HashMap, fmt::Write};
 
 use openwoot::{
     keys::Key,
-    lighting::{Canvas, Frame, KeyEvent, Layers, Painter, from_rgb565},
+    lighting::{Canvas, EffectStack, Frame, KeyEvent, Painter, from_rgb565},
 };
-use openwoot_protocol::lighting::{
-    AnalogLevel, AnalogRgbFill, Breathing, Color, Effect, HueCycle, HueRange, KeyRipple, KeyTest,
-    LevelMeter, PolarGradient, RainbowWave, ReactiveColoring, ReactiveFade, Scanner,
-    ScannerDirection, SimplexNoise,
-};
+use openwoot_protocol::lighting::Effect;
 
-use super::{COLUMNS, GEOMETRY, LENGTH, MAP, PAGES, ROWS, VARIANT, base_color};
+use super::support::{
+    COLUMNS, GEOMETRY, LENGTH, MAP, PAGES, ROWS, VARIANT, base_color, byte, effect,
+};
 
 const GOLDEN: &str = include_str!("effects.txt");
 
@@ -26,125 +24,6 @@ struct Scenario {
 struct Expected {
     digests: Vec<u64>,
     last_frame: String,
-}
-
-fn hues(code: u32) -> HueRange {
-    match code {
-        0 => HueRange::FullCircle,
-        1 => HueRange::From110To184,
-        2 => HueRange::From2To39,
-        3 => HueRange::From64To114,
-        4 => HueRange::From214To254,
-        _ => HueRange::From113To204,
-    }
-}
-
-fn direction(code: u32) -> ScannerDirection {
-    match code {
-        0 => ScannerDirection::Left,
-        1 => ScannerDirection::Right,
-        2 => ScannerDirection::Up,
-        _ => ScannerDirection::Down,
-    }
-}
-
-pub(super) fn unpack(packed: u32) -> Color {
-    let [alpha, red, green, blue] = packed.to_be_bytes();
-    if packed & 0x8000_0000 == 0 {
-        let rgb = from_rgb565(packed as u16);
-        Color {
-            red: rgb.red,
-            green: rgb.green,
-            blue: rgb.blue,
-            alpha: u8::MAX,
-        }
-    } else {
-        Color {
-            red,
-            green,
-            blue,
-            alpha: (alpha & 0x7F) << 1,
-        }
-    }
-}
-
-fn byte(value: u32) -> u8 {
-    u8::try_from(value).unwrap()
-}
-
-pub(super) fn effect(kind: u32, parameters: [u32; 4]) -> Effect {
-    let [first, second, third, fourth] = parameters;
-    match kind {
-        1 => Effect::RainbowWave(RainbowWave {
-            hues: hues(first),
-            period: byte(second),
-            forward: third != 0,
-        }),
-        2 => Effect::Scanner(Scanner {
-            width: byte(first),
-            steps_per_second: byte(second),
-            outside_level: byte(third),
-            direction: direction(fourth),
-        }),
-        3 => Effect::Breathing(Breathing {
-            step_ms: byte(first),
-            min_level: byte(second),
-        }),
-        4 => Effect::HueCycle(HueCycle {
-            hues: hues(first),
-            period: byte(second),
-        }),
-        5 => Effect::KeyRipple(KeyRipple {
-            palette: first & 1 != 0,
-            inverted: first & 4 != 0,
-            steps_per_second: byte(second),
-            decay_step_ms: byte(third),
-            base_level: byte(fourth),
-        }),
-        6 => Effect::ReactiveFade(ReactiveFade {
-            base_level: byte(first),
-            step_ms: byte(second),
-            coloring: if third & 1 != 0 {
-                ReactiveColoring::Palette
-            } else if third & 2 != 0 {
-                ReactiveColoring::Fixed(unpack(fourth))
-            } else {
-                ReactiveColoring::KeyColor
-            },
-            inverted: third & 4 != 0,
-        }),
-        7 => Effect::LevelMeter(LevelMeter {
-            base_level: byte(first),
-            gamepad_curve: second != 0,
-        }),
-        8 => Effect::AnalogSpotlight(AnalogLevel {
-            base_level: byte(first),
-            gamepad_curve: second != 0,
-        }),
-        9 => Effect::AnalogGlow(AnalogLevel {
-            base_level: byte(first),
-            gamepad_curve: second != 0,
-        }),
-        10 => Effect::AnalogRgbFill(AnalogRgbFill {
-            gamepad_curve: first != 0,
-        }),
-        11 => Effect::KeyTest(KeyTest {
-            base_level: byte(first),
-        }),
-        14 => Effect::SimplexNoise(SimplexNoise {
-            from: unpack(first),
-            to: unpack(second),
-            speed: byte(third),
-            scale: byte(fourth),
-        }),
-        15 => Effect::PolarGradient(PolarGradient {
-            from: unpack(first),
-            to: unpack(second),
-            speed: i8::try_from(third.cast_signed()).unwrap(),
-            twist: i8::try_from(fourth.cast_signed()).unwrap(),
-        }),
-        other => panic!("no effect kind {other} in the golden data"),
-    }
 }
 
 fn event(code: u32) -> KeyEvent {
@@ -244,8 +123,8 @@ fn digest(colors: &[u8]) -> u64 {
 }
 
 fn run(scenario: &Scenario) -> (Vec<u64>, String) {
-    let mut layers = Layers::<ROWS, COLUMNS>::new();
-    layers.apply(&scenario.effects);
+    let mut effects = EffectStack::<ROWS, COLUMNS>::new();
+    effects.apply(&scenario.effects);
     let mut travel = [[0_u16; COLUMNS]; ROWS];
     let mut digests = Vec::new();
     let mut colors = Vec::new();
@@ -256,7 +135,7 @@ fn run(scenario: &Scenario) -> (Vec<u64>, String) {
             .iter()
             .filter(|(frame, ..)| *frame == frame_number)
         {
-            layers.event(key, event, now_ms, &VARIANT);
+            effects.event(key, event, now_ms, &VARIANT);
         }
         for &(_, key, value) in scenario
             .travels
@@ -268,7 +147,7 @@ fn run(scenario: &Scenario) -> (Vec<u64>, String) {
         if !scenario.travels.is_empty() {
             for (row, values) in travel.iter().enumerate() {
                 for (column, &value) in values.iter().enumerate() {
-                    layers.feed(Key::new(row as u8, column as u8), value, &());
+                    effects.feed(Key::new(row as u8, column as u8), value, &());
                 }
             }
         }
@@ -280,7 +159,7 @@ fn run(scenario: &Scenario) -> (Vec<u64>, String) {
                     canvas.set_key(row, column, from_rgb565(base_color(row, column)));
                 }
             }
-            layers.render(&mut canvas, GEOMETRY, scenario.step_ms);
+            effects.render(&mut canvas, GEOMETRY, scenario.step_ms);
         }
         colors = key_colors(&mut frame);
         digests.push(digest(&colors));

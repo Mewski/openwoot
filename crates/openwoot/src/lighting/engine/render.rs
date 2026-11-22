@@ -22,11 +22,11 @@ where
         if self.hooks.take_brightness_change() && self.fade_level != 0 {
             self.dirty.push_all();
         }
-        if !self.host_control && self.layers.consumes_travel() {
+        if !self.host_control && self.effects.consumes_travel() {
             for row in 0..ROWS {
                 for column in 0..COLUMNS {
                     let key = Key::new(index_u8(row), index_u8(column));
-                    self.layers.feed(key, input.travel(key), input);
+                    self.effects.feed(key, input.travel(key), input);
                 }
             }
         }
@@ -49,7 +49,7 @@ where
         let since_ms = low_16(since_ms);
         let effects_enabled = self.effects_enabled();
         let effects_dirty =
-            effects_enabled && (self.redraw_requested || self.layers.needs_render());
+            effects_enabled && (self.redraw_requested || self.effects.needs_render());
         if !self.overlays.needs_render(since_ms)
             && !effects_dirty
             && !self.hooks.needs_render(since_ms)
@@ -68,7 +68,7 @@ where
             {
                 let mut canvas = Painter::new(&mut scratch, self.map, self.variant, None);
                 paint(&mut canvas, self.colors.base());
-                self.layers
+                self.effects
                     .render(&mut canvas, self.geometry, u32::from(elapsed_ms));
                 draw_overlays_and_lightbar(
                     &mut canvas,
@@ -130,11 +130,6 @@ where
 
     pub fn invalidate(&mut self) {
         self.dirty.push_all();
-    }
-
-    #[must_use]
-    pub fn has_pending_writes(&self) -> bool {
-        !self.dirty.is_empty()
     }
 
     fn apply_layer_colors(&mut self) {

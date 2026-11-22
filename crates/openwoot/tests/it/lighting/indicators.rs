@@ -4,10 +4,7 @@ use openwoot::{
 };
 use openwoot_protocol::lighting::Effects;
 
-use super::{
-    base_color,
-    engine::{START_MS, lighting},
-};
+use super::support::{START_MS, base_color, lighting};
 
 #[test]
 fn num_lock_indicator_is_lit_while_num_lock_is_off_unless_not_inverted() {

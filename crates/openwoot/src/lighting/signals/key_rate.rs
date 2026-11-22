@@ -1,12 +1,12 @@
-pub(crate) const KEY_RATE_SLOTS: usize = 66;
-pub(crate) const KEY_RATE_STEP_MS: u32 = 15;
+const SLOTS: usize = 66;
+const STEP_MS: u32 = 15;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct KeyRate {
     stamp_ms: u32,
     slot: usize,
     sum: u16,
-    counts: [u8; KEY_RATE_SLOTS],
+    counts: [u8; SLOTS],
 }
 
 impl KeyRate {
@@ -15,7 +15,7 @@ impl KeyRate {
             stamp_ms: now_ms,
             slot: 0,
             sum: 0,
-            counts: [0; KEY_RATE_SLOTS],
+            counts: [0; SLOTS],
         }
     }
 
@@ -29,10 +29,10 @@ impl KeyRate {
     }
 
     pub(crate) fn step(&mut self, now_ms: u32) -> Option<f32> {
-        if now_ms.wrapping_sub(self.stamp_ms) < KEY_RATE_STEP_MS {
+        if now_ms.wrapping_sub(self.stamp_ms) < STEP_MS {
             return None;
         }
-        self.slot = (self.slot + 1) % KEY_RATE_SLOTS;
+        self.slot = (self.slot + 1) % SLOTS;
         self.stamp_ms = now_ms;
         if let Some(count) = self.counts.get_mut(self.slot) {
             self.sum = self.sum.wrapping_sub(u16::from(*count));

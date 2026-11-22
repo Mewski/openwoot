@@ -46,11 +46,6 @@ impl<const PAGES: usize> DirtyPages<PAGES> {
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.length == 0
-    }
-
-    #[must_use]
     pub fn queued(&self) -> &[u8] {
         self.queue.get(..self.length).unwrap_or_default()
     }

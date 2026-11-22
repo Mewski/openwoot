@@ -3,12 +3,13 @@ use heapless::Vec;
 use super::{canvas::Canvas, config::Rgb, hooks::Lightbar, truncate::low_16};
 use crate::keys::Key;
 
-pub const OVERLAY_SLOTS: usize = 5;
-pub const MAX_LIGHTBAR_LEDS: usize = 16;
 pub const FADE_FULL: u8 = u8::MAX;
+pub(super) const MAX_LIGHTBAR_LEDS: usize = 16;
 pub(super) const CLASS_KEYS: u8 = 0x01;
 pub(super) const CLASS_GLOBAL: u8 = 0x02;
 pub(super) const CLASS_ALL: u8 = CLASS_KEYS | CLASS_GLOBAL;
+
+const SLOTS: usize = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OverlayId {
@@ -78,7 +79,7 @@ impl Slot {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Overlays {
-    slots: Vec<Slot, OVERLAY_SLOTS>,
+    slots: Vec<Slot, SLOTS>,
     dirty_classes: u8,
 }
 

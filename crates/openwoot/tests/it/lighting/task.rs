@@ -12,7 +12,7 @@ use openwoot_protocol::{
     lighting::{Effects, Indicators, Settings},
 };
 
-use super::{COLUMNS, GEOMETRY, LENGTH, MAP, PAGES, ROWS, VARIANT, effects::effect};
+use super::support::{COLUMNS, GEOMETRY, LENGTH, MAP, PAGES, ROWS, VARIANT, effect};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Call {

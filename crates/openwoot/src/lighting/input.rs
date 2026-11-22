@@ -3,7 +3,8 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channe
 use crate::keys::Key;
 
 pub const TRAVEL_FULL: u16 = 4095;
-pub const KEY_EVENT_CAPACITY: usize = 32;
+
+const KEY_EVENT_CAPACITY: usize = 32;
 
 pub type KeyEvents = Channel<CriticalSectionRawMutex, KeyActivity, KEY_EVENT_CAPACITY>;
 

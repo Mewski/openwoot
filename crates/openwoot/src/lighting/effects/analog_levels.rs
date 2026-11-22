@@ -41,14 +41,6 @@ impl<const ROWS: usize, const COLUMNS: usize> Levels<ROWS, COLUMNS> {
         }
     }
 
-    pub(super) fn release_all(&mut self, always_dirty: bool) {
-        let pressed = self.cells.iter().flatten().any(|&level| level != 0);
-        self.cells = [[0; COLUMNS]; ROWS];
-        if pressed || always_dirty {
-            self.dirty = true;
-        }
-    }
-
     pub(super) const fn cells(&self) -> &Cells<ROWS, COLUMNS> {
         &self.cells
     }

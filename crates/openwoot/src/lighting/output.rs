@@ -1,6 +1,6 @@
 use super::{color::scale_channel, leds::FramePage};
 
-pub const GAMMA: [u8; 256] = [
+const GAMMA: [u8; 256] = [
     0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 5, 5,
     5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8, 9, 9, 9, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 11,
     12, 12, 13, 13, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 18, 18, 19, 19, 20, 20, 21, 21,
@@ -21,11 +21,6 @@ pub struct PageWrite<const LENGTH: usize> {
     pub first_register: u8,
     values: [u8; LENGTH],
     length: usize,
-}
-
-#[must_use]
-pub fn gamma(linear: u8) -> u8 {
-    GAMMA.get(usize::from(linear)).copied().unwrap_or(u8::MAX)
 }
 
 #[must_use]
@@ -62,6 +57,10 @@ impl<const LENGTH: usize> PageWrite<LENGTH> {
             length,
         }
     }
+}
+
+fn gamma(linear: u8) -> u8 {
+    GAMMA.get(usize::from(linear)).copied().unwrap_or(u8::MAX)
 }
 
 #[cfg(test)]

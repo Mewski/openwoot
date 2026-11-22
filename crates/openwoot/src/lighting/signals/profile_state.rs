@@ -8,33 +8,24 @@ pub struct ProfileState {
 }
 
 impl ProfileState {
-    #[must_use]
-    pub fn active_value(&self) -> f32 {
+    pub(crate) fn active_value(self) -> f32 {
         f32::from(u16::from(self.slot) + 1)
     }
 
-    #[must_use]
-    pub fn count_value(&self) -> f32 {
+    pub(crate) fn count_value(self) -> f32 {
         f32::from(self.count)
     }
 
-    #[must_use]
-    pub fn color_value(&self) -> f32 {
-        color_value(self.color)
+    pub(crate) const fn color_value(self) -> f32 {
+        f32::from_bits(u32::from_be_bytes([
+            0xFF,
+            self.color.red,
+            self.color.green,
+            self.color.blue,
+        ]))
     }
 }
 
-#[must_use]
-fn color_value(color: Rgb) -> f32 {
-    f32::from_bits(u32::from_be_bytes([
-        0xFF,
-        color.red,
-        color.green,
-        color.blue,
-    ]))
-}
-
-#[must_use]
 pub(crate) fn color_of(value: f32) -> Rgb {
     let [_, red, green, blue] = value.to_bits().to_be_bytes();
     Rgb { red, green, blue }
