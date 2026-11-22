@@ -2,19 +2,13 @@ use sequential_storage::map::{self, SerializationError, Value};
 use serde::{Serialize, de::DeserializeOwned};
 
 pub(super) const KEY_LEN: usize = 2;
-pub(super) const VERSION_LEN: usize = 2;
+pub(super) const VERSION_LEN: usize = 1;
 
 const GLOBAL_SLOT: u8 = 0xFF;
 
 pub trait Record: Serialize + DeserializeOwned {
     const ITEM: u8;
-    const VERSION: u16;
-
-    #[must_use]
-    fn migrate(version: u16, body: &[u8]) -> Option<Self> {
-        let _ = (version, body);
-        None
-    }
+    const VERSION: u8;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,14 +22,14 @@ pub struct RecordKey(u16);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stored<'a> {
-    pub version: u16,
+    pub version: u8,
     pub body: &'a [u8],
 }
 
 pub(super) struct Encoding<'r, R>(pub(super) &'r R);
 
 pub(super) struct Encoder<F> {
-    pub(super) version: u16,
+    pub(super) version: u8,
     pub(super) encode: F,
 }
 
@@ -72,10 +66,10 @@ impl RecordKey {
 impl Stored<'_> {
     #[must_use]
     pub fn decode<R: Record>(&self) -> Option<R> {
-        match self.version {
-            version if version == R::VERSION => postcard::from_bytes(self.body).ok(),
-            version if version < R::VERSION => R::migrate(version, self.body),
-            _ => None,
+        if self.version == R::VERSION {
+            postcard::from_bytes(self.body).ok()
+        } else {
+            None
         }
     }
 }
@@ -97,7 +91,7 @@ impl map::Key for RecordKey {
 impl<'a> Value<'a> for Stored<'a> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         let (version, body) = split(buffer)?;
-        version.copy_from_slice(&self.version.to_le_bytes());
+        *version = self.version;
         body.get_mut(..self.body.len())
             .ok_or(SerializationError::BufferTooSmall)?
             .copy_from_slice(self.body);
@@ -105,23 +99,17 @@ impl<'a> Value<'a> for Stored<'a> {
     }
 
     fn deserialize_from(buffer: &'a [u8]) -> Result<(Self, usize), SerializationError> {
-        let (version, body) = buffer
-            .split_first_chunk::<VERSION_LEN>()
+        let (&version, body) = buffer
+            .split_first()
             .ok_or(SerializationError::InvalidFormat)?;
-        Ok((
-            Self {
-                version: u16::from_le_bytes(*version),
-                body,
-            },
-            buffer.len(),
-        ))
+        Ok((Self { version, body }, buffer.len()))
     }
 }
 
 impl<'a, R: Record> Value<'a> for Encoding<'_, R> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         let (version, body) = split(buffer)?;
-        version.copy_from_slice(&R::VERSION.to_le_bytes());
+        *version = R::VERSION;
         let body = postcard::to_slice(self.0, body).map_err(|error| match error {
             postcard::Error::SerializeBufferFull => SerializationError::BufferTooSmall,
             _ => SerializationError::InvalidData,
@@ -137,7 +125,7 @@ impl<'a, R: Record> Value<'a> for Encoding<'_, R> {
 impl<'a, F: Fn(&mut [u8]) -> Option<usize>> Value<'a> for Encoder<F> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         let (version, body) = split(buffer)?;
-        version.copy_from_slice(&self.version.to_le_bytes());
+        *version = self.version;
         let capacity = body.len();
         match (self.encode)(body) {
             Some(len) if len <= capacity => Ok(VERSION_LEN + len),
@@ -151,9 +139,9 @@ impl<'a, F: Fn(&mut [u8]) -> Option<usize>> Value<'a> for Encoder<F> {
     }
 }
 
-fn split(buffer: &mut [u8]) -> Result<(&mut [u8; VERSION_LEN], &mut [u8]), SerializationError> {
+fn split(buffer: &mut [u8]) -> Result<(&mut u8, &mut [u8]), SerializationError> {
     buffer
-        .split_first_chunk_mut::<VERSION_LEN>()
+        .split_first_mut()
         .ok_or(SerializationError::BufferTooSmall)
 }
 
@@ -168,14 +156,7 @@ mod tests {
 
     impl Record for Brightness {
         const ITEM: u8 = 7;
-        const VERSION: u16 = 2;
-
-        fn migrate(version: u16, body: &[u8]) -> Option<Self> {
-            match (version, body) {
-                (1, [percent]) => Some(Self(percent.saturating_mul(2))),
-                _ => None,
-            }
-        }
+        const VERSION: u8 = 2;
     }
 
     #[test]
@@ -194,7 +175,7 @@ mod tests {
         let len = Encoding(&Brightness(200))
             .serialize_into(&mut buffer)
             .unwrap();
-        assert_eq!(buffer[..len], [2, 0, 200, 0][..3]);
+        assert_eq!(buffer[..len], [2, 200]);
         let (stored, _) = Stored::deserialize_from(&buffer[..len]).unwrap();
         assert_eq!(
             stored,
@@ -205,23 +186,13 @@ mod tests {
         );
         assert_eq!(stored.decode::<Brightness>(), Some(Brightness(200)));
         assert_eq!(
-            Encoding(&Brightness(1)).serialize_into(&mut [0; 2]),
+            Encoding(&Brightness(1)).serialize_into(&mut [0; 1]),
             Err(SerializationError::BufferTooSmall)
         );
     }
 
     #[test]
-    fn older_versions_migrate_and_newer_versions_count_as_absent() {
-        let old = Stored {
-            version: 1,
-            body: &[60],
-        };
-        assert_eq!(old.decode::<Brightness>(), Some(Brightness(120)));
-        let newer = Stored {
-            version: 3,
-            body: &[60],
-        };
-        assert_eq!(newer.decode::<Brightness>(), None);
+    fn a_body_that_does_not_decode_counts_as_absent() {
         let broken = Stored {
             version: 2,
             body: &[],
@@ -241,7 +212,7 @@ mod tests {
             },
         };
         let len = encoder.serialize_into(&mut buffer).unwrap();
-        assert_eq!(buffer[..len], [3, 0, 9]);
+        assert_eq!(buffer[..len], [3, 9]);
     }
 
     #[test]
@@ -268,7 +239,7 @@ mod tests {
                 version: 1,
                 encode: |_| Some(0),
             }
-            .serialize_into(&mut [0])
+            .serialize_into(&mut [])
             .is_err()
         );
     }

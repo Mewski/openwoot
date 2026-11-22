@@ -123,7 +123,7 @@ impl<F: MultiwriteNorFlash> Settings<F> {
     pub async fn store_with(
         &mut self,
         key: RecordKey,
-        version: u16,
+        version: u8,
         encode: impl Fn(&mut [u8]) -> Option<usize>,
     ) -> Result<(), Error> {
         let stored = self.write_with(key, Encoder { version, encode }).await;

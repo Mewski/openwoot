@@ -114,35 +114,35 @@ pub const fn default_gamepad_settings() -> gamepad::Settings {
 
 impl Record for keys::Settings {
     const ITEM: u8 = 0x10;
-    const VERSION: u16 = 1;
+    const VERSION: u8 = 1;
 }
 
 impl Record for Keymaps {
     const ITEM: u8 = 0x11;
-    const VERSION: u16 = 1;
+    const VERSION: u8 = 1;
 }
 
 impl Record for Overrides {
     const ITEM: u8 = 0x12;
-    const VERSION: u16 = 1;
+    const VERSION: u8 = 1;
 }
 
 impl Record for advanced::Keys {
     const ITEM: u8 = 0x13;
-    const VERSION: u16 = 1;
+    const VERSION: u8 = 1;
 }
 
 impl Record for gamepad::Mapping {
     const ITEM: u8 = 0x14;
-    const VERSION: u16 = 1;
+    const VERSION: u8 = 1;
 }
 
 impl Record for gamepad::Settings {
     const ITEM: u8 = 0x15;
-    const VERSION: u16 = 1;
+    const VERSION: u8 = 1;
 }
 
 impl Record for ActiveProfile {
     const ITEM: u8 = 0x10;
-    const VERSION: u16 = 1;
+    const VERSION: u8 = 1;
 }

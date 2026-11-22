@@ -59,7 +59,7 @@ endpoints! {
     | ----------          | ---------             | ----------           | ----                                   |
     | GetVersion          | ()                    | Version              | "openwoot/version"                     |
     | EnterUpdateMode     | ()                    | ()                   | "openwoot/update-mode"                 |
-    | GetDiagnostics      | ()                    | DiagnosticsReport    | "openwoot/diagnostics/2"               |
+    | GetDiagnostics      | ()                    | DiagnosticsReport    | "openwoot/diagnostics"                 |
     | GetCapabilities     | ()                    | CapabilitiesReply    | "openwoot/capabilities"                |
     | GetDeviceSettings   | ()                    | DeviceSettingsReply  | "openwoot/device"                      |
     | SetDeviceSettings   | DeviceSettings        | Done                 | "openwoot/device/set"                  |

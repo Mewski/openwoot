@@ -6,7 +6,7 @@ use std::time::Duration;
 use async_hid::{Device, DeviceInfo};
 pub use firmware::{Firmware, Running};
 pub use identity::Identity;
-use openwoot_protocol::{Version, WireError, diagnostics::Report};
+use openwoot_protocol::{Version, diagnostics::Report};
 
 use crate::{
     channel,
@@ -40,13 +40,6 @@ pub enum Error {
     NoChannelAnswer,
     #[error("the firmware did not answer the version query; nothing was changed")]
     NoVersionAnswer,
-    #[error("this openwoot firmware does not report diagnostics; flash a newer image")]
-    NoDiagnostics,
-    #[error(
-        "openwoot firmware {0} does not support the update-mode request; unplug the keyboard, \
-         hold the recovery key combination while plugging it in, then run `openwoot flash` again"
-    )]
-    UpdateModeNotSupported(String),
     #[error("the keyboard in update mode did not appear within {} s", MODE_CHANGE_TIMEOUT.as_secs())]
     UpdateModeDidNotAppear,
     #[error("the firmware did not appear within {} s", MODE_CHANGE_TIMEOUT.as_secs())]
@@ -63,13 +56,9 @@ pub async fn firmware_version(hid: &Hid) -> Result<(DeviceInfo, Version), Error>
 
 pub async fn diagnostics(hid: &Hid) -> Result<(DeviceInfo, Report), Error> {
     let (device, mut interface) = open_running(hid).await?;
-    let report = match channel::diagnostics(&mut interface).await {
-        Ok(report) => report.ok_or(Error::NoChannelAnswer)?,
-        Err(channel::Error::Reply(openwoot_protocol::Error::Device(WireError::UnknownKey))) => {
-            return Err(Error::NoDiagnostics);
-        }
-        Err(error) => return Err(error.into()),
-    };
+    let report = channel::diagnostics(&mut interface)
+        .await?
+        .ok_or(Error::NoChannelAnswer)?;
     Ok((device, report))
 }
 

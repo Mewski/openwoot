@@ -1046,7 +1046,7 @@ async fn load_stored<F: MultiwriteNorFlash, T: Record, R>(
 
 fn decode_sequence<T: DeserializeOwned>(
     stored: Stored<'_>,
-    version: u16,
+    version: u8,
     mut item: impl FnMut(usize, T),
 ) -> bool {
     if stored.version != version {

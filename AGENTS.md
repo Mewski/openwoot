@@ -57,6 +57,7 @@ Optional features (light bar, host signals, editions, ...) and alternative behav
 - The microcontroller flash below the image base holds the factory bootloader, and the pages above the image end hold the serial number and device information. Code must never erase or program either; `memory.x` keeps the linker out of them and each board tests its image area against them.
 - The USB face (ids, interfaces, HID reports, the analog report read by the Wooting Analog SDK) stays close to stock; deviations are listed in `docs/protocol.md`.
 - Nothing is flashed to a keyboard and nothing is pushed without the owner's go-ahead.
+- No backwards-compatibility machinery (endpoint versions, pinned keys, record migrations) before the first tagged release; change types and paths freely.
 - Commits: one line, conventional (`feat(keys): ...`, `fix(usb): ...`, `docs: ...`).
 
 ## Naming

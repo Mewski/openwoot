@@ -13,7 +13,6 @@ use openwoot_protocol::{
 #[derive(Debug, Default)]
 pub(super) struct State {
     pub openwoot: Option<Version>,
-    pub knows_update_mode: bool,
     pub stock_version: Option<[u8; 3]>,
     pub update_mode_requests: usize,
     pub feature_commands: Vec<(u8, u32)>,
@@ -25,10 +24,9 @@ pub(super) struct State {
 pub(super) struct Keyboard(pub Rc<RefCell<State>>);
 
 impl Keyboard {
-    pub(super) fn openwoot(version: Version, knows_update_mode: bool) -> Self {
+    pub(super) fn openwoot(version: Version) -> Self {
         Self(Rc::new(RefCell::new(State {
             openwoot: Some(version),
-            knows_update_mode,
             stock_version: Some([2, 1, 2]),
             ..State::default()
         })))
@@ -58,7 +56,7 @@ impl State {
                 &version,
                 &mut reply,
             )
-        } else if self.knows_update_mode && key == VarKey::Key8(EnterUpdateMode::REQ_KEY) {
+        } else if key == VarKey::Key8(EnterUpdateMode::REQ_KEY) {
             self.update_mode_requests += 1;
             encode_message(
                 &message.reply_header(EnterUpdateMode::RESP_KEY),

@@ -28,7 +28,7 @@ struct Format {
 
 impl Record for Format {
     const ITEM: u8 = 0;
-    const VERSION: u16 = 1;
+    const VERSION: u8 = 1;
 }
 
 impl<F: MultiwriteNorFlash> Settings<F> {

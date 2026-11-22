@@ -20,12 +20,12 @@ pub(crate) struct Brightness(pub(crate) u8);
 
 impl Record for Blob {
     const ITEM: u8 = 1;
-    const VERSION: u16 = 1;
+    const VERSION: u8 = 1;
 }
 
 impl Record for Brightness {
     const ITEM: u8 = 2;
-    const VERSION: u16 = 1;
+    const VERSION: u8 = 1;
 }
 
 pub(crate) fn blob(seed: u32) -> Blob {

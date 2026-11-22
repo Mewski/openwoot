@@ -149,7 +149,7 @@ Start-up keeps large values out of frames that live forever: `main` only calls
 are separate functions whose frames are gone before the executor polls the first task.
 
 The chip HALs paint the stack at reset (`cortex-m-rt` `paint-stack`); `GetDiagnostics`
-(`openwoot/diagnostics/2`) reports the stack size and the deepest use since reset, and
+(`openwoot/diagnostics`) reports the stack size and the deepest use since reset, and
 `openwoot status` prints it as `stack peak`.
 
 ## Image descriptor

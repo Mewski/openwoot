@@ -53,15 +53,10 @@ impl<R: transfer::Reports> Running<R> {
                 stock::enter_update_mode(&mut self.reports).await;
                 Ok(())
             }
-            Firmware::Openwoot(version) => {
-                match channel::enter_update_mode(&mut self.reports).await {
-                    Ok(()) | Err(channel::Error::Transfer(transfer::Error::Disconnected)) => Ok(()),
-                    Err(channel::Error::Reply(openwoot_protocol::Error::Device(_))) => {
-                        Err(Error::UpdateModeNotSupported(version.firmware.to_string()))
-                    }
-                    Err(error) => Err(error.into()),
-                }
-            }
+            Firmware::Openwoot(_) => match channel::enter_update_mode(&mut self.reports).await {
+                Ok(()) | Err(channel::Error::Transfer(transfer::Error::Disconnected)) => Ok(()),
+                Err(error) => Err(error.into()),
+            },
         }
     }
 }
