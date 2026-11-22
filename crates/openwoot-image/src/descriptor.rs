@@ -1,5 +1,7 @@
 use core::mem::size_of;
 
+use crate::Hex;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UsbIds {
     pub vendor_id: u16,
@@ -42,7 +44,7 @@ pub enum DescriptorError {
     FormatVersion(u16),
     #[error("the board name is empty or not UTF-8 text")]
     BoardName,
-    #[error("the image region {start:#010x}-{end:#010x} is empty")]
+    #[error("the image region {}-{} is empty", Hex(*.start), Hex(*.end))]
     EmptyRegion { start: u32, end: u32 },
     #[error("the update mode needs both a product id and a block size")]
     UpdateMode,

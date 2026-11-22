@@ -27,7 +27,7 @@ impl Workspace {
             .current_dir(root)
             .no_deps()
             .exec()
-            .context("cargo metadata failed")?;
+            .context("could not run `cargo metadata`")?;
         let mut workspace = Self {
             root: root.to_path_buf(),
             metadata,
@@ -94,7 +94,7 @@ impl Workspace {
             .unwrap_or_default();
         ensure!(
             directory_name == package.name.as_str(),
-            "board package `{}` lives in boards/{directory_name}",
+            "board package `{}` lives in `boards/{directory_name}`",
             package.name
         );
         let binaries: Vec<&str> = package
@@ -145,6 +145,6 @@ pub(crate) fn execute(command: &mut Command) -> Result<()> {
     let status = command
         .status()
         .with_context(|| format!("could not start {command:?}"))?;
-    ensure!(status.success(), "{command:?} failed with {status}");
+    ensure!(status.success(), "{command:?} ended with {status}");
     Ok(())
 }

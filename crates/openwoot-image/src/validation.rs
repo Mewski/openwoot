@@ -1,4 +1,4 @@
-use crate::{Descriptor, DescriptorError, Region};
+use crate::{Descriptor, DescriptorError, Hex, Region};
 
 const VECTOR_SIZE: usize = 4;
 const RESET_VECTOR_INDEX: usize = 1;
@@ -22,22 +22,26 @@ pub enum Error {
     Truncated(usize),
     #[error("the image has no descriptor behind its vector table")]
     MissingDescriptor,
-    #[error("the image descriptor is invalid: {0}")]
+    #[error("the image descriptor is invalid")]
     Descriptor(#[from] DescriptorError),
-    #[error("the image starts at {found:#010x}, its descriptor at {expected:#010x}")]
+    #[error("the image starts at {}, its descriptor at {}", Hex(*.found), Hex(*.expected))]
     Start { found: u32, expected: u32 },
-    #[error("the image has {size} bytes; its area {start:#010x}-{end:#010x} holds {capacity}")]
+    #[error(
+        "the image has {size} bytes; its area {}-{} holds {capacity} bytes",
+        Hex(*.start),
+        Hex(*.end)
+    )]
     TooLarge {
         size: usize,
         start: u32,
         end: u32,
         capacity: u32,
     },
-    #[error("initial stack pointer {0:#010x} is not an aligned RAM address")]
+    #[error("initial stack pointer {} is not an aligned RAM address", Hex(*.0))]
     StackPointer(u32),
-    #[error("vector {index} ({address:#010x}) does not point into the image as Thumb code")]
+    #[error("vector {index} ({}) does not point into the image as Thumb code", Hex(*.address))]
     Vector { index: usize, address: u32 },
-    #[error("reset vector {0:#010x} does not point behind the descriptor as Thumb code")]
+    #[error("reset vector {} does not point behind the descriptor as Thumb code", Hex(*.0))]
     ResetVector(u32),
 }
 

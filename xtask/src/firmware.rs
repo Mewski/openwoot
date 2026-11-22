@@ -54,20 +54,23 @@ pub(crate) fn build(workspace: &Workspace, board: &Board) -> Result<Images> {
         .join(&board.binary);
     let directory = root.join("build").join(&board.name);
     fs::create_dir_all(&directory)
-        .with_context(|| format!("could not create {}", directory.display()))?;
+        .with_context(|| format!("could not create `{}`", directory.display()))?;
     let images = Images {
         elf: directory.join(format!("{}.elf", board.binary)),
         hex: directory.join(format!("{}.hex", board.binary)),
         bin: directory.join(format!("{}.bin", board.binary)),
     };
     fs::copy(&linked, &images.elf)
-        .with_context(|| format!("could not copy {}", linked.display()))?;
+        .with_context(|| format!("could not copy `{}`", linked.display()))?;
 
-    let data = fs::read(&images.elf)?;
+    let data = fs::read(&images.elf)
+        .with_context(|| format!("could not read `{}`", images.elf.display()))?;
     let elf = Elf::parse(&data)?;
     let segments = elf.loadable_segments()?;
-    fs::write(&images.bin, flatten(&segments)?)?;
-    fs::write(&images.hex, intel_hex(&segments, elf.entry())?)?;
+    fs::write(&images.bin, flatten(&segments)?)
+        .with_context(|| format!("could not write `{}`", images.bin.display()))?;
+    fs::write(&images.hex, intel_hex(&segments, elf.entry())?)
+        .with_context(|| format!("could not write `{}`", images.hex.display()))?;
     Ok(images)
 }
 
@@ -126,8 +129,8 @@ pub(crate) fn flatten(segments: &[Segment<'_>]) -> Result<Vec<u8>> {
         let offset = usize::try_from(segment.address - start)?;
         ensure!(
             offset >= bytes.len(),
-            "loadable segments overlap at {:#010x}",
-            segment.address
+            "loadable segments overlap at {}",
+            openwoot_image::Hex(segment.address)
         );
         bytes.resize(offset, ERASED_BYTE);
         bytes.extend_from_slice(segment.bytes);

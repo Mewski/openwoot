@@ -8,14 +8,14 @@ pub struct MemoryLayout {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum LinkerScriptError {
-    #[error("memory.x has no {0} region")]
+    #[error("`memory.x` has no `{0}` region")]
     MissingRegion(&'static str),
-    #[error("memory.x: the {field} of the {region} region is missing or not a number")]
+    #[error("`memory.x`: the `{field}` of the `{region}` region is missing or not a number")]
     Number {
         region: &'static str,
         field: &'static str,
     },
-    #[error("memory.x: the {0} region ends beyond the address space or is empty")]
+    #[error("`memory.x`: the `{0}` region ends beyond the address space or is empty")]
     Bounds(&'static str),
 }
 

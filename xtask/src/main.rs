@@ -5,6 +5,7 @@ mod rust_source;
 mod workspace;
 
 use std::{
+    fmt::Display,
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -23,12 +24,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    #[command(about = "List the boards (packages under boards/)")]
+    #[command(about = "List the boards (packages under `boards/`)")]
     Boards {
         #[arg(long, help = "Print a JSON array, for a CI matrix")]
         json: bool,
     },
-    #[command(about = "Build firmware images into build/<board>/ (ELF, Intel HEX, binary)")]
+    #[command(about = "Build firmware images into `build/<board>/` (ELF, Intel HEX, binary)")]
     Build {
         #[arg(help = "Board to build", required_unless_present = "all")]
         board: Option<String>,
@@ -94,16 +95,15 @@ fn run(cli: Cli) -> Result<()> {
                         .clone(),
                 ]
             };
+            let width = boards
+                .iter()
+                .map(|board| board.name.len() + 1)
+                .max()
+                .unwrap_or_default();
             for board in &boards {
                 let images = firmware::build(&workspace, board)?;
-                println!(
-                    "{}",
-                    images
-                        .hex
-                        .strip_prefix(&root)
-                        .unwrap_or(&images.hex)
-                        .display()
-                );
+                let image = images.hex.strip_prefix(&root).unwrap_or(&images.hex);
+                show(&board.name, image.display(), width);
             }
             Ok(())
         }
@@ -122,6 +122,10 @@ fn run(cli: Cli) -> Result<()> {
         Command::Check => check::run(&root),
         Command::Pac => pac::run(&root),
     }
+}
+
+pub(crate) fn show(label: &str, value: impl Display, width: usize) {
+    println!("{:<width$} {value}", format!("{label}:"));
 }
 
 fn workspace_root() -> Result<PathBuf> {

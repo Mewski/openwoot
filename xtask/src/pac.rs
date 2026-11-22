@@ -34,7 +34,7 @@ pub(crate) fn run(root: &Path) -> Result<()> {
     FORM.require()?;
     for chip in &CHIPS {
         chip.generate(root)
-            .with_context(|| format!("generating the {} PAC", chip.name))?;
+            .with_context(|| format!("could not generate the `{}` PAC", chip.name))?;
     }
     Ok(())
 }
@@ -49,7 +49,7 @@ impl Tool {
         let output = Command::new(self.program)
             .arg("--version")
             .output()
-            .with_context(|| format!("running `{} --version`", self.program))?;
+            .with_context(|| format!("could not run `{} --version`", self.program))?;
         let reported = String::from_utf8_lossy(&output.stdout);
         ensure!(
             reported.starts_with(self.version),
@@ -75,14 +75,14 @@ impl Chip {
         recreate(&work)?;
 
         let source = package.join("svd").join(self.svd_file);
-        let xml =
-            fs::read_to_string(&source).with_context(|| format!("reading {}", source.display()))?;
+        let xml = fs::read_to_string(&source)
+            .with_context(|| format!("could not read `{}`", source.display()))?;
         let mut device = svd_parser::parse(&with_standard_access(&xml))
-            .with_context(|| format!("parsing {}", source.display()))?;
+            .with_context(|| format!("could not parse `{}`", source.display()))?;
         (self.patch)(&mut device)?;
         let patched = work.join(format!("{}.svd", self.name));
         fs::write(&patched, svd_encoder::encode(&device)?)
-            .with_context(|| format!("writing {}", patched.display()))?;
+            .with_context(|| format!("could not write `{}`", patched.display()))?;
 
         execute(
             Command::new(SVD2RUST.program)
@@ -345,7 +345,7 @@ fn peripheral<'a>(device: &'a mut Device, name: &str) -> Result<&'a mut Peripher
     device
         .get_mut_peripheral(name)
         .map(|peripheral| &mut **peripheral)
-        .with_context(|| format!("no peripheral {name}"))
+        .with_context(|| format!("the SVD file has no peripheral `{name}`"))
 }
 
 fn register<'a>(peripheral: &'a mut PeripheralInfo, name: &str) -> Result<&'a mut RegisterInfo> {
@@ -353,7 +353,7 @@ fn register<'a>(peripheral: &'a mut PeripheralInfo, name: &str) -> Result<&'a mu
     peripheral
         .get_mut_register(name)
         .map(|register| &mut **register)
-        .with_context(|| format!("no register {owner}.{name}"))
+        .with_context(|| format!("the SVD file has no register `{owner}.{name}`"))
 }
 
 fn field<'a>(register: &'a mut RegisterInfo, name: &str) -> Result<&'a mut FieldInfo> {
@@ -361,13 +361,13 @@ fn field<'a>(register: &'a mut RegisterInfo, name: &str) -> Result<&'a mut Field
     register
         .get_mut_field(name)
         .map(|field| &mut **field)
-        .with_context(|| format!("no field {name} in {owner}"))
+        .with_context(|| format!("the SVD file has no field `{name}` in `{owner}`"))
 }
 
 fn add_register(peripheral: &mut PeripheralInfo, register: &Register) -> Result<()> {
     ensure!(
         peripheral.get_register(register.name).is_none(),
-        "{}.{} exists already",
+        "register `{}.{}` exists already",
         peripheral.name,
         register.name
     );
@@ -383,7 +383,7 @@ fn add_field(register: &mut RegisterInfo, bits: &Bits) -> Result<()> {
     let built = bits.build()?;
     ensure!(
         register.bitmask() & built.bitmask() == 0,
-        "{} overlaps a field of {}",
+        "field `{}` overlaps a field of `{}`",
         bits.name,
         register.name
     );
@@ -400,7 +400,7 @@ fn resize(register: &mut RegisterInfo, name: &str, width: u32) -> Result<()> {
     resized.bit_range = BitRange::from_offset_width(resized.bit_range.offset, width);
     ensure!(
         resized.bitmask() & others == 0,
-        "{name} of {} overlaps another field",
+        "field `{name}` of `{}` overlaps another field",
         register.name
     );
     Ok(())
@@ -410,7 +410,7 @@ fn narrow(register: &mut RegisterInfo, size: u32) -> Result<()> {
     let kept = mask(size);
     if let Some(overflow) = register.fields().find(|field| field.msb() >= size) {
         bail!(
-            "field {} of {} does not fit in {size} bits",
+            "field `{}` of `{}` does not fit in {size} bits",
             overflow.name,
             register.name
         );
@@ -436,22 +436,24 @@ fn recreate(directory: &Path) -> Result<()> {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => {
-            return Err(error).with_context(|| format!("removing {}", directory.display()));
+            return Err(error)
+                .with_context(|| format!("could not remove `{}`", directory.display()));
         }
     }
-    fs::create_dir_all(directory).with_context(|| format!("creating {}", directory.display()))
+    fs::create_dir_all(directory)
+        .with_context(|| format!("could not create `{}`", directory.display()))
 }
 
 fn copy(from: &Path, to: &Path) -> Result<()> {
     fs::copy(from, to)
-        .with_context(|| format!("copying {} to {}", from.display(), to.display()))?;
+        .with_context(|| format!("could not copy `{}` to `{}`", from.display(), to.display()))?;
     Ok(())
 }
 
 fn execute(command: &mut Command) -> Result<()> {
     let status = command
         .status()
-        .with_context(|| format!("running {command:?}"))?;
-    ensure!(status.success(), "{command:?} failed with {status}");
+        .with_context(|| format!("could not run {command:?}"))?;
+    ensure!(status.success(), "{command:?} ended with {status}");
     Ok(())
 }
