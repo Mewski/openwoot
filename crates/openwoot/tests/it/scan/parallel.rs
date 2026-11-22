@@ -3,7 +3,10 @@ use openwoot::{
     scan::{Mode, Travel},
 };
 
-use super::{Operation, SETTLING_CYCLES, cycle, event_travels, scanner, settled};
+use super::{
+    simulated::Operation,
+    support::{SETTLING_CYCLES, cycle, event_travels, scanner, settled},
+};
 
 #[test]
 fn the_parallel_scan_converts_every_address_once_and_rechecks_changed_inputs() {

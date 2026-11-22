@@ -13,9 +13,9 @@ mod rebound;
 mod switch;
 mod switch_type;
 
-pub use bottom_out::BottomOut;
+pub(crate) use bottom_out::BottomOut;
 use bottom_out::VALUE_NONE;
-pub use curve::Curve;
+use curve::Curve;
 pub use noise::{Calibration, MinMax, NoiseState, NoiseStatistics, StandardDeviation};
 pub use rebound::{Rebound, ReboundState};
 pub use switch::Switch;

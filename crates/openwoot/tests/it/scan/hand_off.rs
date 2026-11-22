@@ -1,7 +1,10 @@
 use embassy_futures::block_on;
 use openwoot::scan::{Mode, Scanner, Shared};
 
-use super::{Bench, Bench80, PRESSED, SETTLING_CYCLES, scanner};
+use super::{
+    simulated::Bench,
+    support::{Bench80, PRESSED, SETTLING_CYCLES, scanner},
+};
 
 #[test]
 fn the_hand_off_lends_the_scanner_to_the_interrupt_for_one_cycle() {

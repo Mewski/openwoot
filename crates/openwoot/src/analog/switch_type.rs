@@ -42,7 +42,7 @@ impl SwitchType {
     }
 
     #[must_use]
-    pub fn curve(self) -> Curve {
+    pub(super) fn curve(self) -> Curve {
         Curve::number(self.specification().curve)
     }
 

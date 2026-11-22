@@ -1,6 +1,9 @@
 use openwoot::{analog::ReboundState, keys::Key, scan::Travel};
 
-use super::{Bench80, KEYS, Operation, PRESSED, cycle, event_travels, scanner, settled};
+use super::{
+    simulated::Operation,
+    support::{Bench80, KEYS, PRESSED, cycle, event_travels, scanner, settled},
+};
 
 #[test]
 fn a_single_input_cycle_converts_every_key_once_and_switches_inputs_five_times() {

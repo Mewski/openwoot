@@ -22,7 +22,7 @@ mod shared;
 mod travel;
 
 pub use converter::{Converter, Sample};
-pub use events::{EVENT_CAPACITY, Event, Events};
+pub use events::{Event, Events};
 pub use map::Map;
 pub use mode::Mode;
 use position::Grid;

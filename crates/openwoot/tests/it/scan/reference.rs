@@ -3,7 +3,10 @@ use openwoot::{
     scan::{Map, Position, Scanner, Travel},
 };
 
-use super::{ReferenceBench, Simulated, calibrate};
+use super::{
+    simulated::{ReferenceBench, Simulated},
+    support::calibrate,
+};
 
 fn reference_scanner(reference: u16, reading: u16) -> Scanner<ReferenceBench, 4, 16> {
     let mut codes = [[0xFF; 16]; 4];

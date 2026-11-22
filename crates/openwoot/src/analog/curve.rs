@@ -5,7 +5,7 @@ const STEPS: &[u8; COUNT * POINTS] = include_bytes!("../../data/travel_curves.tx
 static CURVES: [[u16; POINTS]; COUNT] = decode(STEPS);
 
 #[derive(Clone, Copy, Debug)]
-pub struct Curve(&'static [u16; POINTS]);
+pub(super) struct Curve(&'static [u16; POINTS]);
 
 impl Curve {
     pub(super) const END_MAX: u32 = 0xF_FF00;
@@ -20,16 +20,7 @@ impl Curve {
     }
 
     #[must_use]
-    pub fn point(self, index: u32) -> u16 {
-        usize::try_from(index)
-            .ok()
-            .and_then(|index| self.0.get(index))
-            .copied()
-            .unwrap_or(0)
-    }
-
-    #[must_use]
-    pub fn interpolate(self, index_q8: u32) -> u16 {
+    pub(super) fn interpolate(self, index_q8: u32) -> u16 {
         let index = (index_q8 >> 8) & 0xFFFF;
         let fraction = index_q8 & 0xFF;
         let low = u32::from(self.point(index));
@@ -77,6 +68,14 @@ impl Curve {
                     (position + (high << 8)).min(Self::END_MAX)
                 })
         }
+    }
+
+    fn point(self, index: u32) -> u16 {
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| self.0.get(index))
+            .copied()
+            .unwrap_or(0)
     }
 
     fn plateau_end(self, hit: u32, target: u32) -> u32 {

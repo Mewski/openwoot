@@ -72,11 +72,6 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
     }
 
     #[must_use]
-    pub const fn filtered(&self) -> u16 {
-        self.filtered
-    }
-
-    #[must_use]
     pub const fn value(&self) -> u16 {
         self.value
     }
@@ -84,11 +79,6 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
     #[must_use]
     pub const fn rest_level(&self) -> u16 {
         self.rest_level
-    }
-
-    #[must_use]
-    pub const fn noise_band(&self) -> u16 {
-        self.noise_band
     }
 
     #[must_use]
@@ -104,11 +94,6 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
     #[must_use]
     pub const fn parallel(&self) -> Calibration {
         self.parallel
-    }
-
-    #[must_use]
-    pub const fn bottom_out(&self) -> &BottomOut {
-        &self.bottom_out
     }
 
     #[must_use]
@@ -129,11 +114,6 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
     #[must_use]
     pub const fn is_recalibrating(&self) -> bool {
         self.recalibrating
-    }
-
-    #[must_use]
-    pub const fn rest_threshold(&self) -> u16 {
-        self.rest_level.wrapping_add(Switch::REST_MARGIN)
     }
 
     #[must_use]
@@ -243,6 +223,11 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
         } else {
             self.filtered
         }
+    }
+
+    #[inline(always)]
+    pub(super) const fn filtered(&self) -> u16 {
+        self.filtered
     }
 
     #[inline(always)]
@@ -357,5 +342,9 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
 
     const fn is_calibrated(&self) -> bool {
         self.noise_band != 0 && self.rest_level != 0
+    }
+
+    const fn rest_threshold(&self) -> u16 {
+        self.rest_level.wrapping_add(Switch::REST_MARGIN)
     }
 }

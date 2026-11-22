@@ -10,15 +10,7 @@ pub enum Batching {
 }
 
 impl Batching {
-    #[must_use]
-    pub const fn count(self, inputs: usize, addresses: usize) -> usize {
-        match self {
-            Self::Addresses => addresses,
-            Self::InputPairs => inputs.div_ceil(2),
-        }
-    }
-
-    pub fn members(
+    pub(super) fn members(
         self,
         batch: u8,
         inputs: usize,
@@ -35,6 +27,13 @@ impl Batching {
         pair_members
             .chain(column_members)
             .map(|(input, address)| Position::new(input as u8, address as u8))
+    }
+
+    const fn count(self, inputs: usize, addresses: usize) -> usize {
+        match self {
+            Self::Addresses => addresses,
+            Self::InputPairs => inputs.div_ceil(2),
+        }
     }
 }
 
@@ -102,21 +101,8 @@ impl Recalibration {
     }
 
     #[must_use]
-    pub const fn is_pausing(&self) -> bool {
-        self.pass_done
-    }
-
-    #[must_use]
     pub const fn is_held(&self) -> bool {
         self.hold
-    }
-
-    #[must_use]
-    pub const fn has_completed(&self, mode: Mode) -> bool {
-        match mode {
-            Mode::Single => self.done_single,
-            Mode::Parallel => self.done_parallel,
-        }
     }
 
     pub(super) const fn stop(&mut self) -> bool {
@@ -257,7 +243,7 @@ mod tests {
             recalibration.advance(Mode::Single, 30, 6, 15),
             Advance::PassComplete
         );
-        assert!(recalibration.has_completed(Mode::Single));
+        assert!(recalibration.done_single);
         assert_eq!(recalibration.batching(), Batching::Addresses);
         assert_eq!(recalibration.decide(20_029), Decision::Wait);
         assert_eq!(recalibration.decide(20_030), Decision::StartBatch);

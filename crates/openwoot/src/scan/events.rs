@@ -1,7 +1,7 @@
 use super::Position;
 use crate::keys::Key;
 
-pub const EVENT_CAPACITY: usize = 128;
+const CAPACITY: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Event {
@@ -12,7 +12,7 @@ pub struct Event {
 
 #[derive(Clone, Debug)]
 pub struct Events {
-    events: [Event; EVENT_CAPACITY],
+    events: [Event; CAPACITY],
     len: usize,
 }
 
@@ -31,7 +31,7 @@ impl Events {
             travel: 0,
         };
         Self {
-            events: [EMPTY; EVENT_CAPACITY],
+            events: [EMPTY; CAPACITY],
             len: 0,
         }
     }

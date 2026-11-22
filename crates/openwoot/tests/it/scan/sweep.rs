@@ -1,6 +1,9 @@
 use openwoot::scan::{Mode, Position, Travel};
 
-use super::{Operation, SETTLING_CYCLES, calibrate, cycle, scanner, wobble};
+use super::{
+    simulated::Operation,
+    support::{SETTLING_CYCLES, calibrate, cycle, scanner, wobble},
+};
 
 #[test]
 fn the_sweep_measures_rest_level_and_noise_band_of_both_scan_modes() {

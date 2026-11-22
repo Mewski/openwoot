@@ -3,7 +3,7 @@ use openwoot::{
     scan::{Batching, Position, Travel},
 };
 
-use super::{calibrate, cycle, scanner, settled, wobble};
+use super::support::{calibrate, cycle, scanner, settled, wobble};
 
 #[test]
 fn idle_recalibration_measures_two_inputs_per_batch() {

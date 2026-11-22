@@ -224,11 +224,6 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
         }));
     }
 
-    #[must_use]
-    pub const fn has_trigger(&self) -> bool {
-        self.trigger.is_some()
-    }
-
     #[inline(always)]
     pub fn on_conversion(&mut self, travel: &Travel<INPUTS, ADDRESSES>) -> Outcome {
         if let Some(trigger) = self.trigger.take() {
@@ -245,6 +240,10 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
         } else {
             self.single_sample(travel)
         }
+    }
+
+    pub(super) const fn has_trigger(&self) -> bool {
+        self.trigger.is_some()
     }
 
     const fn mode_is_parallel(&self) -> bool {

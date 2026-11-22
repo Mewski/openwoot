@@ -20,7 +20,7 @@ const PLATEAU_LIMIT_DENOMINATOR: u32 = 255;
 const CONFIDENCE_ADOPT: u16 = 149;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct BottomOut {
+pub(crate) struct BottomOut {
     reference: u16,
     estimate: u16,
     learned: bool,
@@ -90,49 +90,14 @@ impl Tracker {
     }
 }
 
-impl Default for BottomOut {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl BottomOut {
-    #[must_use]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             reference: VALUE_NONE,
             estimate: VALUE_NONE,
             learned: false,
             tracker: Tracker::new(),
         }
-    }
-
-    #[must_use]
-    pub const fn estimate(&self) -> Option<u16> {
-        if self.estimate == VALUE_NONE {
-            None
-        } else {
-            Some(self.estimate)
-        }
-    }
-
-    #[must_use]
-    pub const fn reference(&self) -> Option<u16> {
-        if self.reference == VALUE_NONE {
-            None
-        } else {
-            Some(self.reference)
-        }
-    }
-
-    #[must_use]
-    pub const fn is_learned(&self) -> bool {
-        self.learned
-    }
-
-    #[must_use]
-    pub const fn confidence(&self) -> u16 {
-        self.tracker.confidence
     }
 
     pub(crate) fn reset(&mut self) {
@@ -588,10 +553,10 @@ mod tests {
         let mut bottom = 1200;
         stroke(&mut tracker, &mut bottom, press(1100, 0));
         assert_eq!(bottom, 973);
-        assert_eq!(tracker.estimate(), Some(973));
-        assert_eq!(tracker.reference(), Some(1100));
-        assert!(tracker.is_learned());
-        assert_eq!(tracker.confidence(), 40);
+        assert_eq!(tracker.estimate, 973);
+        assert_eq!(tracker.reference, 1100);
+        assert!(tracker.learned);
+        assert_eq!(tracker.tracker.confidence, 40);
     }
 
     #[test]
@@ -602,9 +567,9 @@ mod tests {
             .chain(core::iter::once((REST, 40_000)))
             .chain(press(1050, 41_100));
         stroke(&mut tracker, &mut bottom, samples);
-        assert_eq!(tracker.reference(), Some(1050));
-        assert_eq!(tracker.estimate(), Some(973));
-        assert_eq!(tracker.confidence(), 91);
+        assert_eq!(tracker.reference, 1050);
+        assert_eq!(tracker.estimate, 973);
+        assert_eq!(tracker.tracker.confidence, 91);
         assert_eq!(bottom, 973);
     }
 
