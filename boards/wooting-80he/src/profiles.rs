@@ -1,0 +1,464 @@
+use openwoot::{
+    layout::LAYERS,
+    lighting::from_rgb565,
+    profile::{Factory, Preset},
+};
+use openwoot_protocol::{
+    global,
+    heapless::Vec,
+    keys::{self, Distance, RapidTrigger, ScanMode, TapDuration},
+    lighting::{
+        AnalogLevel, Color, Effect, HueRange, Idle, Indicators, KeyColors, KeyTest, LevelMeter,
+        RainbowWave, ReactiveColoring, ReactiveFade, Rgb, Settings,
+    },
+};
+
+use crate::{FACE, KEY_COLUMNS, KEY_ROWS, keys::KEYMAP};
+
+pub const CREATED: u8 = 2;
+
+pub static FACTORY: Factory<KEY_ROWS, KEY_COLUMNS> = Factory {
+    keymap: KEYMAP,
+    presets: &PRESETS,
+    fallback: Preset {
+        name: "",
+        color: NO_COLOR,
+        keys: TYPING_KEYS,
+        lighting: lighting([]),
+        colors: [None; LAYERS],
+    },
+    created: CREATED,
+    global: global::Settings {
+        idle: Some(Idle {
+            dim_after_minutes: 5,
+            off_after_minutes: 10,
+            off_enabled: true,
+        }),
+        num_lock_inverted: false,
+        release_rebound_filter: false,
+    },
+    face: FACE,
+};
+
+static PRESETS: [Preset; 4] = [
+    Preset {
+        name: "Typing Profile",
+        color: BLUE,
+        keys: TYPING_KEYS,
+        lighting: lighting([
+            Effect::RainbowWave(RainbowWave {
+                hues: HueRange::From113To204,
+                period: 34,
+                forward: false,
+            }),
+            reactive_fade(8, 0xFFFF),
+            reactive_fade(4, 0xFFE0),
+        ]),
+        colors: [Some(&BLUE_RUN), Some(&LAYER_ONE), None, None],
+    },
+    Preset {
+        name: "Rapid Profile",
+        color: RED,
+        keys: RAPID_KEYS,
+        lighting: lighting([
+            Effect::RainbowWave(RainbowWave {
+                hues: HueRange::From2To39,
+                period: 30,
+                forward: false,
+            }),
+            Effect::KeyTest(KeyTest { base_level: 255 }),
+        ]),
+        colors: [Some(&RED_RUN), Some(&LAYER_ONE), None, None],
+    },
+    Preset {
+        name: "Analog Profile",
+        color: NO_COLOR,
+        keys: RAPID_KEYS,
+        lighting: lighting([Effect::LevelMeter(LevelMeter {
+            base_level: 51,
+            gamepad_curve: false,
+        })]),
+        colors: [None; LAYERS],
+    },
+    Preset {
+        name: "Analog Profile",
+        color: NO_COLOR,
+        keys: RAPID_KEYS,
+        lighting: lighting([Effect::AnalogGlow(AnalogLevel {
+            base_level: 130,
+            gamepad_curve: false,
+        })]),
+        colors: [None; LAYERS],
+    },
+];
+
+const TYPING_KEYS: keys::Settings = keys::Settings {
+    actuation: Distance::from_fraction(63 * 257),
+    rapid_trigger_enabled: false,
+    rapid_trigger: RapidTrigger {
+        press: Distance::from_fraction(65 * 257),
+        release: None,
+        continuous: false,
+    },
+    tap_duration: TapDuration::FortyMilliseconds,
+    scan_mode: ScanMode::Single,
+    keyboard_in_gamepad_mode: true,
+};
+const RAPID_KEYS: keys::Settings = keys::Settings {
+    actuation: Distance::from_fraction(26 * 257),
+    rapid_trigger_enabled: true,
+    rapid_trigger: RapidTrigger {
+        press: Distance::from_fraction(26 * 257),
+        release: None,
+        continuous: false,
+    },
+    ..TYPING_KEYS
+};
+const WHITE: Color = from_rgb565(0xFFFF).opaque();
+const NO_COLOR: Rgb = Rgb {
+    red: 0,
+    green: 0,
+    blue: 0,
+};
+const BLUE: Rgb = Rgb {
+    red: 0x00,
+    green: 0x00,
+    blue: 0xFF,
+};
+const RED: Rgb = Rgb {
+    red: 0xFF,
+    green: 0x28,
+    blue: 0x28,
+};
+const BASE_COLUMNS: usize = 21;
+const BLUE_RUN_565: [[u16; BASE_COLUMNS]; KEY_ROWS] = [
+    [
+        0x001F, 0x001F, 0x001F, 0x001F, 0x001F, 0x03BF, 0x03BF, 0x03BF, 0x03BF, 0x071F, 0x071F,
+        0x071F, 0x071F, 0x07F1, 0x07F1, 0x07F1, 0x07F1, 0x6FE0, 0x6FE0, 0x6FE0, 0x6FE0,
+    ],
+    [
+        0x001F, 0x001F, 0x001F, 0x001F, 0x001F, 0x03BF, 0x03BF, 0x03BF, 0x03BF, 0x071F, 0x071F,
+        0x071F, 0x071F, 0x07F1, 0x07F1, 0x07F1, 0x07F1, 0x6FE0, 0x6FE0, 0x6FE0, 0x6FE0,
+    ],
+    [
+        0x001F, 0x001F, 0x001F, 0x001F, 0x001F, 0x03BF, 0x03BF, 0x03BF, 0x03BF, 0x071F, 0x071F,
+        0x071F, 0x071F, 0x07F1, 0x07F1, 0x07F1, 0x07F1, 0x6FE0, 0x6FE0, 0x6FE0, 0x6FE0,
+    ],
+    [
+        0x001F, 0x001F, 0x001F, 0x001F, 0x001F, 0x03BF, 0x03BF, 0x03BF, 0x03BF, 0x071F, 0x071F,
+        0x071F, 0x071F, 0x07F1, 0x07F1, 0x07F1, 0x07F1, 0x6FE0, 0x6FE0, 0x6FE0, 0x6FE0,
+    ],
+    [
+        0x001F, 0x001F, 0x001F, 0x001F, 0x001F, 0x03BF, 0x03BF, 0x03BF, 0x03BF, 0x071F, 0x071F,
+        0x071F, 0x071F, 0x07F1, 0x07F1, 0x07F1, 0x07F1, 0x6FE0, 0x6FE0, 0x6FE0, 0x6FE0,
+    ],
+    [
+        0x001F, 0x001F, 0x001F, 0x001F, 0x001F, 0x03BF, 0x03BF, 0x03BF, 0x03BF, 0x071F, 0x071F,
+        0x071F, 0x071F, 0x07F1, 0x07F1, 0x07F1, 0x07F1, 0x6FE0, 0x6FE0, 0x6FE0, 0x6FE0,
+    ],
+];
+const RED_RUN_565: [[u16; BASE_COLUMNS]; KEY_ROWS] = [
+    [
+        0xF800, 0xF800, 0xF800, 0xF800, 0xF800, 0xFA00, 0xFA00, 0xFA00, 0xFA00, 0xFBA0, 0xFBA0,
+        0xFBA0, 0xFBA0, 0xFD60, 0xFD60, 0xFD60, 0xFD60, 0xFF60, 0xFF60, 0xFF60, 0xFF60,
+    ],
+    [
+        0xF800, 0xF800, 0xF800, 0xF800, 0xF800, 0xFA00, 0xFA00, 0xFA00, 0xFA00, 0xFBA0, 0xFBA0,
+        0xFBA0, 0xFBA0, 0xFD60, 0xFD60, 0xFD60, 0xFD60, 0xFF60, 0xFF60, 0xFF60, 0xFF60,
+    ],
+    [
+        0xF800, 0xF800, 0xF800, 0xF800, 0xF800, 0xFA00, 0xFA00, 0xFA00, 0xFA00, 0xFBA0, 0xFBA0,
+        0xFBA0, 0xFBA0, 0xFD60, 0xFD60, 0xFD60, 0xFD60, 0xFF60, 0xFF60, 0xFF60, 0xFF60,
+    ],
+    [
+        0xF800, 0xF800, 0xF800, 0xF800, 0xF800, 0xFA00, 0xFA00, 0xFA00, 0xFA00, 0xFBA0, 0xFBA0,
+        0xFBA0, 0xFBA0, 0xFD60, 0xFD60, 0xFD60, 0xFD60, 0xFF60, 0xFF60, 0xFF60, 0xFF60,
+    ],
+    [
+        0xF800, 0xF800, 0xF800, 0xF800, 0xF800, 0xFA00, 0xFA00, 0xFA00, 0xFA00, 0xFBA0, 0xFBA0,
+        0xFBA0, 0xFBA0, 0xFD60, 0xFD60, 0xFD60, 0xFD60, 0xFF60, 0xFF60, 0xFF60, 0xFF60,
+    ],
+    [
+        0xF800, 0xF800, 0xF800, 0xF800, 0xF800, 0xFA00, 0xFA00, 0xFA00, 0xFA00, 0xFBA0, 0xFBA0,
+        0xFBA0, 0xFBA0, 0xFD60, 0xFD60, 0xFD60, 0xFD60, 0xFF60, 0xFF60, 0xFF60, 0xFF60,
+    ],
+];
+const LAYER_ONE_565: [[u16; KEY_COLUMNS]; KEY_ROWS] = [
+    [
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+        0x0000, 0xFFFF, 0xFFFF, 0x07E0, 0x07E0, 0x07E0,
+    ],
+    [
+        0x0000, 0xFFE0, 0xFFE0, 0xFFE0, 0xFFE0, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+        0x0000, 0x0000, 0x0000, 0x0000, 0x001F, 0x001F,
+    ],
+    [
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+        0x0000, 0x0000, 0x0000, 0x0000, 0x001F, 0x001F,
+    ],
+    [
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x001F, 0x001F, 0x001F, 0x0000,
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    ],
+    [
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x07E0, 0x07E0, 0x07E0,
+        0x0000, 0x0000, 0x0000, 0x0000, 0xFD80, 0x0000,
+    ],
+    [
+        0x0000, 0xF800, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+        0x0000, 0x0000, 0x0000, 0xFD80, 0xFD80, 0xFD80,
+    ],
+];
+
+static BLUE_RUN: KeyColors = key_colors(&BLUE_RUN_565);
+static RED_RUN: KeyColors = key_colors(&RED_RUN_565);
+static LAYER_ONE: KeyColors = key_colors(&LAYER_ONE_565);
+
+const fn lighting<const EFFECTS: usize>(effects: [Effect; EFFECTS]) -> Settings {
+    Settings {
+        brightness: 255,
+        indicators: Indicators {
+            caps_lock: WHITE,
+            scroll_lock: WHITE,
+            num_lock: WHITE,
+            layer_lock: WHITE,
+        },
+        effects: Vec::from_array(effects),
+    }
+}
+
+const fn reactive_fade(step_ms: u8, rgb565: u16) -> Effect {
+    Effect::ReactiveFade(ReactiveFade {
+        base_level: 255,
+        step_ms,
+        coloring: ReactiveColoring::Fixed(from_rgb565(rgb565).opaque()),
+        inverted: false,
+    })
+}
+
+#[expect(
+    clippy::indexing_slicing,
+    reason = "runs only in constant evaluation, which rejects an index outside the fixed tables"
+)]
+const fn key_colors<const WIDTH: usize>(map: &[[u16; WIDTH]; KEY_ROWS]) -> KeyColors {
+    let mut colors = [NO_COLOR; KEY_ROWS * KEY_COLUMNS];
+    let mut row = 0;
+    while row < KEY_ROWS {
+        let mut column = 0;
+        while column < KEY_COLUMNS {
+            colors[row * KEY_COLUMNS + column] = from_rgb565(map[row][column]);
+            column += 1;
+        }
+        row += 1;
+    }
+    Vec::from_array(colors)
+}
+
+#[cfg(test)]
+mod tests {
+    use openwoot::{
+        keys::Key,
+        lighting::{Canvas, Frame, KeyEvent, Layers, Painter},
+    };
+    use openwoot_protocol::keys::Layer;
+
+    use super::*;
+    use crate::lighting::{ANSI, GEOMETRY, LEDS, PAGE_LENGTH, PAGES};
+
+    const STEP_MS: u32 = 16;
+    const KEY_EVENTS: [(u32, Key, KeyEvent); 4] = [
+        (3, Key::new(3, 1), KeyEvent::Pressed),
+        (10, Key::new(3, 1), KeyEvent::Released),
+        (12, Key::new(2, 5), KeyEvent::Pressed),
+        (30, Key::new(2, 5), KeyEvent::Released),
+    ];
+    const TYPING_FRAMES: [u64; 60] = [
+        0xdc8e_7cd2_4515_dcba,
+        0xdc8e_7cd2_4515_dcba,
+        0x69f9_34f5_43e9_3ec7,
+        0x69f9_34f5_43e9_3ec7,
+        0x02a4_0558_5e6a_8a77,
+        0x02a4_0558_5e6a_8a77,
+        0x10b8_3dd2_323c_47ab,
+        0x10b8_3dd2_323c_47ab,
+        0x10b8_3dd2_323c_47ab,
+        0xfc84_edad_3e3c_f619,
+        0xfc84_edad_3e3c_f619,
+        0xc668_32fd_87e2_c944,
+        0xc668_32fd_87e2_c944,
+        0xaa17_8328_623d_286e,
+        0xaa17_8328_623d_286e,
+        0xaa17_8328_623d_286e,
+        0xbc55_f636_68d0_46a5,
+        0xbc55_f636_68d0_46a5,
+        0x6ffb_ef1c_2fee_b60b,
+        0x6ffb_ef1c_2fee_b60b,
+        0xf985_0a6e_d1a2_6c4b,
+        0xf985_0a6e_d1a2_6c4b,
+        0xf30a_51ab_2805_64f3,
+        0xf30a_51ab_2805_64f3,
+        0xf30a_51ab_2805_64f3,
+        0xe04e_8f8a_0a3c_c0d1,
+        0xe04e_8f8a_0a3c_c0d1,
+        0x58eb_c1ba_2df4_dabb,
+        0x58eb_c1ba_2df4_dabb,
+        0xc48e_a7e6_0018_258b,
+        0xc48e_a7e6_0018_258b,
+        0xc48e_a7e6_0018_258b,
+        0xef51_6c42_35df_5887,
+        0xef51_6c42_35df_5887,
+        0xa40d_7b4b_72c7_96a5,
+        0xa40d_7b4b_72c7_96a5,
+        0x55af_47ad_6562_7f11,
+        0x55af_47ad_6562_7f11,
+        0x486e_27b4_aaef_d56f,
+        0x486e_27b4_aaef_d56f,
+        0x3aef_7a6c_33a6_b6ba,
+        0x205d_26da_f452_c798,
+        0x30bb_c4fa_9ff2_2d9a,
+        0xd1a9_98d7_2640_6a39,
+        0xe0f9_fc38_91be_f6df,
+        0x475b_02f8_e003_9a39,
+        0xfe1d_c9f3_34c5_3267,
+        0x9d16_19c6_98ed_62bd,
+        0x1fb1_6ec6_5b06_6ac0,
+        0x0576_0f34_925a_464d,
+        0x2d7f_4406_5bb5_6513,
+        0x0b25_e59f_7d1f_e07f,
+        0x0abe_d5ef_90aa_6ebe,
+        0x081d_0cfd_2325_06cf,
+        0xa573_a7f4_8c1c_046d,
+        0xd771_5907_63e3_6148,
+        0xb316_bf53_bc29_39c4,
+        0x2260_3193_7c31_abbf,
+        0x1da4_093a_06ec_cf7f,
+        0x5849_cb84_19d3_d189,
+    ];
+    const RAPID_FRAMES: [u64; 60] = [
+        0x227a_dc7b_76f2_761f,
+        0x227a_dc7b_76f2_761f,
+        0x4ae0_9b51_678e_3e8d,
+        0x4ae0_9b51_678e_3e8d,
+        0xe799_cde0_b49a_3f47,
+        0xe799_cde0_b49a_3f47,
+        0xcf7b_10db_5947_69a9,
+        0xcf7b_10db_5947_69a9,
+        0x20b2_3d53_30ce_1699,
+        0xcd8e_6ff2_753c_10c7,
+        0x219d_0662_cc7e_384d,
+        0x268b_d1b3_cf6b_acbf,
+        0xff38_9076_13eb_eb23,
+        0xff38_9076_13eb_eb23,
+        0x105f_13d2_1776_cea5,
+        0x105f_13d2_1776_cea5,
+        0x69ee_20a5_2f79_f8ff,
+        0x69ee_20a5_2f79_f8ff,
+        0x926a_8c71_b2f9_07e3,
+        0x926a_8c71_b2f9_07e3,
+        0xa055_a2c3_0a66_cf0f,
+        0xa055_a2c3_0a66_cf0f,
+        0xa4f9_46f1_da98_8e51,
+        0xa4f9_46f1_da98_8e51,
+        0x4544_40e6_9972_2867,
+        0x4544_40e6_9972_2867,
+        0xd7c1_bd8d_1c31_4ed3,
+        0xd7c1_bd8d_1c31_4ed3,
+        0x1427_fb10_94f0_e095,
+        0x423c_3865_9140_2943,
+        0x2f9a_f415_bf73_16c5,
+        0x2f9a_f415_bf73_16c5,
+        0xbf05_4f45_61ab_f8e5,
+        0xbf05_4f45_61ab_f8e5,
+        0x4d1d_cd96_cf15_74fb,
+        0x4d1d_cd96_cf15_74fb,
+        0x4d1d_cd96_cf15_74fb,
+        0x4d1d_cd96_cf15_74fb,
+        0x8b91_142f_0f99_d891,
+        0x8b91_142f_0f99_d891,
+        0x34d7_0862_fa1a_96c1,
+        0x34d7_0862_fa1a_96c1,
+        0xebbd_2138_7ada_811b,
+        0xebbd_2138_7ada_811b,
+        0x796b_abda_456b_58ed,
+        0x796b_abda_456b_58ed,
+        0x16f6_7333_0f11_7bd9,
+        0x16f6_7333_0f11_7bd9,
+        0x4bbd_bad9_3215_5f77,
+        0x4bbd_bad9_3215_5f77,
+        0x3c00_73b6_27dd_b2d3,
+        0x3c00_73b6_27dd_b2d3,
+        0x3862_bc25_fbc6_53e5,
+        0x3862_bc25_fbc6_53e5,
+        0xba60_5a58_1d8e_8b89,
+        0xba60_5a58_1d8e_8b89,
+        0x04a9_a7cf_cae1_02bb,
+        0x04a9_a7cf_cae1_02bb,
+        0xcdfd_fe14_4173_998d,
+        0xcdfd_fe14_4173_998d,
+    ];
+
+    fn frames_of(preset: &Preset) -> [u64; 60] {
+        let mut layers = Layers::<KEY_ROWS, KEY_COLUMNS>::new();
+        layers.apply(&preset.lighting.effects);
+        let mut digests = [0; 60];
+        for (number, digest) in (1..).zip(digests.iter_mut()) {
+            let now_ms = 1000 + STEP_MS * number;
+            for (_, key, event) in KEY_EVENTS.iter().filter(|(at, ..)| *at == number) {
+                layers.event(*key, *event, now_ms, &ANSI);
+            }
+            let mut frame = Frame::<PAGES, PAGE_LENGTH>::new();
+            let mut canvas = Painter::new(&mut frame, &LEDS, &ANSI, None);
+            let base = preset.colors.first().copied().flatten();
+            for row in 0..KEY_ROWS {
+                for column in 0..KEY_COLUMNS {
+                    let color = base
+                        .and_then(|colors| colors.get(row * KEY_COLUMNS + column))
+                        .copied()
+                        .unwrap_or(NO_COLOR);
+                    canvas.set_key(row, column, color);
+                }
+            }
+            layers.render(&mut canvas, GEOMETRY, STEP_MS);
+            *digest = (0..KEY_ROWS)
+                .flat_map(|row| (0..KEY_COLUMNS).map(move |column| (row, column)))
+                .map(|(row, column)| canvas.key(row, column).unwrap_or_default())
+                .flat_map(|color| [color.red, color.green, color.blue])
+                .fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+                    (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+                });
+        }
+        digests
+    }
+
+    #[test]
+    fn the_factory_profiles_draw_the_frames_of_the_reference_firmware() {
+        assert_eq!(frames_of(FACTORY.preset(0)), TYPING_FRAMES);
+        assert_eq!(frames_of(FACTORY.preset(1)), RAPID_FRAMES);
+    }
+
+    #[test]
+    fn a_fresh_keyboard_has_a_typing_and_a_rapid_profile() {
+        assert_eq!(FACTORY.created, 2);
+        assert_eq!(FACTORY.preset(0).info().name.as_str(), "Typing Profile");
+        assert_eq!(FACTORY.preset(1).info().name.as_str(), "Rapid Profile");
+        assert!(!FACTORY.preset(0).keys.rapid_trigger_enabled);
+        assert!(FACTORY.preset(1).keys.rapid_trigger_enabled);
+        assert_eq!(FACTORY.preset(0).keys.scan_mode, ScanMode::Single);
+        assert_eq!(FACTORY.preset(9).lighting.effects.len(), 0);
+    }
+
+    #[test]
+    fn the_colour_maps_follow_the_key_matrix() {
+        let appearance = FACTORY.preset(0).appearance();
+        let base = appearance.colors.layer(Layer::Base).unwrap_or(&BLUE_RUN);
+        assert_eq!(base.len(), KEY_ROWS * KEY_COLUMNS);
+        assert_eq!(base.first(), Some(&BLUE));
+        assert_eq!(
+            appearance
+                .colors
+                .layer(Layer::One)
+                .and_then(|colors| colors.get(KEY_COLUMNS + 1)),
+            Some(&from_rgb565(0xFFE0))
+        );
+    }
+}

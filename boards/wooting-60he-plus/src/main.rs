@@ -5,27 +5,29 @@ use embassy_futures::block_on;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_usb::UsbDevice;
 use openwoot::{
-    keys::{Configurator, Keys, Model, Travels},
+    keys::{Keys, Travels},
     layout::Standard,
+    profile::{Configurator, Model},
     protocol::{self, Handler},
     runtime::{Channel, Firmware, KeyReports, KeyTask, Reports, State},
     usb::Negotiated,
 };
 use static_cell::StaticCell;
 use wooting_60he_plus::{
-    Board, DESCRIPTOR, FACE, KEY_COLUMNS, KEY_ROWS, UsbDriver, entry, hal,
-    keys::{self, KEYMAP, PROFILES},
+    Board, DESCRIPTOR, KEY_COLUMNS, KEY_ROWS, UsbDriver, entry, hal,
+    keys::{self, PROFILES},
     lighting::{self, COLUMNS, LedDriver, PAGE_LENGTH, PAGES, ROWS, Task},
+    profiles::FACTORY,
     scan, storage,
 };
 
 type Driver = Negotiated<UsbDriver>;
 type Mutual = CriticalSectionRawMutex;
-type KeyModel = Model<'static, Mutual, storage::Nor, KEY_ROWS, KEY_COLUMNS>;
-type KeyConfigurator = Configurator<'static, Mutual, storage::Nor, KEY_ROWS, KEY_COLUMNS>;
+type ProfileModel = Model<'static, Mutual, storage::Nor, KEY_ROWS, KEY_COLUMNS>;
+type ProfileConfigurator = Configurator<'static, Mutual, storage::Nor, KEY_ROWS, KEY_COLUMNS>;
 
 static STATE: State<Mutual, (), ROWS, COLUMNS, PAGES, PAGE_LENGTH> = State::new();
-static MODEL: StaticCell<Mutex<Mutual, KeyModel>> = StaticCell::new();
+static MODEL: StaticCell<Mutex<Mutual, ProfileModel>> = StaticCell::new();
 
 hal::app_descriptor!(DESCRIPTOR);
 
@@ -39,8 +41,13 @@ fn main() -> ! {
     let variant = board.storage.layout_variant;
     let model = MODEL.init(Mutex::new(block_on(Model::open(
         STATE.keys(),
-        board.storage.settings.take(),
-        KEYMAP,
+        STATE.profile(),
+        board
+            .storage
+            .settings
+            .take()
+            .map(|settings| settings.with_diagnostics(STATE.diagnostics())),
+        &FACTORY,
         variant,
         PROFILES,
     ))));
@@ -52,13 +59,15 @@ fn main() -> ! {
         ),
         board.stock_identity(),
         Configurator::new(model, keys::capabilities()),
-    );
+    )
+    .with_diagnostics(STATE.readout(hal::usb::negotiated_speed, hal::diagnostics::hardware));
     let profile_keys = Configurator::new(model, keys::capabilities());
+    let face = board.face;
     let firmware = Firmware::new(
         &STATE,
         board.usb,
         hal::usb::negotiated_speed,
-        FACE,
+        face,
         identity,
         lighting::lighting(variant),
     );
@@ -66,7 +75,7 @@ fn main() -> ! {
         travel: scan::SCAN.travel(),
         map: keys::sensor_map(variant),
         shared: STATE.keys(),
-        mode: FACE.mode,
+        mode: face.mode,
     };
     let leds = board.leds;
     let bootloader = board.bootloader;
@@ -100,7 +109,7 @@ async fn device(mut device: UsbDevice<'static, Driver>) {
 #[embassy_executor::task]
 async fn channel(
     channel: Channel<'static, Driver>,
-    handler: Handler<KeyConfigurator>,
+    handler: Handler<ProfileConfigurator>,
     mut bootloader: hal::system::Bootloader,
 ) {
     channel.run(handler, &mut bootloader).await;
@@ -121,8 +130,8 @@ async fn lights(
 }
 
 #[embassy_executor::task]
-async fn profiles(profile_keys: KeyConfigurator) {
-    profile_keys.serve_profile_keys().await;
+async fn profiles(profile_keys: ProfileConfigurator) {
+    profile_keys.serve().await;
 }
 
 #[embassy_executor::task]

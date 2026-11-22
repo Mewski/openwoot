@@ -3,6 +3,7 @@
 
 pub mod keys;
 pub mod lighting;
+pub mod profiles;
 pub mod scan;
 pub mod storage;
 
@@ -76,6 +77,7 @@ pub struct Board {
     pub clocks: Clocks,
     pub serial_number: Option<&'static str>,
     pub bootloader: Bootloader,
+    pub face: Face,
     pub storage: storage::Storage,
     pub usb: UsbDriver,
     pub leds: lighting::LedDriver,
@@ -120,12 +122,16 @@ impl Board {
             Device::new(flash_bus, chip_select, clocks.system),
             storage::NOR_CAPACITY,
         );
-        let storage = block_on(storage::Storage::open(
+        let mut storage = block_on(storage::Storage::open(
             nor,
             storage::SETTINGS,
             storage::DEVICE_INFO,
             storage::LAYOUT_VARIANT,
             bootloader.take_format_request(),
+        ));
+        let face = block_on(openwoot::profile::stored_face(
+            storage.settings.as_mut(),
+            FACE,
         ));
         let usb = usb::Driver::new(
             usb::Core {
@@ -152,6 +158,7 @@ impl Board {
             clocks,
             serial_number: serial_number(),
             bootloader,
+            face,
             storage,
             usb,
             leds,
@@ -172,7 +179,7 @@ impl Board {
     pub fn stock_identity(&self) -> StockIdentity {
         StockIdentity {
             serial: self.serial_number,
-            face: FACE,
+            face: self.face,
             layout: self.storage.layout_variant,
             mcu_id: hal::flash::unique_id(),
             nor_identity: self.storage.nor_identity,
