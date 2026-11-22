@@ -1,8 +1,10 @@
 use sequential_storage::map::{self, SerializationError, Value};
 use serde::{Serialize, de::DeserializeOwned};
 
+pub(super) const KEY_LEN: usize = 2;
+pub(super) const VERSION_LEN: usize = 2;
+
 const GLOBAL_SLOT: u8 = 0xFF;
-const VERSION_LEN: usize = 2;
 
 pub trait Record: Serialize + DeserializeOwned {
     const ITEM: u8;

@@ -19,6 +19,12 @@ pub(super) struct Fields<'a> {
     rest: &'a [u8],
 }
 
+#[derive(Debug)]
+pub(super) struct Writer<'a> {
+    bytes: &'a mut [u8],
+    len: usize,
+}
+
 impl<'a> Fields<'a> {
     pub(super) const fn new(message: &'a [u8]) -> Self {
         Self { rest: message }
@@ -69,6 +75,36 @@ impl<'a> Fields<'a> {
     }
 }
 
+impl<'a> Writer<'a> {
+    pub(super) const fn new(bytes: &'a mut [u8]) -> Self {
+        Self { bytes, len: 0 }
+    }
+
+    pub(super) const fn len(&self) -> usize {
+        self.len
+    }
+
+    pub(super) fn varint_field(&mut self, number: u32, value: u32) {
+        self.varint(number << 3);
+        self.varint(value);
+    }
+
+    fn varint(&mut self, mut value: u32) {
+        loop {
+            let low = u8::try_from(value & 0x7F).unwrap_or_default();
+            value >>= 7;
+            let byte = if value == 0 { low } else { low | 0x80 };
+            if let Some(slot) = self.bytes.get_mut(self.len) {
+                *slot = byte;
+                self.len += 1;
+            }
+            if value == 0 {
+                break;
+            }
+        }
+    }
+}
+
 impl<'a> Iterator for Fields<'a> {
     type Item = Result<(u32, Wire<'a>), Malformed>;
 
@@ -86,6 +122,10 @@ impl<'a> Iterator for Fields<'a> {
 
 pub(super) fn is_well_formed(message: &[u8]) -> bool {
     Fields::new(message).all(|field| field.is_ok())
+}
+
+pub(super) fn narrow<T: TryFrom<u64>>(value: u64) -> Result<T, Malformed> {
+    T::try_from(value).map_err(|_| Malformed)
 }
 
 #[cfg(test)]

@@ -1,13 +1,15 @@
+mod aux_record;
 mod protobuf;
+mod serial;
+mod serial_text;
 
-use core::fmt::{self, Write};
-
+pub use aux_record::{AUX_CAPACITY, AuxRecord};
 use embedded_storage_async::nor_flash::{NorFlashError, NorFlashErrorKind, ReadNorFlash};
-use protobuf::{Fields, Wire, is_well_formed};
+use protobuf::{Fields, Malformed, Wire, narrow};
+pub use serial::{LEGACY_SERIAL_LEN, SERIAL_MESSAGE_CAPACITY, SerialMessage, SerialNumber};
+pub use serial_text::{SERIAL_TEXT_CAPACITY, SerialText};
 
 pub const DEVICE_INFO_LEN: usize = 4096;
-pub const AUX_CAPACITY: usize = 58;
-pub const SERIAL_TEXT_CAPACITY: usize = 48;
 
 const AREA_LEN: usize = 0xFFC;
 const MAGIC_SHORT: u16 = 0x1337;
@@ -16,14 +18,11 @@ const SHORT_PAYLOAD_MAX: usize = 254;
 const LONG_PAYLOAD_MAX: usize = 0xFFA;
 const BLANK_PROBE: usize = 30;
 const ERASED: u8 = 0xFF;
-const NOT_PROGRAMMED: u16 = 0xFFFF;
 const LOCK_MODE_MASK: u8 = 0xFD;
 const LOCKED: u8 = 1;
 const RAW_AUX_LEN_AT: usize = 12;
 const RAW_AUX_AT: usize = 13;
 const RAW_AUX_CAPACITY: usize = 44;
-const STAGE_LETTERS: [char; 4] = ['P', 'T', 'E', 'X'];
-const STAGE_OTHER: char = 'H';
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DeviceInfo {
@@ -31,32 +30,6 @@ pub struct DeviceInfo {
     pub aux: Option<AuxRecord>,
     pub physical_layout: Option<u8>,
     pub lock_mode: Option<u8>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub struct SerialNumber {
-    pub supplier: u16,
-    pub year: u8,
-    pub week: u8,
-    pub product: u16,
-    pub revision: u16,
-    pub product_id: u32,
-    pub stage: u8,
-    pub edition: Option<u8>,
-    pub pcb_design: Option<u8>,
-    pub minor_revision: Option<u8>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AuxRecord {
-    bytes: [u8; AUX_CAPACITY],
-    len: usize,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SerialText {
-    bytes: [u8; SERIAL_TEXT_CAPACITY],
-    len: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,7 +103,9 @@ impl DeviceInfo {
 
     fn from_raw(area: &[u8]) -> Result<Self, DeviceInfoError> {
         let byte = |at: usize| area.get(at).copied().ok_or(DeviceInfoError::Decode);
-        let half = |at: usize| Ok(u16::from_le_bytes([byte(at)?, byte(at + 1)?]));
+        let half = |at: usize| -> Result<u16, DeviceInfoError> {
+            Ok(u16::from_le_bytes([byte(at)?, byte(at + 1)?]))
+        };
         let serial = SerialNumber {
             supplier: half(0)?,
             year: byte(2)?,
@@ -167,7 +142,7 @@ impl DeviceInfo {
             lock_mode: None,
         };
         for field in Fields::new(message) {
-            match field.map_err(|_| DeviceInfoError::Decode)? {
+            match field? {
                 (1, Wire::Bytes(bytes)) => serial = Some(SerialNumber::decode(bytes)?),
                 (2, Wire::Bytes(bytes)) => info.aux = Some(AuxRecord::from_message(bytes)?),
                 (3, Wire::Varint(layout)) => info.physical_layout = Some(narrow(layout)?),
@@ -178,135 +153,6 @@ impl DeviceInfo {
         }
         info.serial = serial.ok_or(DeviceInfoError::Decode)?;
         Ok(info)
-    }
-}
-
-impl SerialNumber {
-    #[must_use]
-    pub const fn is_programmed(&self) -> bool {
-        self.supplier != NOT_PROGRAMMED
-    }
-
-    #[must_use]
-    pub fn text(&self) -> SerialText {
-        let mut text = SerialText {
-            bytes: [0; SERIAL_TEXT_CAPACITY],
-            len: 0,
-        };
-        let _ = write!(text, "{self}");
-        text
-    }
-
-    fn decode(message: &[u8]) -> Result<Self, DeviceInfoError> {
-        let mut serial = Self::default();
-        let mut required = 0u8;
-        for field in Fields::new(message) {
-            let (number, value) = match field.map_err(|_| DeviceInfoError::Decode)? {
-                (number @ (1..=7 | 9..=11), Wire::Varint(value)) => (number, value),
-                (1..=7 | 9..=11, _) => return Err(DeviceInfoError::Decode),
-                _ => continue,
-            };
-            match number {
-                1 => serial.supplier = narrow(value)?,
-                2 => serial.year = narrow(value)?,
-                3 => serial.week = narrow(value)?,
-                4 => serial.product = narrow(value)?,
-                5 => serial.revision = narrow(value)?,
-                6 => serial.product_id = narrow(value)?,
-                7 => serial.stage = narrow(value)?,
-                9 => serial.edition = Some(narrow(value)?),
-                10 => serial.pcb_design = Some(narrow(value)?),
-                _ => serial.minor_revision = Some(narrow(value)?),
-            }
-            if number <= 7 {
-                required |= 1 << (number - 1);
-            }
-        }
-        if required == 0x7F {
-            Ok(serial)
-        } else {
-            Err(DeviceInfoError::Decode)
-        }
-    }
-
-    const fn stage_letter(&self) -> char {
-        match self.stage {
-            1 => STAGE_LETTERS[0],
-            2 => STAGE_LETTERS[1],
-            3 => STAGE_LETTERS[2],
-            4 => STAGE_LETTERS[3],
-            _ => STAGE_OTHER,
-        }
-    }
-}
-
-impl fmt::Display for SerialNumber {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let [supplier, ..] = self.supplier.to_le_bytes();
-        let [product, ..] = self.product.to_le_bytes();
-        let [revision, ..] = self.revision.to_le_bytes();
-        write!(
-            formatter,
-            "A{supplier:02}B{:02}{:02}W{product:02}",
-            self.year, self.week
-        )?;
-        if let Some(pcb_design) = self.pcb_design {
-            write!(formatter, "T{pcb_design:02}")?;
-        }
-        write!(formatter, "{revision}")?;
-        if let Some(minor_revision) = self.minor_revision {
-            write!(formatter, "{minor_revision:02}")?;
-        }
-        if let Some(edition) = self.edition {
-            write!(formatter, "S{edition:02}")?;
-        }
-        write!(formatter, "{}{:05}", self.stage_letter(), self.product_id)
-    }
-}
-
-impl AuxRecord {
-    fn from_message(message: &[u8]) -> Result<Self, DeviceInfoError> {
-        let has_first = Fields::new(message).any(|field| matches!(field, Ok((1, Wire::Bytes(_)))));
-        if !has_first || !is_well_formed(message) {
-            return Err(DeviceInfoError::Decode);
-        }
-        let mut bytes = [0; AUX_CAPACITY];
-        bytes
-            .get_mut(..message.len())
-            .ok_or(DeviceInfoError::Decode)?
-            .copy_from_slice(message);
-        Ok(Self {
-            bytes,
-            len: message.len(),
-        })
-    }
-
-    #[must_use]
-    pub fn as_bytes(&self) -> &[u8] {
-        self.bytes.get(..self.len).unwrap_or_default()
-    }
-}
-
-impl SerialText {
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        core::str::from_utf8(self.bytes.get(..self.len).unwrap_or_default()).unwrap_or_default()
-    }
-}
-
-impl Write for SerialText {
-    #[expect(
-        clippy::renamed_function_params,
-        reason = "the trait names the text `s`, which the naming rules reject"
-    )]
-    fn write_str(&mut self, text: &str) -> fmt::Result {
-        let end = self.len + text.len();
-        self.bytes
-            .get_mut(self.len..end)
-            .ok_or(fmt::Error)?
-            .copy_from_slice(text.as_bytes());
-        self.len = end;
-        Ok(())
     }
 }
 
@@ -330,8 +176,10 @@ impl McuPage {
     }
 }
 
-fn narrow<T: TryFrom<u64>>(value: u64) -> Result<T, DeviceInfoError> {
-    T::try_from(value).map_err(|_| DeviceInfoError::Decode)
+impl From<Malformed> for DeviceInfoError {
+    fn from(_: Malformed) -> Self {
+        Self::Decode
+    }
 }
 
 #[cfg(test)]
@@ -361,29 +209,6 @@ mod tests {
         message.extend_from_slice(serial);
         message.extend_from_slice(rest);
         message
-    }
-
-    #[test]
-    fn the_serial_text_follows_the_c_format() {
-        let serial = SerialNumber::decode(&SERIAL_MESSAGE).unwrap();
-        assert_eq!(serial.text().as_str(), "A01B2401W01T00100S01H00300");
-        let short = SerialNumber {
-            supplier: 0x0102,
-            year: 23,
-            week: 10,
-            product: 5,
-            revision: 1,
-            product_id: 42,
-            stage: 1,
-            ..SerialNumber::default()
-        };
-        assert_eq!(short.text().as_str(), "A02B2310W051P00042");
-        let large = SerialNumber {
-            stage: 9,
-            product_id: 4_000_000_000,
-            ..short
-        };
-        assert_eq!(large.text().as_str(), "A02B2310W051H4000000000");
     }
 
     #[test]
@@ -478,14 +303,5 @@ mod tests {
             DeviceInfo::from_sector(&too_long, Unmarked::RawRecord),
             Err(DeviceInfoError::Decode)
         );
-    }
-
-    #[test]
-    fn an_unprogrammed_serial_is_recognised() {
-        let serial = SerialNumber {
-            supplier: NOT_PROGRAMMED,
-            ..SerialNumber::default()
-        };
-        assert!(!serial.is_programmed());
     }
 }

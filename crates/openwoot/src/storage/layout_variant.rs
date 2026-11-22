@@ -1,4 +1,4 @@
-use super::DeviceInfo;
+use super::device_info::DeviceInfo;
 
 const OPTION_LAYOUT_BIT: u8 = 1 << 0;
 
