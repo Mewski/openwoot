@@ -35,6 +35,20 @@ pub struct Interface {
 
 pub struct UpdateMode(Interface);
 
+pub trait Reports {
+    fn write_output(&mut self, report: &[u8]) -> impl Future<Output = Result<(), PortError>>;
+
+    fn write_feature(&mut self, report: &[u8]) -> impl Future<Output = Result<(), PortError>>;
+
+    fn read_input(
+        &mut self,
+        report: &mut [u8],
+        timeout: Duration,
+    ) -> impl Future<Output = Result<Option<usize>, PortError>>;
+
+    fn discard_input(&mut self) -> impl Future<Output = Result<(), PortError>>;
+}
+
 impl Hid {
     pub async fn find(
         &self,
@@ -84,16 +98,18 @@ impl Interface {
     pub const fn info(&self) -> &DeviceInfo {
         &self.info
     }
+}
 
-    pub async fn write_output(&mut self, report: &[u8]) -> Result<(), PortError> {
+impl Reports for Interface {
+    async fn write_output(&mut self, report: &[u8]) -> Result<(), PortError> {
         Ok(self.writer.write_output_report(report).await?)
     }
 
-    pub async fn write_feature(&mut self, report: &[u8]) -> Result<(), PortError> {
+    async fn write_feature(&mut self, report: &[u8]) -> Result<(), PortError> {
         Ok(self.feature.write_feature_report(report).await?)
     }
 
-    pub async fn read_input(
+    async fn read_input(
         &mut self,
         report: &mut [u8],
         timeout: Duration,
@@ -106,7 +122,7 @@ impl Interface {
         Ok(future::or(read, expiry).await?)
     }
 
-    pub async fn discard_input(&mut self) -> Result<(), PortError> {
+    async fn discard_input(&mut self) -> Result<(), PortError> {
         let mut report = vec![0; DISCARD_BUFFER_LEN];
         while let Some(read) = future::poll_once(self.reader.read_input_report(&mut report)).await {
             read?;

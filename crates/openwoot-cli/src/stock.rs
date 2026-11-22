@@ -1,13 +1,13 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crate::{bootloader::PortError, hid::Interface, report};
+use openwoot_protocol::{
+    MAX_REPORT_LEN,
+    stock::{Command, Request, Status, decode_reply},
+};
 
-const REPORT_ID: u8 = 1;
-const MAGIC: [u8; 2] = [0xD1, 0xDA];
-const VERSION: u8 = 1;
-const ENTER_UPDATE_MODE: u8 = 2;
+use crate::{bootloader::PortError, hid::Reports, report};
+
 const REPLY_TIMEOUT: Duration = Duration::from_secs(2);
-const READ_LEN: usize = 2048;
 const VERSION_LEN: usize = 3;
 const SHOWN_REPLY_LEN: usize = 32;
 
@@ -19,8 +19,8 @@ pub enum Error {
     UnexpectedReply { command: u8, reply: String },
 }
 
-pub async fn firmware_version(interface: &mut Interface) -> Result<Option<String>, Error> {
-    let Some(payload) = command(interface, VERSION).await? else {
+pub async fn firmware_version(reports: &mut impl Reports) -> Result<Option<String>, Error> {
+    let Some(payload) = command(reports, Command::Version).await? else {
         return Ok(None);
     };
     let version = payload
@@ -32,36 +32,39 @@ pub async fn firmware_version(interface: &mut Interface) -> Result<Option<String
     Ok(Some(version))
 }
 
-pub async fn enter_update_mode(interface: &mut Interface) {
-    send(interface, ENTER_UPDATE_MODE).await.ok();
+pub async fn enter_update_mode(reports: &mut impl Reports) {
+    send(reports, Command::EnterUpdateMode).await.ok();
 }
 
-async fn command(interface: &mut Interface, command: u8) -> Result<Option<Vec<u8>>, Error> {
-    send(interface, command).await?;
-    let mut buffer = vec![0; READ_LEN];
-    let Some(len) = interface.read_input(&mut buffer, REPLY_TIMEOUT).await? else {
-        return Ok(None);
-    };
-    let reply = buffer.get(..len).unwrap_or_default();
-    match reply {
-        [] => Ok(None),
-        [_, first, second, echo, _status, low, high, payload @ ..]
-            if [*first, *second] == MAGIC && *echo == command =>
-        {
-            let length = usize::from(u16::from_le_bytes([*low, *high]));
-            Ok(Some(payload.iter().take(length).copied().collect()))
+async fn command(reports: &mut impl Reports, command: Command) -> Result<Option<Vec<u8>>, Error> {
+    send(reports, command).await?;
+    let number = u8::from(command);
+    let deadline = Instant::now() + REPLY_TIMEOUT;
+    let mut buffer = vec![0; MAX_REPORT_LEN];
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let Some(len) = reports.read_input(&mut buffer, remaining).await? else {
+            return Ok(None);
+        };
+        let report = buffer.get(..len).unwrap_or_default();
+        match decode_reply(report) {
+            Some(reply) if reply.command == number && reply.status == u8::from(Status::Success) => {
+                return Ok(Some(reply.payload.to_vec()));
+            }
+            Some(reply) if reply.command == number => {
+                return Err(Error::UnexpectedReply {
+                    command: number,
+                    reply: report::to_hex(report.get(..SHOWN_REPLY_LEN).unwrap_or(report)),
+                });
+            }
+            _ => {}
         }
-        _ => Err(Error::UnexpectedReply {
-            command,
-            reply: report::to_hex(reply.get(..SHOWN_REPLY_LEN).unwrap_or(reply)),
-        }),
     }
 }
 
-async fn send(interface: &mut Interface, command: u8) -> Result<(), PortError> {
-    interface.discard_input().await?;
-    let argument = 0_u32.to_le_bytes();
-    let mut report = vec![REPORT_ID, MAGIC[0], MAGIC[1], command];
-    report.extend(argument);
-    interface.write_feature(&report).await
+async fn send(reports: &mut impl Reports, command: Command) -> Result<(), PortError> {
+    reports.discard_input().await?;
+    reports
+        .write_feature(&Request::new(command, 0).to_report())
+        .await
 }

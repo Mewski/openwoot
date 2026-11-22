@@ -9,7 +9,7 @@ openwoot flash --dry-run build/wooting-80he/openwoot-wooting-80he.hex
 | Command | Does |
 | --- | --- |
 | `openwoot flash IMAGE --dry-run` | reads an Intel HEX file or flat binary, finds the image descriptor, checks the image against it and prints the board, the USB ids and the blocks and CRC-24 an update would send; touches no device |
-| `openwoot flash IMAGE` | the same checks, then puts the keyboard into update mode if needed (stock firmware: its reset command) and writes the image through the factory bootloader: blocks, CRC-24 comparison, completion marker, restart |
+| `openwoot flash IMAGE` | the same checks, then puts the keyboard into update mode if needed (openwoot: the `EnterUpdateMode` request; stock firmware: its reset command) and writes the image through the factory bootloader: blocks, CRC-24 comparison, completion marker, restart |
 | `openwoot version` | prints the firmware and protocol version the keyboard reports over the openwoot configuration channel |
 
 [`docs/flashing.md`](../../docs/flashing.md) describes flashing, recovery and the way back to the

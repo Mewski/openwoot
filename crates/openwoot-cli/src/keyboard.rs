@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{fmt, time::Duration};
 
 use async_hid::{Device, DeviceInfo};
 use openwoot_image::{UpdateMode, UsbIds};
@@ -7,7 +7,7 @@ use openwoot_protocol::Version;
 use crate::{
     bootloader::PortError,
     channel,
-    hid::{self, Hid, Interface},
+    hid::{self, Hid, Interface, Reports},
     stock,
 };
 
@@ -42,11 +42,10 @@ pub enum Error {
     #[error("the firmware did not answer the version query; nothing was changed")]
     NoVersionAnswer,
     #[error(
-        "openwoot firmware {0} cannot be asked to enter update mode yet: the configuration \
-         protocol has no such request; unplug the keyboard, hold the recovery key combination \
-         while plugging it in, then run `openwoot flash` again"
+        "openwoot firmware {0} does not support the update-mode request; unplug the keyboard, \
+         hold the recovery key combination while plugging it in, then run `openwoot flash` again"
     )]
-    OpenwootCannotEnterUpdateMode(String),
+    UpdateModeNotSupported(String),
     #[error("the keyboard in update mode did not appear within {} s", MODE_CHANGE_TIMEOUT.as_secs())]
     UpdateModeDidNotAppear,
     #[error("the firmware did not appear within {} s", MODE_CHANGE_TIMEOUT.as_secs())]
@@ -59,9 +58,15 @@ pub struct Identity {
     update_product_id: u16,
 }
 
-pub struct StockFirmware {
-    interface: Interface,
-    version: String,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Firmware {
+    Openwoot(Version),
+    Stock(String),
+}
+
+pub struct Running<R> {
+    reports: R,
+    firmware: Firmware,
 }
 
 impl Identity {
@@ -91,19 +96,55 @@ impl Identity {
     }
 }
 
-impl StockFirmware {
-    #[must_use]
-    pub fn version(&self) -> &str {
-        &self.version
+impl fmt::Display for Firmware {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Openwoot(version) => {
+                write!(formatter, "openwoot firmware {}", format_version(version))
+            }
+            Self::Stock(version) => write!(formatter, "stock firmware {version}"),
+        }
+    }
+}
+
+impl<R: Reports> Running<R> {
+    pub async fn identify(mut reports: R) -> Result<Self, Error> {
+        let firmware = if let Some(version) = channel::firmware_version(&mut reports).await? {
+            Firmware::Openwoot(version)
+        } else if let Some(version) = stock::firmware_version(&mut reports).await? {
+            Firmware::Stock(version)
+        } else {
+            return Err(Error::NoVersionAnswer);
+        };
+        Ok(Self { reports, firmware })
     }
 
     #[must_use]
-    pub const fn info(&self) -> &DeviceInfo {
-        self.interface.info()
+    pub const fn firmware(&self) -> &Firmware {
+        &self.firmware
     }
 
-    pub async fn enter_update_mode(mut self) {
-        stock::enter_update_mode(&mut self.interface).await;
+    #[must_use]
+    pub const fn reports(&self) -> &R {
+        &self.reports
+    }
+
+    pub async fn enter_update_mode(mut self) -> Result<(), Error> {
+        match self.firmware {
+            Firmware::Stock(_) => {
+                stock::enter_update_mode(&mut self.reports).await;
+                Ok(())
+            }
+            Firmware::Openwoot(version) => {
+                match channel::enter_update_mode(&mut self.reports).await {
+                    Ok(()) | Err(channel::Error::Port(PortError::Disconnected)) => Ok(()),
+                    Err(channel::Error::Response(openwoot_protocol::Error::Device(_))) => {
+                        Err(Error::UpdateModeNotSupported(format_version(&version)))
+                    }
+                    Err(error) => Err(error.into()),
+                }
+            }
+        }
     }
 }
 
@@ -127,21 +168,12 @@ pub async fn find_update_mode(hid: &Hid, identity: Identity) -> Result<Option<De
         .await?)
 }
 
-pub async fn stock_firmware(hid: &Hid, identity: Identity) -> Result<StockFirmware, Error> {
+pub async fn open_firmware(hid: &Hid, identity: Identity) -> Result<Interface, Error> {
     let device = hid
         .find(|info: &DeviceInfo| identity.is_firmware(info))
         .await?
         .ok_or(Error::NotFound)?;
-    let mut interface = Interface::open(&device).await?;
-    if let Some(version) = stock::firmware_version(&mut interface).await? {
-        return Ok(StockFirmware { interface, version });
-    }
-    match channel::firmware_version(&mut interface).await? {
-        Some(version) => Err(Error::OpenwootCannotEnterUpdateMode(format_version(
-            &version,
-        ))),
-        None => Err(Error::NoVersionAnswer),
-    }
+    Ok(Interface::open(&device).await?)
 }
 
 pub async fn wait_for_update_mode(hid: &Hid, identity: Identity) -> Result<Device, Error> {

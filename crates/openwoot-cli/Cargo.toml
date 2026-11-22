@@ -21,6 +21,7 @@ ihex = { workspace = true }
 indicatif = { workspace = true }
 openwoot-image = { workspace = true }
 openwoot-protocol = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

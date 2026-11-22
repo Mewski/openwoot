@@ -8,7 +8,7 @@ use openwoot_cli::{
     bootloader::{Session, Upload},
     hid::{self, Hid, Interface, UpdateMode},
     image::Content,
-    keyboard::{self, Identity, MODE_CHANGE_TIMEOUT},
+    keyboard::{self, Identity, MODE_CHANGE_TIMEOUT, Running},
 };
 use openwoot_image::{Hex, Image};
 
@@ -127,22 +127,26 @@ async fn install(identity: Identity, upload: &Upload) -> Result<()> {
     let device = if let Some(device) = keyboard::find_update_mode(&hid, identity).await? {
         device
     } else {
-        let firmware = keyboard::stock_firmware(&hid, identity)
+        let asked = async {
+            let firmware =
+                Running::identify(keyboard::open_firmware(&hid, identity).await?).await?;
+            show(
+                "firmware",
+                format!(
+                    "{}, {}",
+                    hid::describe(firmware.reports().info()),
+                    firmware.firmware()
+                ),
+            );
+            note(format!(
+                "asking the firmware to reset into update mode, waiting up to {} s",
+                MODE_CHANGE_TIMEOUT.as_secs()
+            ));
+            firmware.enter_update_mode().await
+        };
+        asked
             .await
             .context("could not ask the keyboard to enter update mode")?;
-        show(
-            "firmware",
-            format!(
-                "{}, stock firmware {}",
-                hid::describe(firmware.info()),
-                firmware.version()
-            ),
-        );
-        note(format!(
-            "asking the firmware to reset into update mode, waiting up to {} s",
-            MODE_CHANGE_TIMEOUT.as_secs()
-        ));
-        firmware.enter_update_mode().await;
         keyboard::wait_for_update_mode(&hid, identity).await?
     };
     show("device", hid::describe(&device));
