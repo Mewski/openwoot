@@ -16,6 +16,14 @@ pub enum Command {
     EnterUpdateMode = 2,
     Serial = 3,
     DeviceSettings = 19,
+    DisableKeyReports = 21,
+    EnableKeyReports = 22,
+    SetKeyColor = 30,
+    ResetKeyColor = 31,
+    LeaveHostControl = 32,
+    EnterHostControl = 33,
+    StartGamepadDetection = 45,
+    StopGamepadDetection = 46,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +64,14 @@ impl Command {
             2 => Some(Self::EnterUpdateMode),
             3 => Some(Self::Serial),
             19 => Some(Self::DeviceSettings),
+            21 => Some(Self::DisableKeyReports),
+            22 => Some(Self::EnableKeyReports),
+            30 => Some(Self::SetKeyColor),
+            31 => Some(Self::ResetKeyColor),
+            32 => Some(Self::LeaveHostControl),
+            33 => Some(Self::EnterHostControl),
+            45 => Some(Self::StartGamepadDetection),
+            46 => Some(Self::StopGamepadDetection),
             _ => None,
         }
     }

@@ -3,19 +3,21 @@ use openwoot_protocol::{
     configuration::{MAX_KEYS, Rejection},
     device::{self, Layout},
     endpoints::{
-        GetAdvancedKeys, GetCapabilities, GetKeyColors, GetKeymap, GetLightbar, GetSwitches,
-        SetAdvancedKeys, SetDeviceSettings, SetGamepadMapping, SetGamepadSettings,
-        SetGlobalLightbar, SetGlobalSettings, SetHostSignals, SetKeyColors, SetKeyOverrides,
-        SetKeySettings, SetKeymap, SetLayout, SetLightbar, SetLighting, SetProfileInfo,
-        SetSwitches,
+        GetAdvancedKeys, GetCapabilities, GetKeyColors, GetKeymap, GetLightbar, GetSensorValues,
+        GetSwitches, SetAdvancedKeys, SetDeviceSettings, SetGamepadMapping, SetGamepadSettings,
+        SetGlobalLightbar, SetGlobalSettings, SetHostColors, SetHostKeyColor, SetHostSignals,
+        SetKeyColors, SetKeyOverrides, SetKeySettings, SetKeymap, SetLayout, SetLightbar,
+        SetLighting, SetProfileInfo, SetSwitches,
     },
     gamepad::{self, Control},
     global,
     heapless::String,
-    keys::{self, Action, Function, Index, Layer, MouseButton, SystemControl},
+    host_lighting::KeyColor,
+    keys::{self, Action, Function, Index, Layer, MouseButton, Position, SystemControl},
     lightbar::{self, HostSignal},
     lighting::{Idle, Rgb},
     profile::{self, Change, LayerChange, LayerRef, Slot},
+    sensors::Reading,
     switches::{self, Switch},
 };
 
@@ -62,7 +64,7 @@ fn keymaps_and_key_settings_survive_a_round_trip() {
             profile: Slot::new(0),
             value: filled(widest_override(), key_count()),
         },
-        Err(Rejection::Storage),
+        Err(Rejection::StorageInaccessible),
     );
 }
 
@@ -319,6 +321,34 @@ fn the_largest_lighting_configuration_fits_one_frame() {
         },
         DONE,
     );
+}
+
+#[test]
+fn host_lighting_and_full_sensor_readouts_fit_one_frame() {
+    round_trip!(SetHostColors, filled(white(), MAX_KEYS), DONE);
+    round_trip!(
+        SetHostKeyColor,
+        KeyColor {
+            key: Position {
+                row: u8::MAX,
+                column: u8::MAX,
+            },
+            color: white(),
+        },
+        DONE,
+    );
+    for reading in [
+        Reading::Travel,
+        Reading::Value,
+        Reading::RestLevel,
+        Reading::BottomLevel,
+    ] {
+        round_trip!(
+            GetSensorValues,
+            reading,
+            Ok::<_, Rejection>(filled(Some(u16::MAX), MAX_KEYS)),
+        );
+    }
 }
 
 #[test]

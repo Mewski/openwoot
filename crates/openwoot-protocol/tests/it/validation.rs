@@ -26,16 +26,25 @@ fn keymaps_must_cover_the_key_matrix_with_actions_the_reports_can_carry() {
     let short: keys::Keymap = filled(Action::None, key_count() - 1);
     assert_eq!(
         short.validate(&capabilities),
-        Err(Invalid::KeyCount {
+        Err(Invalid::KeyCountDiffersFromMatrix {
             expected: 102,
             found: 101
         })
     );
     for (action, invalid) in [
-        (Action::Keyboard(0x00), Invalid::KeyboardUsage(0x00)),
-        (Action::Keyboard(0xE8), Invalid::KeyboardUsage(0xE8)),
-        (Action::Consumer(0), Invalid::ConsumerUsage(0)),
-        (Action::Consumer(0x02A3), Invalid::ConsumerUsage(0x02A3)),
+        (
+            Action::Keyboard(0x00),
+            Invalid::KeyboardUsageOutsideReport(0x00),
+        ),
+        (
+            Action::Keyboard(0xE8),
+            Invalid::KeyboardUsageOutsideReport(0xE8),
+        ),
+        (Action::Consumer(0), Invalid::ConsumerUsageOutsideRange(0)),
+        (
+            Action::Consumer(0x02A3),
+            Invalid::ConsumerUsageOutsideRange(0x02A3),
+        ),
         (Action::Layer(Layer::Base), Invalid::MomentaryBaseLayer),
         (
             Action::Function(Function::Profile(Slot::new(4))),
@@ -112,7 +121,10 @@ fn gamepad_curves_must_rise_and_effects_keep_the_c_rate_limits() {
     assert_eq!(curve.validate(&capabilities), Err(Invalid::CurveNotRising));
     let mut bias = gamepad_settings();
     bias.left_stick_up_bias = Some(101);
-    assert_eq!(bias.validate(&capabilities), Err(Invalid::Percentage(101)));
+    assert_eq!(
+        bias.validate(&capabilities),
+        Err(Invalid::PercentageAboveHundred(101))
+    );
 
     let mut lighting = lighting_settings();
     lighting.effects[0] = Effect::Scanner(Scanner {
@@ -123,7 +135,7 @@ fn gamepad_curves_must_rise_and_effects_keep_the_c_rate_limits() {
     });
     assert_eq!(
         lighting.validate(&capabilities),
-        Err(Invalid::Rate {
+        Err(Invalid::RateOutsideRange {
             value: 61,
             min: 1,
             max: 60
@@ -135,7 +147,7 @@ fn gamepad_curves_must_rise_and_effects_keep_the_c_rate_limits() {
     });
     assert_eq!(
         lighting.validate(&capabilities),
-        Err(Invalid::Rate {
+        Err(Invalid::RateOutsideRange {
             value: 0,
             min: 1,
             max: 255
@@ -158,7 +170,7 @@ fn light_bar_entries_stay_on_the_light_bar_and_the_key_matrix() {
     };
     assert_eq!(
         entries(blink(Target::Lightbar(Range { first: 3, last: 10 }))).validate(&capabilities),
-        Err(Invalid::LightbarRange {
+        Err(Invalid::LightbarRangeOutsideLeds {
             first: 3,
             last: 10,
             leds: 10
@@ -176,7 +188,10 @@ fn light_bar_entries_stay_on_the_light_bar_and_the_key_matrix() {
     if let lightbar::Effect::Meter(meter) = &mut meter.entries[1].effect {
         meter.maximum = f32::NAN;
     }
-    assert_eq!(meter.validate(&capabilities), Err(Invalid::MeterMaximum));
+    assert_eq!(
+        meter.validate(&capabilities),
+        Err(Invalid::MeterMaximumNotPositive)
+    );
 }
 
 #[test]
@@ -230,19 +245,19 @@ fn switch_models_and_layouts_must_exist_on_the_keyboard() {
     });
     assert_eq!(
         unknown.validate(&capabilities),
-        Err(Invalid::SwitchModel(49))
+        Err(Invalid::SwitchModelUnknown(49))
     );
     capabilities.layouts = [Layout::Ansi, Layout::Iso].into_iter().collect();
     assert_eq!(
         Layout::Jis.validate(&capabilities),
-        Err(Invalid::Layout(Layout::Jis))
+        Err(Invalid::LayoutMissing(Layout::Jis))
     );
 }
 
 #[test]
 fn rejections_read_as_one_lowercase_sentence() {
     assert_eq!(
-        Rejection::from(Invalid::KeyboardUsage(0xE8)).to_string(),
+        Rejection::from(Invalid::KeyboardUsageOutsideReport(0xE8)).to_string(),
         "keyboard usage `0xe8` has no place in the keyboard report"
     );
     assert_eq!(
@@ -250,7 +265,7 @@ fn rejections_read_as_one_lowercase_sentence() {
         "profile 3 does not exist"
     );
     assert_eq!(
-        Invalid::LightbarRange {
+        Invalid::LightbarRangeOutsideLeds {
             first: 3,
             last: 10,
             leds: 10

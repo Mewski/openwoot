@@ -3,7 +3,7 @@ use core::fmt;
 use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
 pub struct Version {

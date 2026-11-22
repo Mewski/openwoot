@@ -4,9 +4,9 @@ use crate::{
     Version, advanced,
     configuration::{Capabilities, Rejection},
     device::{self, Layout},
-    diagnostics, gamepad, global, keys, lightbar, lighting,
+    diagnostics, gamepad, global, host_lighting, keys, lightbar, lighting,
     profile::{self, Change, LayerChange, LayerRef, Slot, Summary},
-    switches,
+    sensors, switches,
 };
 
 type Done = Result<(), Rejection>;
@@ -47,6 +47,11 @@ type HostSignals = lightbar::HostSignals;
 type SwitchesReply = Result<switches::Settings, Rejection>;
 type Switches = switches::Settings;
 type SwitchModelsReply = Result<switches::Models, Rejection>;
+type SensorReading = sensors::Reading;
+type SensorValuesReply = Result<sensors::Values, Rejection>;
+type HostKeyColor = host_lighting::KeyColor;
+type HostColors = lighting::KeyColors;
+type KeyPosition = keys::Position;
 
 endpoints! {
     list = LIST;
@@ -96,6 +101,14 @@ endpoints! {
     | GetSwitchModels     | ()                    | SwitchModelsReply    | "openwoot/switches/models"             |
     | SetKeyReports       | bool                  | Done                 | "openwoot/key-reports/set"             |
     | SetGamepadDetection | bool                  | Done                 | "openwoot/gamepad-detection/set"       |
+    | GetSensorValues     | SensorReading         | SensorValuesReply    | "openwoot/sensors"                     |
+    | SetRawScanning      | bool                  | Done                 | "openwoot/sensors/raw-scanning/set"    |
+    | SetHostKeyColor     | HostKeyColor          | Done                 | "openwoot/host-lighting/key/set"       |
+    | SetHostColors       | HostColors            | Done                 | "openwoot/host-lighting/set"           |
+    | ResetHostKeyColor   | KeyPosition           | Done                 | "openwoot/host-lighting/key/reset"     |
+    | ResetHostColors     | ()                    | Done                 | "openwoot/host-lighting/reset"         |
+    | LeaveHostControl    | ()                    | Done                 | "openwoot/host-lighting/leave"         |
+    | Restart             | ()                    | ()                   | "openwoot/restart"                     |
     | Save                | ()                    | Done                 | "openwoot/save"                        |
     | Revert              | ()                    | Done                 | "openwoot/revert"                      |
     | FactoryReset        | ()                    | Done                 | "openwoot/factory-reset"               |

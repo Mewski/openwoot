@@ -204,7 +204,7 @@ impl Validate for Range {
         if self.first <= self.last && self.last < capabilities.lightbar_leds {
             Ok(())
         } else {
-            Err(Invalid::LightbarRange {
+            Err(Invalid::LightbarRangeOutsideLeds {
                 first: self.first,
                 last: self.last,
                 leds: capabilities.lightbar_leds,
@@ -259,7 +259,7 @@ impl Validate for Effect {
             Self::Meter(meter) => {
                 meter.signal.validate(capabilities)?;
                 if !(meter.maximum.is_finite() && meter.maximum > 0.0) {
-                    return Err(Invalid::MeterMaximum);
+                    return Err(Invalid::MeterMaximumNotPositive);
                 }
                 meter.range.validate(capabilities)
             }
@@ -283,7 +283,7 @@ impl Validate for Effect {
             Self::Custom(custom) => {
                 custom.range.validate(capabilities)?;
                 if custom.colors.len() > usize::from(capabilities.lightbar_leds) {
-                    return Err(Invalid::LightbarColors {
+                    return Err(Invalid::LightbarColorsExceedLeds {
                         count: u8::try_from(custom.colors.len()).unwrap_or(u8::MAX),
                         leds: capabilities.lightbar_leds,
                     });

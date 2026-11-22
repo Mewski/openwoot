@@ -31,7 +31,7 @@ impl Validate for Switch {
         if self.model < capabilities.switch_models {
             Ok(())
         } else {
-            Err(Invalid::SwitchModel(self.model))
+            Err(Invalid::SwitchModelUnknown(self.model))
         }
     }
 }

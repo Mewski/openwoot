@@ -60,7 +60,7 @@ impl Validate for Layout {
         if capabilities.layouts.contains(self) {
             Ok(())
         } else {
-            Err(Invalid::Layout(*self))
+            Err(Invalid::LayoutMissing(*self))
         }
     }
 }

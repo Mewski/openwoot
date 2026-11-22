@@ -245,6 +245,6 @@ fn in_range(value: u8, min: u8, max: u8) -> Result<(), Invalid> {
     if (min..=max).contains(&value) {
         Ok(())
     } else {
-        Err(Invalid::Rate { value, min, max })
+        Err(Invalid::RateOutsideRange { value, min, max })
     }
 }

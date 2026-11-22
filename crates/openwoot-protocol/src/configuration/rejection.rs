@@ -12,11 +12,11 @@ pub enum Rejection {
     #[error("profile {0} does not exist")]
     ProfileMissing(u8),
     #[error("the keyboard holds no further profile")]
-    ProfileLimit,
+    ProfileLimitReached,
     #[error("profile {0} cannot be deleted")]
     ProfileProtected(u8),
     #[error("the keyboard is locked")]
     Locked,
     #[error("could not access the settings storage")]
-    Storage,
+    StorageInaccessible,
 }

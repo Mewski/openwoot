@@ -208,10 +208,10 @@ impl Validate for Action {
                     .iter()
                     .any(|usages| usages.contains(&usage)) =>
             {
-                Err(Invalid::KeyboardUsage(usage))
+                Err(Invalid::KeyboardUsageOutsideReport(usage))
             }
             Self::Consumer(usage) if !Self::CONSUMER_USAGES.contains(&usage) => {
-                Err(Invalid::ConsumerUsage(usage))
+                Err(Invalid::ConsumerUsageOutsideRange(usage))
             }
             Self::Layer(Layer::Base) => Err(Invalid::MomentaryBaseLayer),
             Self::Function(Function::Profile(profile)) => profile.validate(capabilities),
@@ -294,7 +294,7 @@ mod tests {
         for usage in [0x00, 0x03, 0xDE, 0xDF, 0xE8, 0xFF] {
             assert_eq!(
                 Action::Keyboard(usage).validate(&capabilities),
-                Err(Invalid::KeyboardUsage(usage))
+                Err(Invalid::KeyboardUsageOutsideReport(usage))
             );
         }
     }

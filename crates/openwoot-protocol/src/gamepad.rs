@@ -93,7 +93,7 @@ impl Validate for Settings {
             return Err(Invalid::CurveNotRising);
         }
         match self.left_stick_up_bias {
-            Some(percent) if percent > 100 => Err(Invalid::Percentage(percent)),
+            Some(percent) if percent > 100 => Err(Invalid::PercentageAboveHundred(percent)),
             _ => Ok(()),
         }
     }

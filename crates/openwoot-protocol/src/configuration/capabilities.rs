@@ -31,7 +31,7 @@ impl Capabilities {
         if found == expected {
             Ok(())
         } else {
-            Err(Invalid::KeyCount {
+            Err(Invalid::KeyCountDiffersFromMatrix {
                 expected: u16::try_from(expected).unwrap_or(u16::MAX),
                 found: u16::try_from(found).unwrap_or(u16::MAX),
             })
