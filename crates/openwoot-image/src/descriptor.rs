@@ -1,6 +1,6 @@
 use core::mem::size_of;
 
-use crate::Hex;
+use crate::{Hex, Region};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UsbIds {
@@ -12,12 +12,6 @@ pub struct UsbIds {
 pub struct UpdateMode {
     pub product_id: u16,
     pub block_size: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Region {
-    pub start: u32,
-    pub end: u32,
 }
 
 #[repr(C)]
@@ -39,27 +33,15 @@ pub enum DescriptorError {
     #[error("the descriptor is truncated")]
     Truncated,
     #[error("the descriptor does not start with its magic bytes")]
-    Magic,
+    WrongMagic,
     #[error("descriptor format version {0} is unknown")]
-    FormatVersion(u16),
+    UnknownFormatVersion(u16),
     #[error("the board name is empty or not UTF-8 text")]
-    BoardName,
+    InvalidBoardName,
     #[error("the image region {}-{} is empty", Hex(*.start), Hex(*.end))]
     EmptyRegion { start: u32, end: u32 },
     #[error("the update mode needs both a product id and a block size")]
-    UpdateMode,
-}
-
-impl Region {
-    #[must_use]
-    pub const fn size(self) -> u32 {
-        self.end.saturating_sub(self.start)
-    }
-
-    #[must_use]
-    pub const fn contains(self, address: u32) -> bool {
-        self.start <= address && address < self.end
-    }
+    IncompleteUpdateMode,
 }
 
 impl Descriptor {
@@ -90,7 +72,7 @@ impl Descriptor {
             Some(mode) => {
                 assert!(
                     mode.product_id != 0 && mode.block_size != 0,
-                    "incomplete update mode"
+                    "the update mode needs both a product id and a block size"
                 );
                 (mode.product_id, mode.block_size)
             }
@@ -113,11 +95,11 @@ impl Descriptor {
         let mut fields = Fields(bytes);
         let magic = fields.take()?;
         if magic != Self::MAGIC {
-            return Err(DescriptorError::Magic);
+            return Err(DescriptorError::WrongMagic);
         }
         let format_version = u16::from_le_bytes(fields.take()?);
         if format_version != Self::FORMAT_VERSION {
-            return Err(DescriptorError::FormatVersion(format_version));
+            return Err(DescriptorError::UnknownFormatVersion(format_version));
         }
         let descriptor = Self {
             magic,
@@ -131,7 +113,7 @@ impl Descriptor {
             board_name: fields.take()?,
         };
         if descriptor.board_name().is_none_or(str::is_empty) {
-            return Err(DescriptorError::BoardName);
+            return Err(DescriptorError::InvalidBoardName);
         }
         if descriptor.image_start >= descriptor.image_end {
             return Err(DescriptorError::EmptyRegion {
@@ -140,7 +122,7 @@ impl Descriptor {
             });
         }
         if (descriptor.update_product_id == 0) != (descriptor.update_block_size == 0) {
-            return Err(DescriptorError::UpdateMode);
+            return Err(DescriptorError::IncompleteUpdateMode);
         }
         Ok(descriptor)
     }
@@ -279,7 +261,7 @@ mod tests {
         bytes[8] = 2;
         assert_eq!(
             Descriptor::from_bytes(&bytes),
-            Err(DescriptorError::FormatVersion(2))
+            Err(DescriptorError::UnknownFormatVersion(2))
         );
     }
 
@@ -289,7 +271,7 @@ mod tests {
         bytes[24..28].fill(0);
         assert_eq!(
             Descriptor::from_bytes(&bytes),
-            Err(DescriptorError::UpdateMode)
+            Err(DescriptorError::IncompleteUpdateMode)
         );
     }
 

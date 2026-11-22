@@ -23,9 +23,9 @@ pub enum Error {
     #[error("the image has no descriptor behind its vector table")]
     MissingDescriptor,
     #[error("the image descriptor is invalid")]
-    Descriptor(#[from] DescriptorError),
+    InvalidDescriptor(#[from] DescriptorError),
     #[error("the image starts at {}, its descriptor at {}", Hex(*.found), Hex(*.expected))]
-    Start { found: u32, expected: u32 },
+    StartMismatch { found: u32, expected: u32 },
     #[error(
         "the image has {size} bytes; its area {}-{} holds {capacity} bytes",
         Hex(*.start),
@@ -38,11 +38,11 @@ pub enum Error {
         capacity: u32,
     },
     #[error("initial stack pointer {} is not an aligned RAM address", Hex(*.0))]
-    StackPointer(u32),
+    MisplacedStackPointer(u32),
     #[error("vector {index} ({}) does not point into the image as Thumb code", Hex(*.address))]
-    Vector { index: usize, address: u32 },
+    VectorOutsideImage { index: usize, address: u32 },
     #[error("reset vector {} does not point behind the descriptor as Thumb code", Hex(*.0))]
-    ResetVector(u32),
+    ResetVectorOutsideCode(u32),
 }
 
 impl<'a> Image<'a> {
@@ -53,7 +53,7 @@ impl<'a> Image<'a> {
         let (descriptor_offset, descriptor) = locate_descriptor(bytes)?;
         let region = descriptor.image();
         if let Some(found) = start.filter(|&found| found != region.start) {
-            return Err(Error::Start {
+            return Err(Error::StartMismatch {
                 found,
                 expected: region.start,
             });
@@ -79,13 +79,13 @@ impl<'a> Image<'a> {
 
         let stack_pointer = image.vector(0);
         if !STACK_REGION.contains(stack_pointer) || !stack_pointer.is_multiple_of(STACK_ALIGNMENT) {
-            return Err(Error::StackPointer(stack_pointer));
+            return Err(Error::MisplacedStackPointer(stack_pointer));
         }
         for index in RESET_VECTOR_INDEX + 1..descriptor_offset / VECTOR_SIZE {
             let address = image.vector(index);
             let unused = address == 0 || address == ERASED_WORD;
             if !unused && !is_thumb_code_in(content, address) {
-                return Err(Error::Vector { index, address });
+                return Err(Error::VectorOutsideImage { index, address });
             }
         }
         let reset = image.vector(RESET_VECTOR_INDEX);
@@ -94,7 +94,7 @@ impl<'a> Image<'a> {
             end: content.end,
         };
         if !is_thumb_code_in(code, reset) {
-            return Err(Error::ResetVector(reset));
+            return Err(Error::ResetVectorOutsideCode(reset));
         }
         Ok(image)
     }
@@ -198,7 +198,7 @@ mod tests {
         let bytes = firmware(0x400);
         assert_eq!(
             Image::new(&bytes, Some(0x0800_0000)),
-            Err(Error::Start {
+            Err(Error::StartMismatch {
                 found: 0x0800_0000,
                 expected: START
             })
@@ -220,7 +220,7 @@ mod tests {
         set_vector(&mut bytes, 1, START + 0x401);
         assert_eq!(
             Image::new(&bytes, None),
-            Err(Error::ResetVector(START + 0x401))
+            Err(Error::ResetVectorOutsideCode(START + 0x401))
         );
     }
 
@@ -230,7 +230,7 @@ mod tests {
         set_vector(&mut bytes, 1, START + 0x1C1);
         assert_eq!(
             Image::new(&bytes, None),
-            Err(Error::ResetVector(START + 0x1C1))
+            Err(Error::ResetVectorOutsideCode(START + 0x1C1))
         );
     }
 
@@ -238,7 +238,10 @@ mod tests {
     fn rejects_an_even_reset_vector() {
         let mut bytes = firmware(0x400);
         set_vector(&mut bytes, 1, CODE);
-        assert_eq!(Image::new(&bytes, None), Err(Error::ResetVector(CODE)));
+        assert_eq!(
+            Image::new(&bytes, None),
+            Err(Error::ResetVectorOutsideCode(CODE))
+        );
     }
 
     #[test]
@@ -247,7 +250,7 @@ mod tests {
         set_vector(&mut bytes, 20, 0x0800_0001);
         assert_eq!(
             Image::new(&bytes, None),
-            Err(Error::Vector {
+            Err(Error::VectorOutsideImage {
                 index: 20,
                 address: 0x0800_0001
             })
@@ -260,7 +263,7 @@ mod tests {
         set_vector(&mut bytes, 0, 0x0803_0000);
         assert_eq!(
             Image::new(&bytes, None),
-            Err(Error::StackPointer(0x0803_0000))
+            Err(Error::MisplacedStackPointer(0x0803_0000))
         );
     }
 

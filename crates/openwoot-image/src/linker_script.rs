@@ -11,12 +11,12 @@ pub enum LinkerScriptError {
     #[error("`memory.x` has no `{0}` region")]
     MissingRegion(&'static str),
     #[error("`memory.x`: the `{field}` of the `{region}` region is missing or not a number")]
-    Number {
+    InvalidField {
         region: &'static str,
         field: &'static str,
     },
     #[error("`memory.x`: the `{0}` region ends beyond the address space or is empty")]
-    Bounds(&'static str),
+    InvalidBounds(&'static str),
 }
 
 impl MemoryLayout {
@@ -44,7 +44,7 @@ fn region(memory_x: &str, name: &'static str) -> Result<Region, LinkerScriptErro
             .find(|token| *token == key)
             .and_then(|_| tokens.next())
             .and_then(number)
-            .ok_or(LinkerScriptError::Number {
+            .ok_or(LinkerScriptError::InvalidField {
                 region: name,
                 field: key,
             })
@@ -53,7 +53,7 @@ fn region(memory_x: &str, name: &'static str) -> Result<Region, LinkerScriptErro
     let length = field("LENGTH")?;
     match start.checked_add(length) {
         Some(end) if length > 0 => Ok(Region { start, end }),
-        _ => Err(LinkerScriptError::Bounds(name)),
+        _ => Err(LinkerScriptError::InvalidBounds(name)),
     }
 }
 

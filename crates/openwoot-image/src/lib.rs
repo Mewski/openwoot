@@ -3,10 +3,12 @@
 
 mod descriptor;
 mod hex;
+mod image;
 mod linker_script;
-mod validation;
+mod region;
 
-pub use descriptor::{Descriptor, DescriptorError, Region, UpdateMode, UsbIds};
+pub use descriptor::{Descriptor, DescriptorError, UpdateMode, UsbIds};
 pub use hex::Hex;
+pub use image::{Error, Image};
 pub use linker_script::{LinkerScriptError, MemoryLayout};
-pub use validation::{Error, Image};
+pub use region::Region;
