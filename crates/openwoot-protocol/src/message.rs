@@ -7,7 +7,7 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
     Error,
-    report::{Contents, FRAME_OFFSET, MAX_FRAME_LEN, parse_report, seal_report},
+    report::{self, Contents, FRAME_OFFSET, MAX_FRAME_LEN},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -47,11 +47,11 @@ where
             _ => Error::Encode,
         })?
         .len();
-    seal_report(report, header_len + body_len)
+    report::seal(report, header_len + body_len)
 }
 
 pub fn decode_message(report: &[u8]) -> Result<Option<Message<'_>>, Error> {
-    match parse_report(report)? {
+    match report::parse(report)? {
         Contents::Frame(frame) => {
             let (header, body) = VarHeader::take_from_slice(frame).ok_or(Error::MalformedReport)?;
             Ok(Some(Message { header, body }))

@@ -1,4 +1,4 @@
-use crate::{Error, report::smallest_report};
+use crate::{Error, report::smallest_holding};
 
 pub const MAGIC: [u8; 2] = [0xD1, 0xDA];
 pub const FEATURE_REPORT_ID: u8 = 1;
@@ -120,7 +120,7 @@ pub fn encode_reply<'a>(
     report: &'a mut [u8],
 ) -> Result<&'a [u8], Error> {
     let frame_len = REPLY_HEADER_LEN + payload.len();
-    let (report_id, size) = smallest_report(frame_len).ok_or(Error::FrameTooLong)?;
+    let (report_id, size) = smallest_holding(frame_len).ok_or(Error::FrameTooLong)?;
     let length = u16::try_from(payload.len()).map_err(|_| Error::FrameTooLong)?;
     let report = report.get_mut(..=size).ok_or(Error::FrameTooLong)?;
     let (head, tail) = report

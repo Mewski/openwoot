@@ -1,14 +1,14 @@
 use crate::Error;
 
 pub const MAGIC: [u8; 2] = *b"OW";
-pub const REPORT_SIZES: [usize; 6] = [32, 62, 254, 510, 1022, 2046];
-pub const MAX_REPORT_LEN: usize = REPORT_ID_LEN + LARGEST_REPORT;
-pub const FRAME_OFFSET: usize = REPORT_ID_LEN + MAGIC.len() + FRAME_LENGTH_LEN;
-pub const MAX_FRAME_LEN: usize = MAX_REPORT_LEN - FRAME_OFFSET;
+pub const SIZES: [usize; 6] = [32, 62, 254, 510, 1022, 2046];
+pub const MAX_LEN: usize = ID_LEN + LARGEST;
+pub const FRAME_OFFSET: usize = ID_LEN + MAGIC.len() + FRAME_LENGTH_LEN;
+pub const MAX_FRAME_LEN: usize = MAX_LEN - FRAME_OFFSET;
 
-const REPORT_ID_LEN: usize = 1;
+const ID_LEN: usize = 1;
 const FRAME_LENGTH_LEN: usize = 2;
-const LARGEST_REPORT: usize = match REPORT_SIZES {
+const LARGEST: usize = match SIZES {
     [.., largest] => largest,
 };
 
@@ -18,7 +18,7 @@ pub enum Contents<'a> {
     Foreign { report_id: u8, data: &'a [u8] },
 }
 
-pub fn parse_report(report: &[u8]) -> Result<Contents<'_>, Error> {
+pub fn parse(report: &[u8]) -> Result<Contents<'_>, Error> {
     let (&report_id, data) = report.split_first().ok_or(Error::MalformedReport)?;
     match data {
         [first, second, low, high, rest @ ..] if [*first, *second] == MAGIC => {
@@ -31,13 +31,11 @@ pub fn parse_report(report: &[u8]) -> Result<Contents<'_>, Error> {
     }
 }
 
-pub fn seal_report(report: &mut [u8], frame_len: usize) -> Result<&[u8], Error> {
+pub fn seal(report: &mut [u8], frame_len: usize) -> Result<&[u8], Error> {
     let (report_id, size) =
-        smallest_report(FRAME_OFFSET - REPORT_ID_LEN + frame_len).ok_or(Error::FrameTooLong)?;
+        smallest_holding(FRAME_OFFSET - ID_LEN + frame_len).ok_or(Error::FrameTooLong)?;
     let length = u16::try_from(frame_len).map_err(|_| Error::FrameTooLong)?;
-    let report = report
-        .get_mut(..REPORT_ID_LEN + size)
-        .ok_or(Error::FrameTooLong)?;
+    let report = report.get_mut(..ID_LEN + size).ok_or(Error::FrameTooLong)?;
     let (head, tail) = report
         .split_at_mut_checked(FRAME_OFFSET)
         .ok_or(Error::FrameTooLong)?;
@@ -52,8 +50,8 @@ pub fn seal_report(report: &mut [u8], frame_len: usize) -> Result<&[u8], Error> 
     Ok(report)
 }
 
-pub(crate) fn smallest_report(data_len: usize) -> Option<(u8, usize)> {
-    REPORT_SIZES
+pub(crate) fn smallest_holding(data_len: usize) -> Option<(u8, usize)> {
+    SIZES
         .iter()
         .zip(1..)
         .find(|&(&size, _)| data_len <= size)

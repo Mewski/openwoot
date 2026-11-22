@@ -2,9 +2,9 @@ use postcard_rpc::endpoints;
 
 use crate::{
     Version, advanced,
-    config::{Capabilities, GlobalSettings, Rejection},
+    config::{Capabilities, Rejection},
     device::{self, Layout},
-    gamepad, keys, lightbar, lighting,
+    gamepad, global, keys, lightbar, lighting,
     profile::{self, Change, LayerChange, LayerRef, Slot, Summary},
     switches,
 };
@@ -13,7 +13,8 @@ type Done = Result<(), Rejection>;
 type CapabilitiesReply = Result<Capabilities, Rejection>;
 type DeviceSettingsReply = Result<device::Settings, Rejection>;
 type LayoutReply = Result<Layout, Rejection>;
-type GlobalSettingsReply = Result<GlobalSettings, Rejection>;
+type GlobalSettingsReply = Result<global::Settings, Rejection>;
+type GlobalSettings = global::Settings;
 type SummaryReply = Result<Summary, Rejection>;
 type SlotReply = Result<Slot, Rejection>;
 type ProfileInfoReply = Result<profile::Info, Rejection>;
@@ -47,7 +48,7 @@ type DeviceSettings = device::Settings;
 type GlobalEntries = lightbar::Entries;
 
 endpoints! {
-    list = ENDPOINT_LIST;
+    list = LIST;
     | EndpointTy            | RequestTy            | ResponseTy           | Path                                |
     | ----------            | ---------            | ----------           | ----                                |
     | GetVersion            | ()                   | Version              | "openwoot/version"                  |
