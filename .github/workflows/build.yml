@@ -1,0 +1,65 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  # The boards are the directories under boards/; nothing here names one.
+  boards:
+    runs-on: ubuntu-latest
+    outputs:
+      boards: ${{ steps.list.outputs.boards }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: List the boards
+        id: list
+        run: echo "boards=$(make -s boards | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+
+  # The rules of the tree, and the registration lists of both images of every board that links.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/arm-toolchain
+
+      - name: Check the tree and the registration lists
+        run: make -j"$(nproc)" check
+
+  firmware:
+    needs: boards
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        board: ${{ fromJSON(needs.boards.outputs.boards) }}
+        lto: [0, 1]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/arm-toolchain
+
+      # A board in bring-up compiles without producing an image (see the Makefile); the two
+      # steps behind the build apply to boards that link.
+      - name: Build
+        id: build
+        run: |
+          make BOARD=${{ matrix.board }} LTO=${{ matrix.lto }}
+          if [ -f build/${{ matrix.board }}/openwoot-${{ matrix.board }}.hex ]; then
+            echo "image=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Describe the image
+        if: steps.build.outputs.image == 'yes'
+        run: python3 tools/openwoot.py plan build/${{ matrix.board }}/openwoot-${{ matrix.board }}.hex
+
+      - uses: actions/upload-artifact@v4
+        if: steps.build.outputs.image == 'yes'
+        with:
+          name: openwoot-${{ matrix.board }}-lto${{ matrix.lto }}
+          path: |
+            build/${{ matrix.board }}/openwoot-${{ matrix.board }}.hex
+            build/${{ matrix.board }}/openwoot-${{ matrix.board }}.bin
+            build/${{ matrix.board }}/openwoot-${{ matrix.board }}.map
