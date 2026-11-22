@@ -19,22 +19,35 @@ rust-version = "1.100"
 [workspace.dependencies]
 anyhow = "=1.0.104"
 assert_cmd = "=2.2.2"
+async-hid = "=0.5.3"
+async-io = "=2.6.0"
 cargo_metadata = "=0.23.1"
 clap = { version = "=4.6.9", features = ["derive"] }
 cortex-m = "=0.7.10"
 cortex-m-rt = "=0.7.7"
 critical-section = "=1.2.0"
+embassy-executor = "=0.10.0"
 embassy-futures = "=0.1.2"
+embassy-time-driver = "=0.2.2"
+embassy-time-queue-utils = "=0.3.2"
+embassy-usb = { version = "=0.6.0", default-features = false, features = ["max-interface-count-5"] }
+embassy-usb-driver = "=0.2.2"
+embedded-hal = "=1.0.0"
 embedded-hal-async = "=1.0.0"
+futures-lite = "=2.6.1"
 gd32f303-pac = { path = "crates/gd32f303-pac" }
 gd32f425-pac = { path = "crates/gd32f425-pac" }
 ihex = "=3.0.0"
+indicatif = { version = "=0.18.6", default-features = false, features = ["unicode-width"] }
 object = { version = "=0.41.0", default-features = false, features = ["elf", "read_core", "std"] }
 openwoot = { path = "crates/openwoot" }
 openwoot-gd32f3 = { path = "crates/openwoot-gd32f3" }
 openwoot-gd32f4 = { path = "crates/openwoot-gd32f4" }
 openwoot-image = { path = "crates/openwoot-image" }
+openwoot-protocol = { path = "crates/openwoot-protocol" }
 postcard = { version = "=1.2.0", default-features = false }
+postcard-rpc = { version = "=0.12.1", default-features = false }
+postcard-schema = { version = "=0.2.6", features = ["derive"] }
 predicates = "=3.1.4"
 serde = { version = "=1.0.229", default-features = false, features = ["derive"] }
 svd-encoder = "=0.14.8"
@@ -53,9 +66,10 @@ allow_attributes_without_reason = "deny"
 dbg_macro = "deny"
 expect_used = "deny"
 indexing_slicing = "deny"
-missing_errors_doc = "allow"
 min_ident_chars = "warn"
+missing_errors_doc = "allow"
 missing_panics_doc = "allow"
+mod_module_files = "deny"
 panic = "deny"
 pedantic = { level = "warn", priority = -1 }
 pub_underscore_fields = "warn"
