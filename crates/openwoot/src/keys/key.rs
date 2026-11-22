@@ -40,6 +40,19 @@ impl Key {
     pub const fn column(self) -> usize {
         self.column as usize
     }
+
+    #[must_use]
+    pub fn from_index(index: u8, columns: usize) -> Option<Self> {
+        let index = usize::from(index);
+        let row = u8::try_from(index.checked_div(columns)?).ok()?;
+        let column = u8::try_from(index.checked_rem(columns)?).ok()?;
+        Some(Self::new(row, column))
+    }
+
+    #[must_use]
+    pub const fn index(self, columns: usize) -> usize {
+        self.row() * columns + self.column()
+    }
 }
 
 #[cfg(test)]
