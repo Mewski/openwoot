@@ -5,7 +5,7 @@ What a host sees when a keyboard runs openwoot: the USB device, its five interfa
 | Part | Code |
 | --- | --- |
 | device and interfaces | `crates/openwoot/src/usb/` (`usb::build`, `usb::Face`, `usb::HostState`, the HID class request handler) |
-| report descriptors and typed reports | `crates/openwoot/src/hid/` (`hid::DescriptorBuilder`, one module per report, re-exported by `hid`) |
+| report descriptors and typed reports | `crates/openwoot/src/hid/` (the crate-private descriptor builder in `hid/descriptor.rs`, one module per report, re-exported by `hid`) |
 | configuration channel, firmware side | `crates/openwoot/src/protocol/` (`protocol::Channel`, `protocol::Handler`, `protocol::UpdateMode`, the stock identification responder with `protocol::StockIdentity`); the stock feature-report queue `usb::FeatureRequests` |
 | messages, framing, host side | `crates/openwoot-protocol/` |
 
@@ -73,19 +73,19 @@ Every HID interface has a HID descriptor with `bcdHID` 1.11, country 0 and one r
 
 ## Reports
 
-Report descriptors are built at compile time by `hid::DescriptorBuilder` (a `const fn` item builder that encodes each item in its smallest size and fails compilation on unbalanced collections or overflow). Each report is a typed struct implementing `hid::InputReport` (`ID`, `LEN`, `to_bytes`), and `usb::write_report` sends it. The host tests parse every descriptor and check that each report's size equals its struct.
+Report descriptors are built at compile time by the descriptor builder in `hid/descriptor.rs` (a `const fn` item builder that encodes each item in its smallest size and fails compilation on unbalanced collections or overflow). Each report is a typed struct implementing `hid::InputReport` (`ID`, `LEN`, `to_bytes`), and `usb::write_report` sends it. The host tests parse every descriptor and check that each report's size equals its struct.
 
 | Report | Bytes (little endian) |
 | --- | --- |
 | `hid::BootReport` (interface 1, boot) | modifiers (bit n = usage `0xe0` + n), 0, six key usages |
-| `hid::NkroReport` (interface 1) | modifiers, then a 27-byte bitmap: usages `0x04`..`0x31`, `0x33`..`0x9b`, `0x9d`..`0xa4`, `0xb0`..`0xdd`, each group padded to a whole byte; one table (`hid::NKRO_KEY_GROUPS`) builds both the descriptor and the bit positions |
+| `hid::NkroReport` (interface 1) | modifiers, then a 27-byte bitmap: usages `0x04`..`0x31`, `0x33`..`0x9b`, `0x9d`..`0xa4`, `0xb0`..`0xdd`, each group padded to a whole byte; one table (`NKRO_KEY_GROUPS` in `hid/keyboard.rs`) builds both the descriptor and the bit positions |
 | keyboard output (interface 1) | one byte, five LED bits and three padding bits |
 | `hid::SystemReport` (id 1) | id, control: 0 none, 1 power down, 2 sleep, 3 wake up (usages `0x81`..`0x83`) |
 | `hid::ConsumerReport` (id 2) | id, three 16-bit consumer usages (1..`0x02a2`, 0 none) |
 | `hid::MouseReport` (id 3) | id, five button bits and three padding bits, relative X and Y (-127..127) |
 | `hid::GamepadReport` (interface 0, `Gamepad`) | 12 button bits and 4 padding bits, X, Y, Z, Rz, Rx, Ry (0..`0x7ffe`, centre `0x3fff`), throttle, elevator, accelerator, rudder, trigger (0..`0x7fff`), hat (1..8 clockwise from up, 0 centred) |
 | `xinput::Report` (interface 0, `Xinput`) | `0x00`, `0x14`, buttons (16 bits), left and right trigger (8 bits each), left X, left Y, right X, right Y (signed 16 bits), six zero bytes |
-| XInput output (`xinput::LedPattern`) | `0x01 0x03 <pattern>`: patterns 2..5 and 6..9 select player 1..4 |
+| XInput output (`xinput::LedPattern`) | `0x01 0x03 <pattern>`: patterns 2..5 and 6..9 select player 1..4 (`usb::HostState::xinput_player`, forgotten when the host configures or deconfigures the device); the player picks the corner of the gamepad detection pattern |
 | `hid::KeyStateReport` (interface 4) | 16 entries of 4 bytes: key position, usage code, then a 16-bit word: bit 0 pressed, bits 2..5 kind (0 keyboard, 3 consumer, 4 function, 5 gamepad, 6 advanced), bits 6..15 travel (0..1023); unused entries are 0 |
 
 ## Configuration channel
@@ -121,7 +121,7 @@ Every endpoint is declared once in `openwoot_protocol::endpoints` (one table, co
 | `GetVersion` | `openwoot/version` | `()` | `Version { protocol: u16, firmware: FirmwareVersion { major: u16, minor: u16, patch: u16 } }` |
 | `EnterUpdateMode` | `openwoot/update-mode` | `()` | `()`; after sending it the firmware hands over to the factory bootloader (`UpdateMode::enter_update_mode` with option byte 0), which stays in update mode for one start |
 | `GetDiagnostics` | `openwoot/diagnostics/2` | `()` | `diagnostics::Report`: scan cycles, recoveries and converter overruns (`None` where the chip has no overrun flag), key passes and published key reports, the applied profile with profile requests and switches, LED driver and lighting state with frames and page writes, completed transfers and errors by kind with the last error of the LED bus (I2C) and the flash bus (SPI), settings loads, stores and failures, USB configured, suspended, negotiated speed and bus resets, the stack size and its deepest use since reset (`Stack { size, peak }` in bytes, from the stack painted at reset); all counters wrap at `u32::MAX`; firmware built without a readout answers `UnknownKey`. Path 1 (`openwoot/diagnostics`, without the stack) is retired |
-| `GetCapabilities` | `openwoot/capabilities` | `()` | `config::Capabilities` |
+| `GetCapabilities` | `openwoot/capabilities` | `()` | `configuration::Capabilities` |
 | `GetDeviceSettings`, `SetDeviceSettings` | `openwoot/device`, `…/set` | `()`, `device::Settings` | `device::Settings`, `Done` |
 | `GetLayout`, `SetLayout` | `openwoot/layout`, `…/set` | `()`, `device::Layout` | `device::Layout`, `Done` |
 | `GetGlobalSettings`, `SetGlobalSettings` | `openwoot/global`, `…/set` | `()`, `global::Settings` | `global::Settings`, `Done` |
@@ -143,9 +143,11 @@ Every endpoint is declared once in `openwoot_protocol::endpoints` (one table, co
 | `GetHostSignals`, `SetHostSignals` | `openwoot/signals`, `…/set` | `()`, `lightbar::HostSignals` | `lightbar::HostSignalIds`, `Done` |
 | `GetSwitches`, `SetSwitches` | `openwoot/switches`, `…/set` | `()`, `switches::Settings` | `switches::Settings`, `Done` |
 | `GetSwitchModels` | `openwoot/switches/models` | `()` | `switches::Models` |
+| `SetKeyReports` | `openwoot/key-reports/set` | `bool` (enabled) | `Done`; turns key reports off and on (the C firmware's feature commands 21 and 22): while off, keys send no keyboard, controls or key-state reports and Fn actions do not run; runtime state (`usb::HostState`), not stored, back on when the host configures the USB device |
+| `SetGamepadDetection` | `openwoot/gamepad-detection/set` | `bool` (enabled) | `Done`; starts and stops gamepad detection (the C firmware's feature commands 45 and 46): the gamepad interface sends the fixed detection pattern (XInput: the left stick in the corner of the player) instead of the key state; runtime state (`usb::HostState`), not stored |
 | `Save`, `Revert`, `FactoryReset` | `openwoot/save`, `openwoot/revert`, `openwoot/factory-reset` | `()` | `Done` |
 
-`PROTOCOL_VERSION` is 1. The types behind a path never change: a changed request or response type gets a new path (`openwoot/profile/keymap/2`), so old and new hosts and firmware recognise each other's endpoints by key. A key is a hash of the path and the schema of the type (field names and type names included), so a test (`endpoint_keys_are_pinned_so_a_changed_type_needs_a_new_path`) pins the request and response key of every endpoint: a change of any type behind a path fails it. Capacities of `heapless::Vec` and `heapless::String` are not part of a schema; raising one is compatible for hosts that never send more than the old capacity, lowering one needs a new path.
+`PROTOCOL_VERSION` is 1. The types behind a path never change: a changed request or response type gets a new path (`openwoot/profile/keymap/2`), so old and new hosts and firmware recognise each other's endpoints by key. A key is a hash of the path and the schema of the type (its shape with field and variant names; type names are not hashed), so a test (`endpoint_keys_are_pinned_so_a_changed_type_needs_a_new_path`) pins the request and response key of every endpoint: a change of any type behind a path fails it. Capacities of `heapless::Vec` and `heapless::String` are not part of a schema; raising one is compatible for hosts that never send more than the old capacity, lowering one needs a new path.
 
 ### Configuration model
 
@@ -153,7 +155,7 @@ The configuration is a set of typed parts, each a `no_std` serde type in `openwo
 
 | Part | Type | Holds |
 | --- | --- | --- |
-| capabilities | `config::Capabilities` | key matrix rows and columns, number of profile slots, layouts the board can have, light-bar LEDs (0 = none), host signals, switch models, edition |
+| capabilities | `configuration::Capabilities` | key matrix rows and columns, number of profile slots, layouts the board can have, light-bar LEDs (0 = none), host signals, switch models, edition |
 | device | `device::Settings` | USB mode (`Xinput`, `Gamepad`, `NoGamepad`), keyboard report (`NKeyRollover`, `Boot`), speed (`High`, `Full`), gamepad polling (4 ms, 1 ms, 125 µs); converted to `usb::Face` by `From`; takes effect at the next start |
 | layout | `device::Layout` | `Ansi`, `Iso`, `Jis`; must be one of `Capabilities::layouts` |
 | global | `global::Settings` | idle dimming (`lighting::Idle`: dim after, off after, off enabled; `None` = never), Num Lock indicator inverted, release-rebound filter |
@@ -178,7 +180,7 @@ Actions (`keys::Action`): `None`, `Keyboard(usage)` (usages `0x04`..`0xdd` and t
 Semantics:
 
 - A `Set*` request applies at once: to the running keyboard when it addresses the active profile, otherwise to that profile. Nothing is stored until `Save`, which writes every change since the last save; `Revert` drops the unsaved changes; `FactoryReset` returns every setting and profile to the board's factory defaults (stored at once), the C firmware's factory reset.
-- The firmware validates every request that carries a value against `Capabilities` before it reaches the keyboard (`config::Validate`) and answers `Err(Rejection::Invalid(..))` without changing anything. `Rejection` also reports a missing profile, a profile that cannot be deleted, the profile limit, a locked keyboard (switches), a storage error, and `Unsupported` for parts the keyboard does not have.
+- The firmware validates every request that carries a value against `Capabilities` before it reaches the keyboard (`configuration::Validate`, implemented by every part of the model down to single keys, actions and distances) and answers `Err(Rejection::Invalid(..))` without changing anything. `Rejection` also reports a missing profile, a profile that cannot be deleted, the profile limit, a locked keyboard (switches), a storage error, and `Unsupported` for parts the keyboard does not have.
 - Firmware side: `protocol::Handler` decodes, validates and hands each request to `protocol::Configuration`, a trait with one async method per part; every method answers `Unsupported` unless implemented, and `()` implements none (`Handler::new`). `profile::Configurator` implements it over `profile::Model` (`Handler::with_configuration`) without changes to the handler.
 - Profiles: a fresh keyboard has the board's factory profiles (`boards/<board>/src/profiles.rs`, `profile::Factory`: the content of the C firmware's factory profiles, two on a regular unit, Typing and Rapid, with their effect layers, colour maps, key settings, names and colours); every part a profile has not stored is its factory part of that slot, so nothing is written at the first start. `GetProfiles` counts the existing profiles (up to `Capabilities::profiles`); `CreateProfile` adds the next slot (`ProfileLimit` when full), `DeleteProfile` removes only the last one and never profile 0 (`ProfileProtected`), and a deleted active profile hands over to the new last one. `ActivateProfile`, the Mode key (`ToggleModeProfile`: from profile 0 to the last other active profile, profile 1 at first; from any other back to 0) and the profile keys switch through one activation that saves the unsaved changes, applies every part (keys, lighting, colour maps) and stores the active slot; the switch applies even when the store fails. `GetProfileRevision` counts the stores of a profile's parts.
 - Global and device settings: `SetGlobalSettings` applies idle dimming, the Num Lock polarity and the release-rebound filter at once; `SetDeviceSettings` takes effect at the next start, where the stored settings choose the USB face (a stored `High` speed keeps the board's speed, `Full` forces full speed). Both are stored by `Save`. A brightness key stores the profile's lighting settings two seconds after the last step, as the C firmware does.

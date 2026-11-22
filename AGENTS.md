@@ -43,7 +43,7 @@ Optional features (light bar, host signals, editions, ...) and alternative behav
 | `cargo xtask boards [--json]` | lists the boards |
 | `cargo xtask build <board>` / `--all` | `build/<board>/openwoot-<board>.{elf,hex,bin}` |
 | `cargo xtask flash <board> --dry-run` | builds and checks the image with `openwoot flash --dry-run`; without `--dry-run` it would flash, which needs the owner's go-ahead |
-| `cargo xtask check` | file types, dependency direction, file-set symmetry (boards: every file; chip HALs: top-level `src/*.rs`, since a peripheral module's children are chip-specific), names in shared code, comment, `unsafe` and module-name rules, formatting, clippy (host and every board target), every board image, no panic reachable from interrupts and the key task, RAM and flash budget per board |
+| `cargo xtask check` | file types, dependency direction, `[lints] workspace = true` in every crate but the PACs, file-set symmetry (boards: every file; chip HALs: top-level `src/*.rs`, since a peripheral module's children are chip-specific), names in shared code, comment, `unsafe` and module-name rules, formatting (`cargo +nightly fmt`, `taplo fmt`, `cargo sort`), clippy (host and every board target), every board image, no panic reachable from interrupts and the key task (except the sites in `reviewed.rs`, each of which must still occur), RAM budget (2048 bytes to spare) and flash budget (32768 bytes to spare) per board |
 | `cargo xtask pac` | regenerates the PAC crates |
 | `openwoot version` | firmware and protocol version over the configuration channel |
 | `openwoot status` | diagnostic counters and states of every subsystem (`GetDiagnostics`) as `label: value` lines |
