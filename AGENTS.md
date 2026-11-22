@@ -1,48 +1,39 @@
 # openwoot: notes for coding agents
 
-Open firmware for Wooting hall-effect keyboards. Plain C11 for Cortex-M, GNU make, no RTOS. The architecture is described in `docs/architecture.md`; how to add a board, family, driver, feature or strategy in `docs/porting.md`. Read those before changing structure.
+Keyboard firmware for Wooting hall-effect keyboards, written in Rust, with its own configuration protocol shared with a Rust host application. This branch (`rust`) is a new firmware; the branch `main` holds the earlier C firmware, which is the reference for features and hardware behaviour. Read code there; never copy it.
+
+**State: scaffold.** The layout below is in place with empty files; nothing builds yet. Update this file whenever the layout, commands or rules change.
 
 ## Layout
 
-| Directory | Holds | May include |
+| Path | Holds | May depend on |
 | --- | --- | --- |
-| `src/app/` | `main`, the task loop, the tick call-back | everything below |
-| `src/core/` | registration lists, start-up order, clock, soft timers, run state | `hal/` only |
-| `src/<module>/` | firmware logic: `adc_scan`, `analog`, `keys`, `layout`, `hid`, `usb`, `rgb`, `profile`, `protocol`, `storage`, `tables`, `proto` | `src/core/`, other modules, `drivers/include/`, `hal/include/` |
-| features (`src/rgb/signals/`, `src/rgb/lightbar/`, `src/profile/edition/`, `src/adc_scan/reference/`, `src/adc_scan/recheck/`) | optional parts a board lists in `board.mk` | like modules |
-| strategies (`src/storage/device_info/`, `src/storage/layout_variant/`, `src/analog/noise_recal/`) | one variant per directory, selected in `board.mk` | like modules |
-| `drivers/<chip>/` | chip drivers, written against `hal/include/` only | `hal/include/`, `drivers/include/` |
-| `hal/include/hal/` | the hardware interface the firmware uses | nothing family-specific |
-| `hal/<family>/` | one implementation per microcontroller family; the only place that uses a peripheral library | the family's peripheral library |
-| `boards/<board>/` | `board.h` (numbers), `wiring.h` (pins), `board.json`, `board.mk`, `linker.ld`, `tables/`, `defaults/`, `layout/` | |
+| `crates/openwoot/` | the firmware: scan, analog, keys, layout, HID, USB classes, configuration handler, storage, profiles, lighting, runtime; `no_std`, no hardware access, tested on the host | `openwoot-protocol`, `openwoot-drivers` traits, ecosystem crates |
+| `crates/openwoot-protocol/` | messages between firmware and host software (commands, configuration, keymap, lighting); `no_std` | ecosystem crates only |
+| `crates/openwoot-drivers/` | chip drivers (`is31fl3741` LED matrix, `spi_nor` flash), generic over `embedded-hal` traits | `embedded-hal` |
+| `crates/openwoot-gd32f4/`, `crates/openwoot-gd32f3/` | one HAL per microcontroller family on the GD32 PACs; the only crates with `unsafe` register access | their PAC, `cortex-m`, `embedded-hal` |
+| `crates/openwoot-cli/` | host command-line tool: find keyboards, talk the configuration protocol, flash through the factory bootloader | `openwoot-protocol` |
+| `boards/<board>/` | one binary crate per keyboard: `memory.x`, `board.json`, `src/board.rs` (the board's numbers, tables and choice of features), `src/main.rs` (wiring) | everything above except the CLI |
+| `xtask/` | build helper: list boards, build images, checks, flashing via the CLI | host only |
 
-## Commands
+Optional features (light bar, host signals, editions, ...) and alternative behaviours (noise recalibration methods, device-information storage) are modules with types in `crates/openwoot/`; a board selects them in `src/board.rs`. Shared crates have no Cargo features that depend on a board, and no shared code names a board or a family.
 
-```sh
-make BOARD=wooting_80he              # build one board (BOARD is required); LTO=1 for the smaller variant
-make boards                          # list boards
-make all-boards                      # build every board
-make check                           # tree rules + registration lists of the built images
-python3 tools/check_tree.py --list-rules
-python3 tools/openwoot.py plan build/<board>/openwoot-<board>.hex
-```
+## Rules
 
-Never build into `build/` of another checkout; pass `BUILD=<dir>` for scratch builds.
+- Pure Rust: no C, assembly files, Python, shell scripts or make. Prefer maintained ecosystem crates over own code; justify each new dependency (maintenance, `no_std`, `unsafe`, licence compatible with MIT).
+- `unsafe` only in the family HAL crates, each block with a `// SAFETY:` comment.
+- No panics on the scan or USB path; no heap.
+- The microcontroller flash below the image base holds the factory bootloader, and the pages above the image end hold the serial number and device information. Code must never erase or program either; `memory.x` keeps the linker out of them.
+- The USB face (ids, interfaces, HID reports, the analog report read by the Wooting Analog SDK) stays close to stock; deviations are listed in `docs/protocol.md`.
+- Nothing is flashed to a keyboard and nothing is pushed without the owner's go-ahead.
+- Commits: one line, conventional (`feat(keys): ...`, `fix(usb): ...`, `docs: ...`).
 
-## Rules the tree check enforces (do not work around them)
+## Code style
 
-- No `#if` on a board, family or device name anywhere in `src/`, `drivers/`, `hal/include/`.
-- `FEATURE_<NAME>` appears only in that feature's public header; callers call the header, which provides do-nothing inline versions when the board does not list the feature.
-- No peripheral-library header and no peripheral register address in `src/`, `drivers/`, `hal/include/`.
-- No board or product name in shared code, comments included.
-- Every `hal/<family>/` has the same file names and implements every function of every HAL header. Every `boards/<board>/` has the same file set and the same `board.h` constants in the same order.
-- Start-up steps, profile sections and host commands are registered next to their function (`STARTUP_STEP`, `PROFILE_SECTION`, `PROTOCOL_FEATURE_COMMAND`, `PROTOCOL_REPORT_COMMAND`); order and command numbers must be unique.
-
-## Conventions
-
-- Behaviour stays compatible with stock firmware 2.14.1 of each board: host protocol, stored formats, order of file reads, order and values of hardware register writes. A stock defect that the host or stored data can observe is kept and marked `KNOWN ISSUE:`.
-- A difference between boards is a number (`board.h`), data (`boards/<board>/tables/`), wiring (`wiring.h`), a feature, or a named strategy; never a conditional in shared code, and never a literal that happens to fit one board.
-- The scan interrupt path is hot: HAL functions it calls are `static inline` in `hal/<family>/inline/`.
-- Every header starts with a comment saying what the unit is for and what it depends on. No commented-out code.
-- `src/proto/settings.pb.c` and `.pb.h` are generated; edit `settings.proto` and regenerate with the command in `src/proto/README.md`.
-- The microcontroller's own flash below the application start holds the factory bootloader. Code must never erase or program it. Boards whose `board.json` says updates are not supported must stay that way until their update mode is understood.
+- Code documents itself: names, types and small functions carry the meaning. No comments, no doc comments and no commented-out code. The one exception is the `// SAFETY:` comment that every `unsafe` block requires.
+- Lints are set once in the workspace `Cargo.toml` (`[workspace.lints]`, clippy pedantic plus denials of panics, `unwrap`, indexing, `todo!` and undocumented `unsafe`); every crate has `[lints] workspace = true`. An `#[allow]` or `#[expect]` must give a `reason`.
+- Formatting is enforced, never hand-tuned:
+  - Rust: `cargo +nightly fmt` (`rustfmt.toml`; import grouping, import merging and impl item ordering are nightly-only options, so formatting uses nightly while building uses the pinned stable toolchain).
+  - TOML: `taplo fmt` (`taplo.toml`); `Cargo.toml` dependency and section order: `cargo sort --workspace`.
+- Before every commit: `cargo +nightly fmt --check`, `taplo fmt --check`, `cargo sort --workspace --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
+- Modules are small and named for what they hold; one concept per file; public items first, helpers after.
