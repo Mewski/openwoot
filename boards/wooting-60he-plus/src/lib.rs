@@ -1,25 +1,29 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod lighting;
+pub mod scan;
+pub mod storage;
+
 pub use cortex_m_rt::entry;
 use embassy_futures::block_on;
 use hal::{
     gpio::{Level, Output, OutputType, Pin, Port, Speed},
+    i2c::I2c,
     pac,
     rcu::{self, AhbDivider, ApbDivider, Clocks, PllMultiplier},
+    spi::{Device, Spi},
     system::Bootloader,
     usb,
 };
 use openwoot::{
-    Keyboard,
+    lighting::Matrix,
+    protocol::StockIdentity,
     usb::{Face, Identity, KeyboardFormat, Mode, PollingRate, serial_number_from_page},
 };
+use openwoot_drivers::{is31fl3741::Is31fl3741, spi_nor::SpiNor};
 pub use openwoot_gd32f3 as hal;
 use openwoot_image::{Descriptor, Region, UpdateMode, UsbIds};
-
-pub mod lighting;
-pub mod scan;
-pub mod storage;
 
 include!(concat!(env!("OUT_DIR"), "/memory_layout.rs"));
 
@@ -69,17 +73,19 @@ pub type UsbDriver = usb::Driver<Pin<'A', 15, Output>>;
 #[derive(Debug)]
 pub struct Board {
     pub clocks: Clocks,
+    pub serial_number: Option<&'static str>,
     pub bootloader: Bootloader,
     pub storage: storage::Storage,
-    pub leds: Option<lighting::LedDriver>,
+    pub usb: UsbDriver,
+    pub leds: lighting::LedDriver,
 }
 
 impl Board {
     #[must_use]
-    pub fn new(peripherals: pac::Peripherals) -> (Self, UsbDriver) {
+    pub fn new(peripherals: pac::Peripherals) -> Self {
         let clocks = CLOCK_TREE.configure(peripherals.rcu, &peripherals.pmu);
         hal::time::start(peripherals.timer4, &clocks);
-        scan::install(hal::scan::Converter::new(
+        let converter = hal::scan::Converter::new(
             hal::scan::Peripherals {
                 adc: peripherals.adc0,
                 reference_adc: peripherals.adc1,
@@ -88,23 +94,37 @@ impl Board {
             &scan::WIRING,
             &clocks,
             Irqs,
-        ));
+        );
+        if !scan::SCAN.install(scan::Scanner::new(
+            converter,
+            scan::ANSI,
+            scan::PARALLEL_ORDER,
+        )) {
+            hal::system::reset();
+        }
         let port_a = Port::<'A'>::new(peripherals.gpioa);
         let port_b = Port::<'B'>::new(peripherals.gpiob);
         let mut bootloader = Bootloader::new(peripherals.pmu, peripherals.bkp);
-        let nor = storage::nor(
+        let chip_select = port_b
+            .pin12
+            .into_output(OutputType::PushPull, Speed::High, Level::High);
+        let flash_bus = Spi::new(
             peripherals.spi1,
             port_b.pin13,
             port_b.pin15,
             port_b.pin14,
-            port_b.pin12,
             Irqs,
-            &clocks,
+        );
+        let nor = SpiNor::new(
+            Device::new(flash_bus, chip_select, clocks.system),
+            storage::NOR_CAPACITY,
         );
         let storage = block_on(storage::start(nor, bootloader.take_format_request()));
         let usb = usb::Driver::new(
-            peripherals.usbd,
-            peripherals.usbd_ram,
+            usb::Core {
+                controller: peripherals.usbd,
+                packet_memory: peripherals.usbd_ram,
+            },
             &peripherals.afio,
             port_a
                 .pin15
@@ -112,49 +132,49 @@ impl Board {
             Irqs,
             &clocks,
         );
-        let leds = lighting::led_driver(
-            peripherals.i2c0,
-            port_b.pin6,
-            port_b.pin7,
-            port_b.pin5,
-            Irqs,
-            &clocks,
+        let led_bus = I2c::new(peripherals.i2c0, port_b.pin6, port_b.pin7, Irqs, &clocks);
+        let led_enable = port_b
+            .pin5
+            .into_output(OutputType::PushPull, Speed::High, Level::Low);
+        let leds = Matrix::new(
+            Is31fl3741::new(led_bus, led_enable, lighting::LED_DRIVER_ADDRESS),
+            lighting::LED_DRIVER_RUNNING,
         );
-        let board = Self {
+        scan::select_layout(storage.layout_variant);
+        Self {
             clocks,
+            serial_number: serial_number(),
             bootloader,
             storage,
-            leds: Some(leds),
-        };
-        (board, usb)
+            usb,
+            leds,
+        }
+    }
+
+    #[must_use]
+    pub const fn identity(&self) -> Identity<'static> {
+        Identity {
+            ids: USB_IDS,
+            manufacturer: MANUFACTURER,
+            product: NAME,
+            serial_number: self.serial_number,
+        }
+    }
+
+    #[must_use]
+    pub fn stock_identity(&self) -> StockIdentity {
+        StockIdentity {
+            serial: self.serial_number,
+            face: FACE,
+            layout: self.storage.layout_variant,
+            mcu_id: self.storage.mcu_id,
+            flash_ids: self.storage.flash_ids.to_bytes(),
+        }
     }
 }
 
-#[must_use]
-pub fn serial_number() -> Option<&'static str> {
+fn serial_number() -> Option<&'static str> {
     hal::flash::read(SERIAL_PAGE).and_then(serial_number_from_page)
-}
-
-#[must_use]
-pub const fn identity(serial_number: Option<&'static str>) -> Identity<'static> {
-    Identity {
-        ids: USB_IDS,
-        manufacturer: MANUFACTURER,
-        product: NAME,
-        serial_number,
-    }
-}
-
-impl Keyboard for Board {
-    type Sensing = scan::Sensing;
-
-    const DESCRIPTOR: Descriptor = DESCRIPTOR;
-    const KEY_COLUMNS: usize = KEY_COLUMNS;
-    const KEY_ROWS: usize = KEY_ROWS;
-
-    fn enter_update_mode(&mut self, option: u8) {
-        self.bootloader.enter_update_mode(option)
-    }
 }
 
 #[cfg(test)]

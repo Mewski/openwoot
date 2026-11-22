@@ -1,16 +1,13 @@
 use hal::{
     flash,
-    gpio::{Level, Output, OutputType, Pin, Speed},
-    interrupt::{Binding, typelevel},
-    pac,
-    rcu::Clocks,
-    spi::{self, ClockPin, DataInPin, DataOutPin, Device, Spi},
+    gpio::{Output, Pin},
+    spi::Device,
 };
 use openwoot::storage::{
     self, DeviceInfo, FlashIds, InDeviceInfo, LayoutVariantSource, MCU_ID_LEN, NorLayout,
     NorSector, Opened, Partition, SettingsRegion,
 };
-use openwoot_drivers::SpiNor;
+use openwoot_drivers::spi_nor::SpiNor;
 use openwoot_image::Region;
 
 use crate::hal;
@@ -46,20 +43,6 @@ pub struct Storage {
     pub layout_variant: u8,
     pub flash_ids: FlashIds,
     pub mcu_id: [u8; MCU_ID_LEN],
-}
-
-pub fn nor<Mode>(
-    spi: pac::Spi0,
-    clock: impl ClockPin,
-    data_out: impl DataOutPin,
-    data_in: impl DataInPin,
-    chip_select: Pin<'D', 2, Mode>,
-    irq: impl Binding<typelevel::DMA1_Channel2, spi::InterruptHandler>,
-    clocks: &Clocks,
-) -> Nor {
-    let chip_select = chip_select.into_output(OutputType::PushPull, Speed::High, Level::High);
-    let bus = Spi::new(spi, clock, data_out, data_in, irq);
-    SpiNor::new(Device::new(bus, chip_select, clocks.system), NOR_CAPACITY)
 }
 
 pub async fn start(mut nor: Nor, format_requested: bool) -> Storage {

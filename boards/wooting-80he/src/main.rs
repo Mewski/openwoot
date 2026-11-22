@@ -4,15 +4,15 @@
 use embassy_usb::UsbDevice;
 use openwoot::{
     lighting::KeyEvents,
-    protocol::{Handler, StockIdentity},
-    runtime::{self, Configuration, Reports},
+    protocol::{self, Handler},
+    runtime::{self, Channel, Reports},
     usb::{HostState, Negotiated, Resources},
 };
 use static_cell::{ConstStaticCell, StaticCell};
 use wooting_80he::{
-    Board, DESCRIPTOR, FACE, UsbDriver, entry, hal, identity,
+    Board, DESCRIPTOR, FACE, UsbDriver, entry, hal,
     lighting::{self, LedDriver, SharedLighting, Task},
-    scan, serial_number,
+    scan,
 };
 
 type Driver = Negotiated<UsbDriver>;
@@ -29,35 +29,33 @@ fn main() -> ! {
     let Some(peripherals) = hal::pac::Peripherals::take() else {
         hal::system::reset()
     };
-    let (mut board, driver) = Board::new(peripherals);
-    scan::select_layout(board.storage.layout_variant);
-    let serial_number = serial_number();
+    let board = Board::new(peripherals);
+    let identity = board.identity();
+    let stock_identity = board.stock_identity();
+    let lighting = lighting::lighting(board.storage.layout_variant);
     let usb = runtime::Usb::new(
-        driver,
+        board.usb,
         hal::usb::negotiated_speed,
         FACE,
-        identity(serial_number),
+        identity,
         RESOURCES.take(),
         &HOST,
     );
     let handler = Handler::new(
-        runtime::version(
+        protocol::version(
             env!("CARGO_PKG_VERSION_MAJOR"),
             env!("CARGO_PKG_VERSION_MINOR"),
             env!("CARGO_PKG_VERSION_PATCH"),
         ),
-        StockIdentity {
-            serial: serial_number,
-            face: FACE,
-            layout: board.storage.layout_variant,
-            mcu_id: board.storage.mcu_id,
-            flash_ids: board.storage.flash_ids.to_bytes(),
-        },
+        stock_identity,
     );
-    let leds = board.leds.take();
-    let shared = LIGHTING.init(SharedLighting::new(lighting::lighting(
-        board.storage.layout_variant,
-    )));
+    let lights_task = Task {
+        lighting: LIGHTING.init(SharedLighting::new(lighting)),
+        events: &KEY_EVENTS,
+        host: &HOST,
+    };
+    let leds = board.leds;
+    let bootloader = board.bootloader;
     hal::executor::run(|spawner, keys| {
         if let Ok(token) = scanning() {
             keys.spawn(token);
@@ -65,22 +63,13 @@ fn main() -> ! {
         if let Ok(token) = device(usb.device) {
             spawner.spawn(token);
         }
-        if let Ok(token) = configuration(usb.configuration, handler, board) {
+        if let Ok(token) = channel(usb.channel, handler, bootloader) {
             spawner.spawn(token);
         }
         if let Ok(token) = reports(usb.reports) {
             spawner.spawn(token);
         }
-        if let Some(leds) = leds
-            && let Ok(token) = lights(
-                Task {
-                    lighting: shared,
-                    events: &KEY_EVENTS,
-                    host: &HOST,
-                },
-                leds,
-            )
-        {
+        if let Ok(token) = lights(lights_task, leds) {
             spawner.spawn(token);
         }
     })
@@ -92,12 +81,12 @@ async fn device(mut device: UsbDevice<'static, Driver>) {
 }
 
 #[embassy_executor::task]
-async fn configuration(
-    configuration: Configuration<'static, Driver>,
+async fn channel(
+    channel: Channel<'static, Driver>,
     handler: Handler,
-    mut board: Board,
+    mut bootloader: hal::system::Bootloader,
 ) {
-    configuration.run(handler, &mut board).await;
+    channel.run(handler, &mut bootloader).await;
 }
 
 #[embassy_executor::task]

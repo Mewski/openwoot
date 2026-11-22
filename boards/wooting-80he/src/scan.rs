@@ -1,4 +1,7 @@
-use hal::scan::{AnalogInput, Line, SampleTime, Wiring};
+use hal::{
+    gpio::Line,
+    scan::{AnalogInput, SampleTime, Wiring},
+};
 use openwoot::{
     analog::MinMax,
     scan::{Map, RecheckFrom, Shared, ZeroLevel},
@@ -159,12 +162,6 @@ impl hal::scan::Conversion for ScanInterrupt {
 pub fn select_layout(variant: u8) {
     if let Some(map) = SENSOR_MAPS.get(usize::from(variant)) {
         SCAN.with(|scanner| scanner.set_map(*map));
-    }
-}
-
-pub(crate) fn install(converter: Converter) {
-    if !SCAN.install(Scanner::new(converter, ANSI, PARALLEL_ORDER)) {
-        hal::system::reset();
     }
 }
 

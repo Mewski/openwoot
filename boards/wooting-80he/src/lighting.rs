@@ -1,16 +1,13 @@
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use hal::{
-    gpio::{Level, Output, OutputType, Pin, Speed},
-    i2c::{self, I2c},
-    interrupt::{Binding, typelevel},
-    pac,
-    rcu::Clocks,
+    gpio::{Output, Pin},
+    i2c::I2c,
 };
 use openwoot::{
     lighting::{FramePage, Gains, Geometry, Key, Led, LedMap, LedPosition, Matrix, Variant},
-    runtime::LightingTask,
+    runtime,
 };
-use openwoot_drivers::{Is31fl3741, LedConfiguration};
+use openwoot_drivers::is31fl3741::Configuration;
 
 use crate::hal;
 
@@ -20,7 +17,7 @@ pub const PAGES: usize = 10;
 pub const PAGE_LENGTH: usize = 36;
 pub const LED_COUNT: usize = 105;
 pub const LED_DRIVER_ADDRESS: u8 = 0x30;
-pub const LED_DRIVER_RUNNING: LedConfiguration = LedConfiguration::new(0x11);
+pub const LED_DRIVER_RUNNING: Configuration = Configuration::new(0x11);
 pub const GEOMETRY: Geometry = Geometry {
     first_key_row: 0,
     level_meter_segments: 10,
@@ -42,26 +39,8 @@ pub const SPACEBAR: Key = Key::new(5, 6);
 pub type Lighting = openwoot::lighting::Lighting<(), ROWS, COLUMNS, PAGES, PAGE_LENGTH>;
 pub type SharedLighting = Mutex<CriticalSectionRawMutex, Lighting>;
 pub type Task =
-    LightingTask<'static, CriticalSectionRawMutex, (), ROWS, COLUMNS, PAGES, PAGE_LENGTH>;
+    runtime::Lighting<'static, CriticalSectionRawMutex, (), ROWS, COLUMNS, PAGES, PAGE_LENGTH>;
 pub type LedDriver = Matrix<I2c, Pin<'B', 8, Output>>;
-
-pub fn led_driver<Mode>(
-    i2c: pac::I2c0,
-    clock: impl i2c::ClockPin,
-    data: impl i2c::DataPin,
-    enable: Pin<'B', 8, Mode>,
-    irqs: impl Binding<typelevel::I2C0_EV, i2c::InterruptHandler>
-    + Binding<typelevel::I2C0_ER, i2c::InterruptHandler>
-    + Binding<typelevel::DMA0_Channel6, i2c::InterruptHandler>,
-    clocks: &Clocks,
-) -> LedDriver {
-    let bus = I2c::new(i2c, clock, data, irqs, clocks);
-    let enable = enable.into_output(OutputType::PushPull, Speed::High, Level::Low);
-    Matrix::new(
-        Is31fl3741::new(bus, enable, LED_DRIVER_ADDRESS),
-        LED_DRIVER_RUNNING,
-    )
-}
 
 #[must_use]
 pub fn lighting(layout_variant: u8) -> Lighting {
