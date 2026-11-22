@@ -1,0 +1,26 @@
+[package]
+name = "openwoot-cli"
+version = "0.0.0"
+edition.workspace = true
+description = "Host tool for openwoot keyboards: check and flash firmware images"
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "openwoot"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+ihex = { workspace = true }
+openwoot-image = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
+
+[lints]
+workspace = true
