@@ -46,9 +46,9 @@ pub(crate) fn build(workspace: &Workspace, board: &Board) -> Result<Images> {
     fs::copy(&linked, &images.elf)
         .with_context(|| format!("could not copy `{}`", linked.display()))?;
 
-    let data = fs::read(&images.elf)
+    let file = fs::read(&images.elf)
         .with_context(|| format!("could not read `{}`", images.elf.display()))?;
-    let elf = Elf::parse(&data)?;
+    let elf = Elf::parse(&file)?;
     let segments = elf.loadable_segments()?;
     fs::write(&images.bin, flatten(&segments)?)
         .with_context(|| format!("could not write `{}`", images.bin.display()))?;

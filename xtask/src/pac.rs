@@ -110,17 +110,17 @@ impl Chip {
                 .arg(&work),
         )?;
 
-        let src = package.join("src");
-        recreate(&src)?;
+        let sources = package.join("src");
+        recreate(&sources)?;
         process::execute(
             Command::new(FORM.program)
                 .env("RUST_LOG", "warn")
                 .arg("--input")
                 .arg(work.join("lib.rs"))
                 .arg("--outdir")
-                .arg(&src),
+                .arg(&sources),
         )?;
-        copy(&work.join("generic.rs"), &src.join("generic.rs"))?;
+        copy(&work.join("generic.rs"), &sources.join("generic.rs"))?;
         for file in ["build.rs", "device.x"] {
             copy(&work.join(file), &package.join(file))?;
         }
@@ -128,7 +128,7 @@ impl Chip {
         process::execute(
             Command::new("rustfmt")
                 .args(["+nightly", "--edition", "2024"])
-                .arg(src.join("lib.rs"))
+                .arg(sources.join("lib.rs"))
                 .arg(package.join("build.rs"))
                 .current_dir(root),
         )

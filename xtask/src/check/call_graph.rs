@@ -73,14 +73,7 @@ impl<'a> CallGraph<'a> {
     }
 
     pub(super) fn node_at(&self, address: u32) -> Option<usize> {
-        if !self
-            .elf
-            .allocated_sections()
-            .iter()
-            .any(|section| address >= section.address && address - section.address < section.size)
-        {
-            return None;
-        }
+        self.elf.section_at(address)?;
         self.nodes
             .partition_point(|node| node.address <= address)
             .checked_sub(1)

@@ -16,7 +16,7 @@ use rustc_demangle::demangle;
 pub(crate) use symbol::{Symbol, SymbolKind};
 
 pub(crate) struct Elf<'a> {
-    data: &'a [u8],
+    file: &'a [u8],
     header: &'a FileHeader32<LittleEndian>,
     endian: LittleEndian,
     allocated: Vec<Allocated<'a>>,
@@ -40,10 +40,10 @@ pub(crate) struct Allocated<'a> {
 }
 
 impl<'a> Elf<'a> {
-    pub(crate) fn parse(data: &'a [u8]) -> Result<Self> {
-        let header = FileHeader32::<LittleEndian>::parse(data).context("not a 32-bit ELF file")?;
+    pub(crate) fn parse(file: &'a [u8]) -> Result<Self> {
+        let header = FileHeader32::<LittleEndian>::parse(file).context("not a 32-bit ELF file")?;
         let endian = header.endian().context("not a little-endian ELF file")?;
-        let sections = header.sections(endian, data)?;
+        let sections = header.sections(endian, file)?;
         let mut allocated = Vec::new();
         for header in sections.iter() {
             if !header.sh_flags(endian).contains(SHF_ALLOC) || header.sh_size(endian) == 0 {
@@ -52,7 +52,7 @@ impl<'a> Elf<'a> {
             let bytes = if header.sh_type(endian) == SHT_NOBITS {
                 None
             } else {
-                Some(header.data(endian, data)?)
+                Some(header.data(endian, file)?)
             };
             allocated.push(Allocated {
                 name: String::from_utf8_lossy(sections.section_name(endian, header)?).into_owned(),
@@ -63,7 +63,7 @@ impl<'a> Elf<'a> {
         }
         allocated.sort_by_key(|section| section.address);
         Ok(Self {
-            data,
+            file,
             header,
             endian,
             allocated,
@@ -77,14 +77,14 @@ impl<'a> Elf<'a> {
     pub(crate) fn loadable_segments(&self) -> Result<Vec<Segment<'a>>> {
         let mut segments = self
             .header
-            .program_headers(self.endian, self.data)?
+            .program_headers(self.endian, self.file)?
             .iter()
             .filter(|header| {
                 header.p_type(self.endian) == PT_LOAD && header.p_filesz(self.endian) > 0
             })
             .map(|header| {
                 let bytes = header
-                    .data(self.endian, self.data)
+                    .data(self.endian, self.file)
                     .map_err(|()| anyhow!("a loadable segment lies outside the file"))?;
                 Ok(Segment {
                     address: header.p_paddr(self.endian),
@@ -96,26 +96,26 @@ impl<'a> Elf<'a> {
         Ok(segments)
     }
 
-    pub(crate) fn section(&self, name: &str) -> Result<Option<Section<'a>>> {
-        let sections = self.header.sections(self.endian, self.data)?;
-        let Some((_, header)) = sections.section_by_name(self.endian, name.as_bytes()) else {
-            return Ok(None);
-        };
-        let bytes = header.data(self.endian, self.data)?;
-        Ok(Some(Section {
-            address: header.sh_addr(self.endian),
-            bytes,
-        }))
+    pub(crate) fn section(&self, name: &str) -> Option<Section<'a>> {
+        let section = self.allocated.iter().find(|section| section.name == name)?;
+        Some(Section {
+            address: section.address,
+            bytes: section.bytes?,
+        })
     }
 
     pub(crate) fn allocated_sections(&self) -> &[Allocated<'a>] {
         &self.allocated
     }
 
+    pub(crate) fn section_at(&self, address: u32) -> Option<&Allocated<'a>> {
+        self.allocated
+            .iter()
+            .find(|section| section.contains(address))
+    }
+
     pub(crate) fn bytes_at(&self, address: u32, len: usize) -> Option<&'a [u8]> {
-        let section = self.allocated.iter().find(|section| {
-            address >= section.address && address - section.address < section.size
-        })?;
+        let section = self.section_at(address)?;
         let start = usize::try_from(address - section.address).ok()?;
         section.bytes?.get(start..start.checked_add(len)?)
     }
@@ -127,8 +127,8 @@ impl<'a> Elf<'a> {
     }
 
     pub(crate) fn symbols(&self) -> Result<Vec<Symbol>> {
-        let sections = self.header.sections(self.endian, self.data)?;
-        let table = sections.symbols(self.endian, self.data, SHT_SYMTAB)?;
+        let sections = self.header.sections(self.endian, self.file)?;
+        let table = sections.symbols(self.endian, self.file, SHT_SYMTAB)?;
         let mut symbols = Vec::new();
         for entry in table.iter() {
             let name = entry.name(self.endian, table.strings())?;
@@ -163,10 +163,10 @@ impl<'a> Elf<'a> {
     }
 
     pub(crate) fn relocations(&self) -> Result<Vec<Relocation>> {
-        let sections = self.header.sections(self.endian, self.data)?;
+        let sections = self.header.sections(self.endian, self.file)?;
         let mut relocations = Vec::new();
         for header in sections.iter() {
-            let Some((entries, _)) = header.rel(self.endian, self.data)? else {
+            let Some((entries, _)) = header.rel(self.endian, self.file)? else {
                 continue;
             };
             let target = sections.section(object::SectionIndex(usize::try_from(
@@ -195,10 +195,13 @@ impl<'a> Elf<'a> {
     }
 
     fn is_uninitialised(&self, address: u32) -> bool {
-        self.allocated.iter().any(|section| {
-            section.bytes.is_none()
-                && address >= section.address
-                && address - section.address < section.size
-        })
+        self.section_at(address)
+            .is_some_and(|section| section.bytes.is_none())
+    }
+}
+
+impl Allocated<'_> {
+    fn contains(&self, address: u32) -> bool {
+        address >= self.address && address - self.address < self.size
     }
 }

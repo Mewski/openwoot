@@ -64,18 +64,10 @@ pub(super) fn check(
 }
 
 fn is_vague_module(file: &Path) -> bool {
-    let stem = file
+    let module = file
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or_default();
-    let module = if stem == "mod" {
-        file.parent()
-            .and_then(Path::file_name)
-            .and_then(|name| name.to_str())
-            .unwrap_or_default()
-    } else {
-        stem
-    };
     VAGUE_MODULE_NAMES.contains(&module)
 }
 

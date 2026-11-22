@@ -33,7 +33,8 @@ enum Command {
     #[command(about = "Build a board and hand its image to `openwoot flash`")]
     Flash(flash::Args),
     #[command(
-        about = "Run every check of the tree: files, dependencies, code rules, formatting, lints, images"
+        about = "Run every check of the tree: files, dependencies, code rules, formatting, \
+                 lints, images, panic paths, budgets"
     )]
     Check,
     #[command(about = "Regenerate the peripheral access crates from their SVD files")]

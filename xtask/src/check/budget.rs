@@ -3,7 +3,7 @@ mod stack;
 use std::fmt;
 
 use anyhow::{Result, bail};
-use openwoot_image::{MemoryLayout, Region};
+use openwoot_image::MemoryLayout;
 use stack::StackBound;
 
 use super::{call_graph::CallGraph, entry_points::EntryPoints};
@@ -44,10 +44,10 @@ impl Budget {
             .fold(0_u32, |total, section| total.saturating_add(section.size));
         Ok(Self {
             flash: flash_end - layout.flash.start,
-            flash_size: size(layout.flash),
+            flash_size: layout.flash.size(),
             static_ram,
             stack: stack::bound(graph, entry_points)?,
-            ram_size: size(layout.ram),
+            ram_size: layout.ram.size(),
         })
     }
 
@@ -95,10 +95,6 @@ impl fmt::Display for Budget {
             self.ram_size
         )
     }
-}
-
-const fn size(region: Region) -> u32 {
-    region.end - region.start
 }
 
 #[cfg(test)]

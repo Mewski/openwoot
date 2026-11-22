@@ -28,12 +28,12 @@ pub(super) fn check(workspace: &Workspace, board: &Board) -> Result<Analysis> {
     let memory_x = fs::read_to_string(&memory_x_path)
         .with_context(|| format!("could not read `{}`", memory_x_path.display()))?;
     let layout = MemoryLayout::parse(&memory_x)?;
-    let data = fs::read(&images.elf)
+    let file = fs::read(&images.elf)
         .with_context(|| format!("could not read `{}`", images.elf.display()))?;
-    let elf = Elf::parse(&data)?;
+    let elf = Elf::parse(&file)?;
 
     let vectors = elf
-        .section(".vector_table")?
+        .section(".vector_table")
         .context("the ELF file has no `.vector_table` section")?;
     if vectors.address != layout.flash.start {
         bail!(
@@ -55,7 +55,7 @@ pub(super) fn check(workspace: &Workspace, board: &Board) -> Result<Analysis> {
     }
 
     let section = elf
-        .section(".app_descriptor")?
+        .section(".app_descriptor")
         .context("the ELF file has no `.app_descriptor` section")?;
     descriptor_placement(layout.flash.start, vectors.bytes.len(), section.address)?;
     let descriptor = Descriptor::from_bytes(section.bytes)?;

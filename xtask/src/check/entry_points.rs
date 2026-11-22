@@ -18,7 +18,7 @@ pub(super) struct EntryPoints {
 impl EntryPoints {
     pub(super) fn find(elf: &Elf<'_>, graph: &CallGraph<'_>) -> Result<Self> {
         let vectors = elf
-            .section(".vector_table")?
+            .section(".vector_table")
             .context("the ELF file has no `.vector_table` section")?;
         let mut reset = None;
         let mut handlers = Vec::new();

@@ -31,12 +31,7 @@ pub(crate) fn run(root: &Path) -> Result<()> {
     symmetry::file_sets(&members, Kind::Board, &files, &mut problems);
     names::in_shared_code(&workspace, &members, &files, &mut problems)?;
     rust_rules::check(root, &members, &files, &mut problems)?;
-    if !problems.is_empty() {
-        for problem in &problems {
-            eprintln!("{problem}");
-        }
-        bail!("{} problems in the tree", problems.len());
-    }
+    stop_on(&problems, "tree")?;
 
     tools::formatting(root)?;
     tools::clippy(&workspace, &members)?;
@@ -66,14 +61,24 @@ pub(crate) fn run(root: &Path) -> Result<()> {
             ));
         }
     }
-    if !problems.is_empty() {
-        for problem in &problems {
-            eprintln!("{problem}");
-        }
-        bail!("{} problems in the images", problems.len());
-    }
+    stop_on(&problems, "images")?;
     show("check", "passed", 0);
     Ok(())
+}
+
+fn stop_on(problems: &[String], place: &str) -> Result<()> {
+    if problems.is_empty() {
+        return Ok(());
+    }
+    for problem in problems {
+        eprintln!("{problem}");
+    }
+    let noun = if problems.len() == 1 {
+        "problem"
+    } else {
+        "problems"
+    };
+    bail!("{} {noun} in the {place}", problems.len())
 }
 
 fn relative(root: &Path, file: &Path) -> String {
