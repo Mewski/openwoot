@@ -1,5 +1,5 @@
-pub(crate) const ENDPOINT_COUNT: usize = ENDPOINTS as usize;
-pub(crate) const CONTROL_PACKET_LIMIT: u16 = 64;
+pub(super) const ENDPOINT_COUNT: usize = ENDPOINTS as usize;
+pub(super) const CONTROL_PACKET_LIMIT: u16 = 64;
 
 const ENDPOINTS: u16 = 8;
 const SIZE: u16 = 512;
@@ -19,32 +19,32 @@ const LARGE_BLOCKS: u16 = 1 << 15;
 const BLOCK_COUNT_SHIFT: u16 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Buffer {
+pub(super) struct Buffer {
     address: u16,
     len: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ReceiveBuffer {
-    pub(crate) buffer: Buffer,
-    pub(crate) count_field: u16,
+pub(super) struct ReceiveBuffer {
+    pub(super) buffer: Buffer,
+    pub(super) count_field: u16,
 }
 
 #[derive(Debug)]
-pub(crate) struct Allocator {
+pub(super) struct Allocator {
     next: u16,
 }
 
 impl Allocator {
-    pub(crate) const fn new() -> Self {
+    pub(super) const fn new() -> Self {
         Self { next: FIRST_FREE }
     }
 
-    pub(crate) fn transmit(&mut self, max_packet_size: u16) -> Option<Buffer> {
+    pub(super) fn transmit(&mut self, max_packet_size: u16) -> Option<Buffer> {
         self.take(max_packet_size.checked_next_multiple_of(SMALL_BLOCK)?)
     }
 
-    pub(crate) fn receive(&mut self, max_packet_size: u16) -> Option<ReceiveBuffer> {
+    pub(super) fn receive(&mut self, max_packet_size: u16) -> Option<ReceiveBuffer> {
         let (len, count_field) = receive_capacity(max_packet_size)?;
         let buffer = self.take(len)?;
         Some(ReceiveBuffer {
@@ -68,7 +68,7 @@ impl Allocator {
 }
 
 impl Buffer {
-    pub(crate) fn control_receive(max_packet_size: u16) -> ReceiveBuffer {
+    pub(super) fn control_receive(max_packet_size: u16) -> ReceiveBuffer {
         let limited = max_packet_size.clamp(SMALL_BLOCK, CONTROL_PACKET_LIMIT);
         let (len, count_field) = receive_capacity(limited).unwrap_or((
             CONTROL_PACKET_LIMIT,
@@ -83,18 +83,18 @@ impl Buffer {
         }
     }
 
-    pub(crate) const fn control_transmit() -> Self {
+    pub(super) const fn control_transmit() -> Self {
         Self {
             address: CONTROL_TRANSMIT,
             len: CONTROL_PACKET_LIMIT,
         }
     }
 
-    pub(crate) const fn address(self) -> u16 {
+    pub(super) const fn address(self) -> u16 {
         self.address
     }
 
-    pub(crate) fn write(self, source: &[u8], mut store: impl FnMut(usize, u16)) -> Option<u16> {
+    pub(super) fn write(self, source: &[u8], mut store: impl FnMut(usize, u16)) -> Option<u16> {
         let len = u16::try_from(source.len())
             .ok()
             .filter(|&len| len <= self.len)?;
@@ -109,7 +109,7 @@ impl Buffer {
         Some(len)
     }
 
-    pub(crate) fn read(
+    pub(super) fn read(
         self,
         count: u16,
         target: &mut [u8],
@@ -131,19 +131,19 @@ impl Buffer {
     }
 }
 
-pub(crate) const fn transmit_address_slot(index: usize) -> usize {
+pub(super) const fn transmit_address_slot(index: usize) -> usize {
     index * HALFWORDS_PER_ENTRY
 }
 
-pub(crate) const fn transmit_count_slot(index: usize) -> usize {
+pub(super) const fn transmit_count_slot(index: usize) -> usize {
     index * HALFWORDS_PER_ENTRY + 1
 }
 
-pub(crate) const fn receive_address_slot(index: usize) -> usize {
+pub(super) const fn receive_address_slot(index: usize) -> usize {
     index * HALFWORDS_PER_ENTRY + 2
 }
 
-pub(crate) const fn receive_count_slot(index: usize) -> usize {
+pub(super) const fn receive_count_slot(index: usize) -> usize {
     index * HALFWORDS_PER_ENTRY + 3
 }
 

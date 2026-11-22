@@ -4,9 +4,12 @@ use critical_section::{CriticalSection, Mutex};
 use embassy_time_driver::Driver;
 use embassy_time_queue_utils::Queue;
 
-use super::monotonic::{Counter, Events, Monotonic};
+use super::{
+    monotonic::{Counter, Events, Monotonic},
+    registers,
+};
 use crate::{
-    pac::{self, interrupt},
+    pac::interrupt,
     register::{modify_bits, read_bits, write_bits},
 };
 
@@ -49,13 +52,6 @@ impl Counter for Timer4 {
             alarm: flags & INTF_CH1IF != 0 && enabled & DMAINTEN_CH1IE != 0,
         }
     }
-}
-
-fn registers() -> &'static pac::timer1::RegisterBlock {
-    // SAFETY: `start` consumed the `Timer4` peripheral; from then on only the time driver uses
-    // these registers, and every read-modify-write runs inside a critical section or in the
-    // timer interrupt, which the critical section masks.
-    unsafe { &*pac::Timer4::ptr() }
 }
 
 struct TimeDriver {

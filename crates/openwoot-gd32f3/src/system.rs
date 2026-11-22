@@ -1,3 +1,5 @@
+use openwoot::protocol::UpdateMode;
+
 use crate::{
     pac, rcu,
     register::{clear_bits, read_bits, set_bits, write_bits},
@@ -23,15 +25,6 @@ impl Bootloader {
     #[must_use]
     pub const fn new(pmu: pac::Pmu, bkp: pac::Bkp) -> Self {
         Self { pmu, bkp }
-    }
-
-    pub fn enter_update_mode(&mut self, option: u8) -> ! {
-        self.open_backup();
-        self.write_backup(|bkp| {
-            write_bits(bkp.data0(), STAY_IN_UPDATE_MODE);
-            write_bits(bkp.data2(), u16::from(option));
-        });
-        reset()
     }
 
     pub fn restart(&mut self, option: u8) -> ! {
@@ -61,5 +54,16 @@ impl Bootloader {
         set_bits(self.pmu.ctl(), PMU_CTL_BKPWEN);
         write(&self.bkp);
         clear_bits(self.pmu.ctl(), PMU_CTL_BKPWEN);
+    }
+}
+
+impl UpdateMode for Bootloader {
+    fn enter_update_mode(&mut self, option: u8) {
+        self.open_backup();
+        self.write_backup(|bkp| {
+            write_bits(bkp.data0(), STAY_IN_UPDATE_MODE);
+            write_bits(bkp.data2(), u16::from(option));
+        });
+        reset()
     }
 }

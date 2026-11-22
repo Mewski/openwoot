@@ -31,6 +31,12 @@ const PCF0_SWJ_SERIAL_WIRE_ONLY: u32 = 0b010 << 24;
 const STARTUP_MICROSECONDS: u32 = 1;
 
 #[derive(Debug)]
+pub struct Core {
+    pub controller: pac::Usbd,
+    pub packet_memory: pac::UsbdRam,
+}
+
+#[derive(Debug)]
 pub struct Driver<PullUp> {
     pull_up: PullUp,
     slots: Slots,
@@ -43,8 +49,7 @@ impl<PullUp: OutputPin<Error = Infallible>> Driver<PullUp> {
         reason = "taking the peripherals hands the controller and its packet memory to the driver for good"
     )]
     pub fn new(
-        usbd: pac::Usbd,
-        _packet_memory: pac::UsbdRam,
+        core: Core,
         afio: &pac::Afio,
         mut pull_up: PullUp,
         _interrupts: impl Binding<typelevel::USBD_HP_CAN0_TX, InterruptHandler>
@@ -60,11 +65,12 @@ impl<PullUp: OutputPin<Error = Infallible>> Driver<PullUp> {
             set_bits(rcu.apb1en(), APB1EN_USBDEN);
         });
         let startup = clocks.system.0 / 1_000_000 * STARTUP_MICROSECONDS;
-        write_bits(usbd.ctl(), CTL_SETRST | CTL_CLOSE);
+        let controller = &core.controller;
+        write_bits(controller.ctl(), CTL_SETRST | CTL_CLOSE);
         cortex_m::asm::delay(startup);
-        write_bits(usbd.ctl(), CTL_SETRST);
+        write_bits(controller.ctl(), CTL_SETRST);
         cortex_m::asm::delay(startup);
-        write_bits(usbd.baddr(), 0);
+        write_bits(controller.baddr(), 0);
         interrupt::enable(pac::Interrupt::USBD_HP_CAN0_TX, Priority::USB);
         interrupt::enable(pac::Interrupt::USBD_LP_CAN0_RX0, Priority::USB);
         Self {

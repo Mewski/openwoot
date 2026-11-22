@@ -10,10 +10,10 @@ struct Slot {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct Slots([Slot; ENDPOINT_COUNT]);
+pub(super) struct Slots([Slot; ENDPOINT_COUNT]);
 
 impl Slots {
-    pub(crate) fn find(
+    pub(super) fn find(
         &self,
         endpoint_type: EndpointType,
         direction: Direction,
@@ -30,7 +30,7 @@ impl Slots {
         }
     }
 
-    pub(crate) fn claim(
+    pub(super) fn claim(
         &mut self,
         index: usize,
         endpoint_type: EndpointType,
@@ -45,7 +45,7 @@ impl Slots {
         }
     }
 
-    pub(crate) fn types(&self) -> [EndpointType; ENDPOINT_COUNT] {
+    pub(super) fn types(&self) -> [EndpointType; ENDPOINT_COUNT] {
         self.0
             .map(|slot| slot.endpoint_type.unwrap_or(EndpointType::Bulk))
     }

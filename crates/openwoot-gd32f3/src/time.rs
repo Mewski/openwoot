@@ -1,3 +1,10 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::inline_always,
+    reason = "the microsecond count is read as its low 16 bits as in the C HAL, and the read is \
+              inlined into the scan interrupt as the C HAL's always_inline helpers"
+)]
+
 #[cfg(target_os = "none")]
 mod driver;
 #[cfg_attr(
@@ -13,7 +20,7 @@ use crate::{
     interrupt::{self, Priority},
     pac,
     rcu::{self, Clocks, Hertz},
-    register::{set_bits, write_bits},
+    register::{read_bits, set_bits, write_bits},
 };
 
 pub const TICK_HZ: u32 = 1_000_000;
@@ -44,6 +51,20 @@ pub fn start(timer: pac::Timer4, clocks: &Clocks) {
 #[must_use]
 pub const fn prescaler(timer_clock: Hertz) -> u32 {
     timer_clock.0 / TICK_HZ - 1
+}
+
+#[inline(always)]
+pub(crate) fn microseconds() -> u16 {
+    read_bits(registers().cnt()) as u16
+}
+
+#[inline(always)]
+fn registers() -> &'static pac::timer1::RegisterBlock {
+    // SAFETY: `start` consumed the `Timer4` peripheral; from then on only the time driver writes
+    // these registers, and every read-modify-write runs inside a critical section or in the timer
+    // interrupt, which the critical section masks. `microseconds` only reads the counter, which
+    // changes nothing.
+    unsafe { &*pac::Timer4::ptr() }
 }
 
 #[cfg(test)]

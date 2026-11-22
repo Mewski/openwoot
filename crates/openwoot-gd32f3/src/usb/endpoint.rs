@@ -6,7 +6,7 @@ use embassy_usb_driver::{
 
 use super::{
     endpoint_register::{Command, Status, Toggle},
-    events,
+    events::EVENTS,
     packet_memory::{self, Buffer},
     registers,
 };
@@ -17,7 +17,7 @@ pub enum In {}
 #[derive(Debug)]
 pub enum Out {}
 
-pub(crate) trait Dir {
+pub(super) trait Dir {
     const DIRECTION: Direction;
 }
 
@@ -37,7 +37,7 @@ pub struct Endpoint<D> {
 }
 
 impl<D> Endpoint<D> {
-    pub(crate) const fn new(info: EndpointInfo, buffer: Buffer) -> Self {
+    pub(super) const fn new(info: EndpointInfo, buffer: Buffer) -> Self {
         Self {
             info,
             buffer,
@@ -51,7 +51,7 @@ impl<D> Endpoint<D> {
 }
 
 impl Endpoint<In> {
-    pub(crate) fn load(&self, data: &[u8]) -> Result<(), EndpointError> {
+    pub(super) fn load(&self, data: &[u8]) -> Result<(), EndpointError> {
         let len = self
             .buffer
             .write(data, registers::store)
@@ -62,7 +62,7 @@ impl Endpoint<In> {
 }
 
 impl Endpoint<Out> {
-    pub(crate) fn unload(&self, target: &mut [u8]) -> Result<usize, EndpointError> {
+    pub(super) fn unload(&self, target: &mut [u8]) -> Result<usize, EndpointError> {
         let count = registers::load(packet_memory::receive_count_slot(self.index()));
         self.buffer
             .read(count, target, registers::load)
@@ -135,13 +135,13 @@ impl EndpointIn for Endpoint<In> {
     }
 }
 
-pub(crate) async fn wait_for(
+pub(super) async fn wait_for(
     index: usize,
     direction: Direction,
     ready: impl Fn(Status) -> bool,
 ) -> Status {
     poll_fn(|context| {
-        events::register(events::waker(index, direction), context);
+        EVENTS.register(index, direction, context);
         let status = registers::endpoint(index).status(direction);
         if ready(status) {
             Poll::Ready(status)
@@ -152,6 +152,6 @@ pub(crate) async fn wait_for(
     .await
 }
 
-pub(crate) fn idle(status: Status) -> bool {
+pub(super) fn idle(status: Status) -> bool {
     matches!(status, Status::Nak | Status::Disabled)
 }

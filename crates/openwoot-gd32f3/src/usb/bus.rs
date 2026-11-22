@@ -1,27 +1,21 @@
-use core::{
-    convert::Infallible,
-    future::poll_fn,
-    sync::atomic::{AtomicBool, Ordering},
-    task::Poll,
-};
+use core::{convert::Infallible, future::poll_fn, sync::atomic::Ordering, task::Poll};
 
 use embassy_time::Timer;
 use embassy_usb_driver::{
-    Bus as BusTrait, Direction, EndpointAddress, EndpointType, Event, Speed, Unsupported,
+    Bus as BusTrait, Direction, EndpointAddress, EndpointType, Event, Unsupported,
 };
 use embedded_hal::digital::OutputPin;
 
 use super::{
     endpoint_register::{Command, Status, Toggle},
-    events,
+    events::EVENTS,
     packet_memory::ENDPOINT_COUNT,
     registers::{self, ADDR_USBEN, CTL_LOWM, CTL_RSREQ, CTL_SETSPS},
+    speed,
 };
 use crate::register::{clear_bits, modify_bits, write_bits};
 
 const RESUME_SIGNALLING_MILLISECONDS: u64 = 4;
-
-static ENUMERATED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug)]
 pub struct Bus<PullUp> {
@@ -30,13 +24,8 @@ pub struct Bus<PullUp> {
     powered: bool,
 }
 
-#[must_use]
-pub fn negotiated_speed() -> Option<Speed> {
-    ENUMERATED.load(Ordering::Acquire).then_some(Speed::Full)
-}
-
 impl<PullUp: OutputPin<Error = Infallible>> Bus<PullUp> {
-    pub(crate) const fn new(
+    pub(super) const fn new(
         pull_up: PullUp,
         endpoint_types: [EndpointType; ENDPOINT_COUNT],
     ) -> Self {
@@ -59,7 +48,7 @@ impl<PullUp: OutputPin<Error = Infallible>> Bus<PullUp> {
         for (index, endpoint_type) in self.endpoint_types.iter().enumerate().skip(1) {
             registers::write_endpoint(index, Command::new(*endpoint_type, index).bits());
         }
-        events::wake_endpoints();
+        EVENTS.wake_endpoints();
     }
 }
 
@@ -75,20 +64,20 @@ impl<PullUp: OutputPin<Error = Infallible>> BusTrait for Bus<PullUp> {
 
     async fn poll(&mut self) -> Event {
         poll_fn(|context| {
-            events::BUS.register(context.waker());
+            EVENTS.bus.register(context.waker());
             if !self.powered {
                 self.powered = true;
                 return Poll::Ready(Event::PowerDetected);
             }
-            if events::RESUME.swap(false, Ordering::AcqRel) {
+            if EVENTS.resume.swap(false, Ordering::AcqRel) {
                 return Poll::Ready(Event::Resume);
             }
-            if events::RESET.swap(false, Ordering::AcqRel) {
+            if EVENTS.reset.swap(false, Ordering::AcqRel) {
                 self.reset_endpoints();
-                ENUMERATED.store(true, Ordering::Release);
+                speed::record();
                 return Poll::Ready(Event::Reset);
             }
-            if events::SUSPEND.swap(false, Ordering::AcqRel) {
+            if EVENTS.suspend.swap(false, Ordering::AcqRel) {
                 return Poll::Ready(Event::Suspend);
             }
             Poll::Pending
@@ -149,5 +138,5 @@ fn settle(ep_addr: EndpointAddress, wanted: Status, restart: bool) {
         registers::write_endpoint(index, current.change_status(direction, wanted));
         current = registers::endpoint(index);
     }
-    events::wake(events::waker(index, direction));
+    EVENTS.wake(index, direction);
 }

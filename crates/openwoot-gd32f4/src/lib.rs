@@ -3,6 +3,7 @@
 
 mod basepri;
 mod descriptor;
+mod dma;
 #[cfg(target_os = "none")]
 pub mod executor;
 pub mod flash;

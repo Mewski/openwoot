@@ -14,7 +14,7 @@ const STATUS_MASK: u16 = 0b11;
 const ADDRESS_MASK: u16 = 0b1111;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Status {
+pub(super) enum Status {
     Disabled,
     Stall,
     Nak,
@@ -42,56 +42,56 @@ impl Status {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Toggle(u16);
+pub(super) struct Toggle(u16);
 
 impl Toggle {
-    pub(crate) const NONE: Self = Self(0);
+    pub(super) const NONE: Self = Self(0);
 
-    pub(crate) const fn between(from: Status, to: Status) -> Self {
+    pub(super) const fn between(from: Status, to: Status) -> Self {
         Self(from.bits() ^ to.bits())
     }
 
-    pub(crate) const fn then(self, next: Self) -> Self {
+    pub(super) const fn then(self, next: Self) -> Self {
         Self(self.0 ^ next.0)
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Reading(pub(crate) u16);
+pub(super) struct Reading(pub(super) u16);
 
 impl Reading {
-    pub(crate) const fn status(self, direction: Direction) -> Status {
+    pub(super) const fn status(self, direction: Direction) -> Status {
         match direction {
             Direction::Out => Status::from_bits(self.0 >> RECEIVE_STATUS_SHIFT),
             Direction::In => Status::from_bits(self.0 >> TRANSMIT_STATUS_SHIFT),
         }
     }
 
-    pub(crate) const fn received(self) -> bool {
+    pub(super) const fn received(self) -> bool {
         self.0 & RECEIVED != 0
     }
 
-    pub(crate) const fn transmitted(self) -> bool {
+    pub(super) const fn transmitted(self) -> bool {
         self.0 & TRANSMITTED != 0
     }
 
-    pub(crate) const fn setup(self) -> bool {
+    pub(super) const fn setup(self) -> bool {
         self.0 & SETUP != 0
     }
 
-    pub(crate) const fn data_toggle(self, direction: Direction) -> bool {
+    pub(super) const fn data_toggle(self, direction: Direction) -> bool {
         self.0 & data_toggle_mask(direction) != 0
     }
 
-    pub(crate) const fn acknowledge(self) -> u16 {
+    pub(super) const fn acknowledge(self) -> u16 {
         self.preserve() & !(self.0 & (RECEIVED | TRANSMITTED))
     }
 
-    pub(crate) const fn change_status(self, direction: Direction, wanted: Status) -> u16 {
+    pub(super) const fn change_status(self, direction: Direction, wanted: Status) -> u16 {
         self.preserve() | status_toggle(direction, Toggle::between(self.status(direction), wanted))
     }
 
-    pub(crate) const fn restart(self, direction: Direction, wanted: Status) -> u16 {
+    pub(super) const fn restart(self, direction: Direction, wanted: Status) -> u16 {
         self.change_status(direction, wanted) | (self.0 & data_toggle_mask(direction))
     }
 
@@ -101,7 +101,7 @@ impl Reading {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Command {
+pub(super) struct Command {
     kind: u16,
     address: u16,
     status_out: bool,
@@ -110,7 +110,7 @@ pub(crate) struct Command {
 }
 
 impl Command {
-    pub(crate) fn new(endpoint_type: EndpointType, index: usize) -> Self {
+    pub(super) fn new(endpoint_type: EndpointType, index: usize) -> Self {
         Self {
             kind: kind_bits(endpoint_type),
             address: u16::try_from(index).unwrap_or(0) & ADDRESS_MASK,
@@ -120,19 +120,19 @@ impl Command {
         }
     }
 
-    pub(crate) const fn with_status_out(self, status_out: bool) -> Self {
+    pub(super) const fn with_status_out(self, status_out: bool) -> Self {
         Self { status_out, ..self }
     }
 
-    pub(crate) const fn toggle_receive(self, receive: Toggle) -> Self {
+    pub(super) const fn toggle_receive(self, receive: Toggle) -> Self {
         Self { receive, ..self }
     }
 
-    pub(crate) const fn toggle_transmit(self, transmit: Toggle) -> Self {
+    pub(super) const fn toggle_transmit(self, transmit: Toggle) -> Self {
         Self { transmit, ..self }
     }
 
-    pub(crate) const fn bits(self) -> u16 {
+    pub(super) const fn bits(self) -> u16 {
         let status_out = if self.status_out { STATUS_OUT } else { 0 };
         RECEIVED
             | TRANSMITTED
@@ -168,7 +168,7 @@ const fn kind_bits(endpoint_type: EndpointType) -> u16 {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+pub(super) mod tests {
     use super::*;
 
     const FLAGS: u16 = RECEIVED | TRANSMITTED;
@@ -179,7 +179,7 @@ pub(crate) mod tests {
     const STATUSES: [Status; 4] = [Status::Disabled, Status::Stall, Status::Nak, Status::Valid];
     const DIRECTIONS: [Direction; 2] = [Direction::Out, Direction::In];
 
-    pub(crate) fn hardware_write(current: u16, written: u16) -> u16 {
+    pub(in crate::usb) fn hardware_write(current: u16, written: u16) -> u16 {
         let kept_flags = current & written & FLAGS;
         let toggled = (current ^ written) & TOGGLED;
         let read_only = current & SETUP;
@@ -191,11 +191,11 @@ pub(crate) mod tests {
         receive.bits() << RECEIVE_STATUS_SHIFT | transmit.bits() << TRANSMIT_STATUS_SHIFT | extra
     }
 
-    pub(crate) fn after_setup() -> u16 {
+    pub(in crate::usb) fn after_setup() -> u16 {
         register(Status::Nak, Status::Nak, SETUP | 0b01 << KIND_SHIFT)
     }
 
-    pub(crate) fn status_out(value: u16) -> bool {
+    pub(in crate::usb) fn status_out(value: u16) -> bool {
         value & STATUS_OUT != 0
     }
 

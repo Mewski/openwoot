@@ -18,16 +18,60 @@ use crate::{
     register::{modify_bits, read_bits, write_bits},
 };
 
-pub(crate) static BUS: AtomicWaker = AtomicWaker::new();
-pub(crate) static SETUP: AtomicBool = AtomicBool::new(false);
-pub(crate) static RESET: AtomicBool = AtomicBool::new(false);
-pub(crate) static SUSPEND: AtomicBool = AtomicBool::new(false);
-pub(crate) static RESUME: AtomicBool = AtomicBool::new(false);
-static IN: [AtomicWaker; ENDPOINT_COUNT] = [const { AtomicWaker::new() }; ENDPOINT_COUNT];
-static OUT: [AtomicWaker; ENDPOINT_COUNT] = [const { AtomicWaker::new() }; ENDPOINT_COUNT];
+pub(super) static EVENTS: Events = Events::new();
 
 #[derive(Debug)]
 pub struct InterruptHandler;
+
+pub(super) struct Events {
+    pub(super) bus: AtomicWaker,
+    pub(super) setup: AtomicBool,
+    pub(super) reset: AtomicBool,
+    pub(super) suspend: AtomicBool,
+    pub(super) resume: AtomicBool,
+    in_endpoints: [AtomicWaker; ENDPOINT_COUNT],
+    out_endpoints: [AtomicWaker; ENDPOINT_COUNT],
+}
+
+impl Events {
+    const fn new() -> Self {
+        Self {
+            bus: AtomicWaker::new(),
+            setup: AtomicBool::new(false),
+            reset: AtomicBool::new(false),
+            suspend: AtomicBool::new(false),
+            resume: AtomicBool::new(false),
+            in_endpoints: [const { AtomicWaker::new() }; ENDPOINT_COUNT],
+            out_endpoints: [const { AtomicWaker::new() }; ENDPOINT_COUNT],
+        }
+    }
+
+    pub(super) fn wake_endpoints(&self) {
+        self.in_endpoints
+            .iter()
+            .chain(&self.out_endpoints)
+            .for_each(AtomicWaker::wake);
+    }
+
+    pub(super) fn wake(&self, index: usize, direction: Direction) {
+        if let Some(waker) = self.waker(index, direction) {
+            waker.wake();
+        }
+    }
+
+    pub(super) fn register(&self, index: usize, direction: Direction, context: &Context<'_>) {
+        if let Some(waker) = self.waker(index, direction) {
+            waker.register(context.waker());
+        }
+    }
+
+    fn waker(&self, index: usize, direction: Direction) -> Option<&AtomicWaker> {
+        match direction {
+            Direction::In => self.in_endpoints.get(index),
+            Direction::Out => self.out_endpoints.get(index),
+        }
+    }
+}
 
 impl Handler<typelevel::USBD_HP_CAN0_TX> for InterruptHandler {
     // SAFETY: servicing the controller has no requirement beyond running in a USB interrupt.
@@ -43,35 +87,12 @@ impl Handler<typelevel::USBD_LP_CAN0_RX0> for InterruptHandler {
     }
 }
 
-pub(crate) fn waker(index: usize, direction: Direction) -> Option<&'static AtomicWaker> {
-    match direction {
-        Direction::In => IN.get(index),
-        Direction::Out => OUT.get(index),
-    }
-}
-
-pub(crate) fn wake_endpoints() {
-    IN.iter().chain(&OUT).for_each(AtomicWaker::wake);
-}
-
-pub(crate) fn wake(waker: Option<&AtomicWaker>) {
-    if let Some(waker) = waker {
-        waker.wake();
-    }
-}
-
-pub(crate) fn register(waker: Option<&AtomicWaker>, context: &Context<'_>) {
-    if let Some(waker) = waker {
-        waker.register(context.waker());
-    }
-}
-
 fn service() {
     let usbd = registers::usbd();
     let flags = read_bits(usbd.intf());
 
     if flags & INTF_SPSIF != 0 {
-        SUSPEND.store(true, Ordering::Release);
+        EVENTS.suspend.store(true, Ordering::Release);
         modify_bits(usbd.ctl(), |control| {
             if control & CTL_RSREQ == 0 {
                 control | CTL_SETSPS | CTL_LOWM
@@ -80,20 +101,20 @@ fn service() {
             }
         });
         write_bits(usbd.intf(), !INTF_SPSIF);
-        BUS.wake();
+        EVENTS.bus.wake();
     }
 
     if flags & INTF_WKUPIF != 0 {
-        RESUME.store(true, Ordering::Release);
+        EVENTS.resume.store(true, Ordering::Release);
         modify_bits(usbd.ctl(), |control| control & !(CTL_LOWM | CTL_SETSPS));
         write_bits(usbd.intf(), !INTF_WKUPIF);
-        BUS.wake();
+        EVENTS.bus.wake();
     }
 
     if flags & INTF_RSTIF != 0 {
-        RESET.store(true, Ordering::Release);
+        EVENTS.reset.store(true, Ordering::Release);
         write_bits(usbd.intf(), !INTF_RSTIF);
-        BUS.wake();
+        EVENTS.bus.wake();
     }
 
     if flags & INTF_STIF != 0 {
@@ -101,12 +122,12 @@ fn service() {
         let endpoint = registers::endpoint(index);
         if endpoint.received() {
             if index == 0 && endpoint.setup() {
-                SETUP.store(true, Ordering::Release);
+                EVENTS.setup.store(true, Ordering::Release);
             }
-            wake(waker(index, Direction::Out));
+            EVENTS.wake(index, Direction::Out);
         }
         if endpoint.transmitted() {
-            wake(waker(index, Direction::In));
+            EVENTS.wake(index, Direction::In);
         }
         registers::write_endpoint(index, endpoint.acknowledge());
     }

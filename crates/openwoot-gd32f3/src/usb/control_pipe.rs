@@ -5,7 +5,7 @@ use embassy_usb_driver::{ControlPipe as ControlPipeTrait, Direction, EndpointErr
 use super::{
     endpoint::{Endpoint, In, Out, idle, wait_for},
     endpoint_register::{Command, Reading, Status, Toggle},
-    events,
+    events::EVENTS,
     registers::{self, ADDR_USBEN},
 };
 use crate::register::write_bits;
@@ -24,7 +24,7 @@ pub struct ControlPipe {
 }
 
 impl ControlPipe {
-    pub(crate) const fn new(
+    pub(super) const fn new(
         max_packet_size: u16,
         input: Endpoint<In>,
         output: Endpoint<Out>,
@@ -45,15 +45,15 @@ impl ControlPipeTrait for ControlPipe {
     async fn setup(&mut self) -> [u8; 8] {
         loop {
             poll_fn(|context| {
-                events::register(events::waker(CONTROL, Direction::Out), context);
-                if events::SETUP.load(Ordering::Acquire) {
+                EVENTS.register(CONTROL, Direction::Out, context);
+                if EVENTS.setup.load(Ordering::Acquire) {
                     Poll::Ready(())
                 } else {
                     Poll::Pending
                 }
             })
             .await;
-            events::SETUP.store(false, Ordering::Release);
+            EVENTS.setup.store(false, Ordering::Release);
             let mut request = [0; SETUP_LEN];
             match self.output.unload(&mut request) {
                 Ok(SETUP_LEN) if asks_for_high_speed_only_descriptor(request) => {
@@ -75,7 +75,7 @@ impl ControlPipeTrait for ControlPipe {
             registers::write_endpoint(CONTROL, data_out_entry(first, last).bits());
         }
         wait_for(CONTROL, Direction::Out, |status| status == Status::Nak).await;
-        if events::SETUP.load(Ordering::Acquire) {
+        if EVENTS.setup.load(Ordering::Acquire) {
             return Err(EndpointError::Disabled);
         }
         let len = self.output.unload(buf)?;
@@ -91,8 +91,8 @@ impl ControlPipeTrait for ControlPipe {
             registers::write_endpoint(CONTROL, data_in_entry(first, last).bits());
         }
         poll_fn(|context| {
-            events::register(events::waker(CONTROL, Direction::Out), context);
-            events::register(events::waker(CONTROL, Direction::In), context);
+            EVENTS.register(CONTROL, Direction::Out, context);
+            EVENTS.register(CONTROL, Direction::In, context);
             if registers::endpoint(CONTROL).status(Direction::In) == Status::Nak {
                 Poll::Ready(())
             } else {
@@ -100,7 +100,7 @@ impl ControlPipeTrait for ControlPipe {
             }
         })
         .await;
-        if events::SETUP.load(Ordering::Acquire) {
+        if EVENTS.setup.load(Ordering::Acquire) {
             return Err(EndpointError::Disabled);
         }
         self.input.load(data)?;
