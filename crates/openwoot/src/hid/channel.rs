@@ -6,7 +6,7 @@ use super::{
 };
 
 pub const DESCRIPTOR: &[u8] = &descriptor().to_array::<{ descriptor().len() }>();
-pub const FEATURE_REPORT_ID: u8 = 1;
+pub(super) const FEATURE_REPORT_ID: u8 = 1;
 pub const FEATURE_REPORT_LEN: usize = 7;
 
 const USAGE_STEP: u16 = 10;

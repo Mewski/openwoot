@@ -46,6 +46,7 @@ impl<'d, D: Driver<'d>> Reports<'d, D> {
         self.send_idle().await;
         reports.resend();
         let Self {
+            host,
             gamepad,
             keyboard,
             controls,
@@ -62,7 +63,7 @@ impl<'d, D: Driver<'d>> Reports<'d, D> {
                         key_states,
                         GamepadIn::Xinput(input),
                     ),
-                    listen(output, reports),
+                    listen(output, host),
                 )
                 .await;
                 never
@@ -182,15 +183,15 @@ async fn forward<'d, D: Driver<'d>, M: RawMutex>(
     }
 }
 
-async fn listen<M: RawMutex>(output: &mut impl EndpointOut, reports: &KeyReports<M>) {
+async fn listen(output: &mut impl EndpointOut, host: &HostState) {
     let mut packet = [0; XINPUT_OUTPUT_CAPACITY];
-    while let Ok(len) = output.read(&mut packet).await {
+    while let Ok(length) = output.read(&mut packet).await {
         if let Some(player) = packet
-            .get(..len)
+            .get(..length)
             .and_then(LedPattern::from_packet)
             .and_then(LedPattern::player)
         {
-            reports.set_player(Some(player));
+            host.set_xinput_player(player);
         }
     }
 }

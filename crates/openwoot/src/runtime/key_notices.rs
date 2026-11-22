@@ -10,7 +10,7 @@ use crate::{
     lighting::{BLACK, Lighting, Overlay, OverlayId, Span},
 };
 
-pub const KEY_NOTICE_CAPACITY: usize = 16;
+const KEY_NOTICE_CAPACITY: usize = 16;
 
 const BRIGHTNESS_REPEAT_MS: u32 = 50;
 const PROFILE_BLINK_MS: u16 = 1000;

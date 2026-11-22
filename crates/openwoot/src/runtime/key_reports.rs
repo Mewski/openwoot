@@ -1,7 +1,4 @@
-use core::{
-    cell::RefCell,
-    sync::atomic::{AtomicU8, Ordering},
-};
+use core::cell::RefCell;
 
 use embassy_sync::{
     blocking_mutex::{Mutex, raw::RawMutex},
@@ -12,8 +9,6 @@ use crate::{
     hid::{ConsumerReport, KeyStateReport, MouseReport, SystemReport},
     keys::{GamepadReport, Keyboard, Output},
 };
-
-const NO_PLAYER: u8 = u8::MAX;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Pending {
@@ -34,7 +29,6 @@ struct Queue {
 pub struct KeyReports<M: RawMutex> {
     queue: Mutex<M, RefCell<Queue>>,
     ready: Signal<M, ()>,
-    player: AtomicU8,
 }
 
 impl<M: RawMutex> KeyReports<M> {
@@ -60,7 +54,6 @@ impl<M: RawMutex> KeyReports<M> {
                 },
             })),
             ready: Signal::new(),
-            player: AtomicU8::new(NO_PLAYER),
         }
     }
 
@@ -117,17 +110,6 @@ impl<M: RawMutex> KeyReports<M> {
         self.ready.wait().await;
         self.take()
     }
-
-    pub fn set_player(&self, player: Option<u8>) {
-        self.player
-            .store(player.unwrap_or(NO_PLAYER), Ordering::Relaxed);
-    }
-
-    #[must_use]
-    pub fn player(&self) -> Option<u8> {
-        let player = self.player.load(Ordering::Relaxed);
-        (player != NO_PLAYER).then_some(player)
-    }
 }
 
 impl<M: RawMutex> Default for KeyReports<M> {
@@ -138,10 +120,7 @@ impl<M: RawMutex> Default for KeyReports<M> {
 
 impl<M: RawMutex> core::fmt::Debug for KeyReports<M> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter
-            .debug_struct("KeyReports")
-            .field("player", &self.player())
-            .finish_non_exhaustive()
+        formatter.debug_struct("KeyReports").finish_non_exhaustive()
     }
 }
 

@@ -58,7 +58,7 @@ pub const SERIAL_PAGE: Region = Region {
 pub const KEY_ROWS: usize = 6;
 pub const KEY_COLUMNS: usize = 17;
 pub const DESCRIPTOR: Descriptor = Descriptor::new(NAME, USB_IDS, IMAGE, UPDATE_MODE);
-pub const CLOCK_TREE: rcu::Config = rcu::Config {
+pub const CLOCK_TREE: rcu::ClockTree = rcu::ClockTree {
     crystal: Hertz::from_mhz(25),
     pll: Pll {
         input_divider: 25,

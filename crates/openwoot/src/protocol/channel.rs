@@ -49,11 +49,11 @@ impl<Output: EndpointOut, Input: EndpointIn> Channel<Output, Input> {
             request,
             response,
         } = self;
-        let len = {
+        let length = {
             let mut read = pin!(output.read_transfer(request));
             loop {
                 match select(read.as_mut(), requests.receive()).await {
-                    Either::First(len) => break len?,
+                    Either::First(length) => break length?,
                     Either::Second(feature_request) => {
                         let answer = handler.answer_stock(feature_request, response);
                         deliver(input, answer, update_mode).await?;
@@ -61,7 +61,7 @@ impl<Output: EndpointOut, Input: EndpointIn> Channel<Output, Input> {
                 }
             }
         };
-        let request = request.get(..len).unwrap_or_default();
+        let request = request.get(..length).unwrap_or_default();
         let answer = handler.respond(request, response).await;
         deliver(input, answer, update_mode).await
     }

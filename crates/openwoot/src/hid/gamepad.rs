@@ -5,7 +5,7 @@ use super::{
 };
 
 pub const DESCRIPTOR: &[u8] = &descriptor().to_array::<{ descriptor().len() }>();
-pub const BUTTONS: u8 = 12;
+pub(super) const BUTTONS: u8 = 12;
 pub const STICK_MAX: u16 = 0x7FFE;
 pub const STICK_CENTER: u16 = STICK_MAX / 2;
 pub const SLIDER_MAX: u16 = 0x7FFF;

@@ -5,7 +5,7 @@ use core::{
 
 use openwoot_protocol::{
     ERROR_KEY, Endpoint, Key, Message, VarKey, Version, WireError,
-    config::{Rejection, Validate},
+    configuration::{Rejection, Validate},
     decode_message, encode_message,
     endpoints::{
         ActivateProfile, CreateProfile, DeleteProfile, EnterUpdateMode, FactoryReset,
@@ -13,10 +13,10 @@ use openwoot_protocol::{
         GetGamepadSettings, GetGlobalLightbar, GetGlobalSettings, GetHostSignals, GetKeyColors,
         GetKeyOverrides, GetKeySettings, GetKeymap, GetLayout, GetLightbar, GetLighting,
         GetProfileInfo, GetProfileRevision, GetProfiles, GetSwitchModels, GetSwitches, GetVersion,
-        Revert, Save, SetAdvancedKeys, SetDeviceSettings, SetGamepadMapping, SetGamepadSettings,
-        SetGlobalLightbar, SetGlobalSettings, SetHostSignals, SetKeyColors, SetKeyOverrides,
-        SetKeySettings, SetKeymap, SetLayout, SetLightbar, SetLighting, SetProfileInfo,
-        SetSwitches,
+        Revert, Save, SetAdvancedKeys, SetDeviceSettings, SetGamepadDetection, SetGamepadMapping,
+        SetGamepadSettings, SetGlobalLightbar, SetGlobalSettings, SetHostSignals, SetKeyColors,
+        SetKeyOverrides, SetKeyReports, SetKeySettings, SetKeymap, SetLayout, SetLightbar,
+        SetLighting, SetProfileInfo, SetSwitches,
     },
     gamepad, lightbar,
     profile::{LayerRef, Slot},
@@ -24,7 +24,10 @@ use openwoot_protocol::{
 use serde::{Serialize, de::DeserializeOwned};
 
 use super::{Configuration, StockIdentity, stock::Responder};
-use crate::{diagnostics::Readout, usb::FeatureRequest};
+use crate::{
+    diagnostics::Readout,
+    usb::{FeatureRequest, HostState},
+};
 
 const UPDATE_MODE_OPTION: u8 = 0;
 
@@ -34,6 +37,7 @@ pub struct Handler<C = ()> {
     stock: Responder,
     configuration: C,
     diagnostics: Option<Readout<'static>>,
+    host: Option<&'static HostState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,12 +61,19 @@ impl<C: Configuration> Handler<C> {
             stock: Responder::new(identity),
             configuration,
             diagnostics: None,
+            host: None,
         }
     }
 
     #[must_use]
     pub const fn with_diagnostics(mut self, readout: Readout<'static>) -> Self {
         self.diagnostics = Some(readout);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_host(mut self, host: &'static HostState) -> Self {
+        self.host = Some(host);
         self
     }
 
@@ -75,26 +86,29 @@ impl<C: Configuration> Handler<C> {
             return Answer::NONE;
         };
         let VarKey::Key8(key) = message.header.key else {
-            let len = fail(&message, &WireError::UnknownKey, response);
+            let length = fail(&message, &WireError::UnknownKey, response);
             return Answer {
-                reply: reply(response, len),
+                reply: reply(response, length),
                 update_mode: None,
             };
         };
         let configuration = &mut self.configuration;
-        let mut len =
+        let mut length =
             keyboard_endpoints(key, self.version, configuration, &message, response).await;
-        if len.is_none() {
-            len = profile_endpoints(key, configuration, &message, response).await;
+        if length.is_none() {
+            length = profile_endpoints(key, configuration, &message, response).await;
         }
-        if len.is_none()
+        if length.is_none() {
+            length = host_endpoints(key, self.host, configuration, &message, response).await;
+        }
+        if length.is_none()
             && let Some(readout) = self.diagnostics
         {
-            len = diagnostics_endpoint(key, readout, configuration, &message, response).await;
+            length = diagnostics_endpoint(key, readout, configuration, &message, response).await;
         }
-        let len = len.unwrap_or_else(|| fail(&message, &WireError::UnknownKey, response));
+        let length = length.unwrap_or_else(|| fail(&message, &WireError::UnknownKey, response));
         Answer {
-            reply: reply(response, len),
+            reply: reply(response, length),
             update_mode: (key == EnterUpdateMode::REQ_KEY).then_some(UPDATE_MODE_OPTION),
         }
     }
@@ -274,6 +288,23 @@ async fn profile_endpoints<C: Configuration>(
     )
 }
 
+async fn host_endpoints<C: Configuration>(
+    key: Key,
+    host: Option<&HostState>,
+    configuration: &mut C,
+    message: &Message<'_>,
+    response: &mut [u8],
+) -> Option<Option<usize>> {
+    dispatch!(key, configuration, message, response;
+        plain SetKeyReports => async |_, enabled| {
+            host.map(|host| host.set_key_reports(enabled)).ok_or(Rejection::Unsupported)
+        },
+        plain SetGamepadDetection => async |_, enabled| {
+            host.map(|host| host.set_gamepad_detection(enabled)).ok_or(Rejection::Unsupported)
+        },
+    )
+}
+
 async fn diagnostics_endpoint<C: Configuration>(
     key: Key,
     readout: Readout<'_>,
@@ -401,6 +432,6 @@ fn fail(message: &Message<'_>, error: &WireError, response: &mut [u8]) -> Option
         .map(<[u8]>::len)
 }
 
-fn reply(response: &[u8], len: Option<usize>) -> Option<&[u8]> {
-    response.get(..len?)
+fn reply(response: &[u8], length: Option<usize>) -> Option<&[u8]> {
+    response.get(..length?)
 }

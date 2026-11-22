@@ -15,7 +15,7 @@ use super::{
 };
 use crate::{hid, xinput};
 
-const CONFIG_DESCRIPTOR_LEN: usize = 256;
+const CONFIGURATION_DESCRIPTOR_LEN: usize = 256;
 const BOS_DESCRIPTOR_LEN: usize = 16;
 const CONTROL_BUFFER_LEN: usize = 128;
 const MAX_POWER_MILLIAMPERES: u16 = 400;
@@ -30,7 +30,7 @@ const CONTROLS_INTERVAL: u8 = 4;
 const KEY_STATE_INTERVAL: u8 = 1;
 
 pub struct Resources<'d> {
-    config_descriptor: [u8; CONFIG_DESCRIPTOR_LEN],
+    configuration_descriptor: [u8; CONFIGURATION_DESCRIPTOR_LEN],
     bos_descriptor: [u8; BOS_DESCRIPTOR_LEN],
     control_buffer: [u8; CONTROL_BUFFER_LEN],
     control: Option<Control<'d>>,
@@ -63,7 +63,7 @@ impl Resources<'_> {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            config_descriptor: [0; CONFIG_DESCRIPTOR_LEN],
+            configuration_descriptor: [0; CONFIGURATION_DESCRIPTOR_LEN],
             bos_descriptor: [0; BOS_DESCRIPTOR_LEN],
             control_buffer: [0; CONTROL_BUFFER_LEN],
             control: None,
@@ -85,7 +85,7 @@ pub fn build<'d, D: Driver<'d>>(
     host: &'d HostState,
 ) -> Device<'d, D> {
     let Resources {
-        config_descriptor,
+        configuration_descriptor,
         bos_descriptor,
         control_buffer,
         control,
@@ -93,8 +93,8 @@ pub fn build<'d, D: Driver<'d>>(
     let control = control.insert(Control::new(host, face.mode == Mode::Xinput));
     let mut builder = Builder::new(
         driver,
-        device_config(face, identity),
-        config_descriptor,
+        device_configuration(face, identity),
+        configuration_descriptor,
         bos_descriptor,
         &mut [],
         control_buffer,
@@ -133,23 +133,23 @@ pub fn build<'d, D: Driver<'d>>(
     }
 }
 
-fn device_config(face: Face, identity: Identity<'_>) -> Config<'_> {
-    let mut config = Config::new(
+fn device_configuration(face: Face, identity: Identity<'_>) -> Config<'_> {
+    let mut configuration = Config::new(
         identity.ids.vendor_id,
         identity.ids.product_id_base + face.mode.product_id_offset(),
     );
-    config.bcd_usb = UsbVersion::Two;
-    config.device_class = 0;
-    config.device_sub_class = 0;
-    config.device_protocol = 0;
-    config.composite_with_iads = false;
-    config.device_release = face.keyboard.device_release();
-    config.manufacturer = Some(identity.manufacturer);
-    config.product = Some(identity.product);
-    config.serial_number = identity.serial_number;
-    config.supports_remote_wakeup = true;
-    config.max_power = MAX_POWER_MILLIAMPERES;
-    config
+    configuration.bcd_usb = UsbVersion::Two;
+    configuration.device_class = 0;
+    configuration.device_sub_class = 0;
+    configuration.device_protocol = 0;
+    configuration.composite_with_iads = false;
+    configuration.device_release = face.keyboard.device_release();
+    configuration.manufacturer = Some(identity.manufacturer);
+    configuration.product = Some(identity.product);
+    configuration.serial_number = identity.serial_number;
+    configuration.supports_remote_wakeup = true;
+    configuration.max_power = MAX_POWER_MILLIAMPERES;
+    configuration
 }
 
 fn gamepad_interface<'d, D: Driver<'d>>(

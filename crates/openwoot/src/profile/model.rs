@@ -7,7 +7,7 @@ use embassy_sync::blocking_mutex::raw::RawMutex;
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use openwoot_protocol::{
     advanced,
-    config::Rejection,
+    configuration::Rejection,
     device, gamepad, global,
     keys::{self as config, Keymap, Layer, Override, Overrides, ScanMode},
     lightbar,
@@ -18,9 +18,7 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use super::{Appearance, Changes, Colors, Count, Factory, Preset, Revision, Shared};
 use crate::{
-    keys::{
-        self, ActiveProfile, Key as Position, Keymaps, Parts, Profile, default_gamepad_settings,
-    },
+    keys::{self, ActiveProfile, Keymaps, Parts, Profile, default_gamepad_settings},
     layout::LAYERS,
     lighting::ProfileState,
     storage::{Key, Record, Scope, Settings, Stored},
@@ -103,11 +101,6 @@ where
             count: self.count,
             active: Slot::new(self.active),
         }
-    }
-
-    #[must_use]
-    pub const fn unsaved(&self) -> (Parts, Changes) {
-        (self.unsaved_keys, self.unsaved)
     }
 
     pub async fn activate(&mut self, profile: Slot) -> Result<(), Rejection> {
@@ -755,9 +748,6 @@ where
         let key_count = ROWS * COLUMNS;
         self.keys.edit(|profile| {
             profile.settings = preset.keys;
-            for (layer, target) in Layer::ALL.into_iter().zip(profile.keymaps.0.iter_mut()) {
-                self.default_keymap(layer, target);
-            }
             fill_overrides(&mut profile.overrides, preset, key_count);
             profile.advanced.clear();
             profile.advanced.extend(preset.advanced.iter().copied());
@@ -769,6 +759,25 @@ where
             profile.gamepad_mapping.exclusive = false;
             profile.gamepad_settings = default_gamepad_settings();
         });
+        for (index, layer) in Layer::ALL.into_iter().enumerate() {
+            self.keys.edit(|profile| {
+                if let Some(keymap) = profile.keymaps.0.get_mut(index) {
+                    keymap.clear();
+                }
+            });
+            for action in self.factory.keymap.actions(layer, self.variant) {
+                let pushed = self.keys.edit(|profile| {
+                    profile
+                        .keymaps
+                        .0
+                        .get_mut(index)
+                        .is_some_and(|keymap| keymap.push(action).is_ok())
+                });
+                if !pushed {
+                    break;
+                }
+            }
+        }
     }
 
     fn reset_appearance(&self, slot: u8) {
@@ -885,18 +894,9 @@ where
 
     fn default_keymap(&self, layer: Layer, keymap: &mut Keymap) {
         keymap.clear();
-        for row in 0..ROWS {
-            for column in 0..COLUMNS {
-                let (Ok(row), Ok(column)) = (u8::try_from(row), u8::try_from(column)) else {
-                    continue;
-                };
-                let action =
-                    self.factory
-                        .keymap
-                        .action(layer, Position::new(row, column), self.variant);
-                if keymap.push(action).is_err() {
-                    return;
-                }
+        for action in self.factory.keymap.actions(layer, self.variant) {
+            if keymap.push(action).is_err() {
+                return;
             }
         }
     }

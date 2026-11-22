@@ -10,18 +10,19 @@ cargo xtask flash wooting-60he-plus --dry-run
 
 ## State
 
-Scaffold: the image links and carries its descriptor, the firmware does nothing yet. The update
-mode of this board's factory bootloader has not been examined, so its descriptor says that the
-board has no update mode and the host tool refuses to flash it.
+The firmware builds with the same features as the Wooting 80HE (without the light bar) and its
+board data is host-tested; it has not been confirmed on a keyboard. The update mode of this board's
+factory bootloader has not been examined, so its descriptor says that the board has no update mode
+and the host tool refuses to flash it.
 
 ## Memory
 
 | Area | Addresses |
 | --- | --- |
-| factory bootloader, never written | `0x08000000`-`0x08006FFF` |
-| image (`FLASH` in `memory.x`): vector table, descriptor, code | `0x08007000`-`0x080FCFFF` |
-| serial number page, never linked | `0x080FD000`-`0x080FDFFF` |
-| unused page and factory device information, never linked | `0x080FE000`-`0x080FFFFF` |
-| RAM, stack from the top | `0x20000000`-`0x20017FFF` |
+| factory bootloader, never written | `0x0800_0000`-`0x0800_6FFF` |
+| image (`FLASH` in `memory.x`): vector table, descriptor, code | `0x0800_7000`-`0x080F_CFFF` |
+| serial number page, never linked | `0x080F_D000`-`0x080F_DFFF` |
+| unused page and factory device information, never linked | `0x080F_E000`-`0x080F_FFFF` |
+| RAM, stack from the top | `0x2000_0000`-`0x2001_7FFF` |
 
-USB vendor id `0x31E3`, product id base `0x1320`.
+USB ids `31e3:1320` (product id base).

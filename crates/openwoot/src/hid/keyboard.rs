@@ -6,8 +6,8 @@ use super::{
 
 pub const BOOT_DESCRIPTOR: &[u8] = &boot_descriptor().to_array::<{ boot_descriptor().len() }>();
 pub const NKRO_DESCRIPTOR: &[u8] = &nkro_descriptor().to_array::<{ nkro_descriptor().len() }>();
-pub const BOOT_KEY_SLOTS: usize = 6;
-pub const NKRO_BITMAP_LEN: usize = bitmap_len();
+pub(super) const BOOT_KEY_SLOTS: usize = 6;
+pub(super) const NKRO_BITMAP_LEN: usize = bitmap_len();
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Modifiers(u8);
@@ -28,12 +28,12 @@ pub struct NkroReport {
 pub struct Leds(u8);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KeyGroup {
+pub(super) struct KeyGroup {
     pub first: u8,
     pub last: u8,
 }
 
-pub const NKRO_KEY_GROUPS: [KeyGroup; 4] = [
+pub(super) const NKRO_KEY_GROUPS: [KeyGroup; 4] = [
     KeyGroup {
         first: 0x04,
         last: 0x31,
@@ -223,12 +223,12 @@ impl Leds {
 
 impl KeyGroup {
     #[must_use]
-    pub const fn key_count(self) -> usize {
+    pub(super) const fn key_count(self) -> usize {
         self.last as usize - self.first as usize + 1
     }
 
     #[must_use]
-    pub const fn padding_bits(self) -> usize {
+    const fn padding_bits(self) -> usize {
         self.key_count().next_multiple_of(8) - self.key_count()
     }
 }

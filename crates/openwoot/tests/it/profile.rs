@@ -4,7 +4,7 @@ use embassy_futures::block_on;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_usb_driver::Speed as BusSpeed;
 use openwoot::{
-    keys,
+    keys::{self, ProfileSource},
     layout::DefaultKeymap,
     lighting::{LedMatrix, Lighting, from_rgb565},
     profile::{self, Changes, Factory, Model, Preset},
@@ -14,7 +14,7 @@ use openwoot::{
 };
 use openwoot_image::Region;
 use openwoot_protocol::{
-    config::Rejection,
+    configuration::Rejection,
     device, global,
     heapless::Vec,
     keys::{Action, Distance, Keymap, Layer, RapidTrigger, ScanMode, TapDuration},

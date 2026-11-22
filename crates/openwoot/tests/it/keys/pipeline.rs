@@ -15,7 +15,7 @@ use openwoot::{
 use openwoot_image::Region;
 use openwoot_protocol::{
     advanced::{self, Behaviour},
-    config::Capabilities,
+    configuration::Capabilities,
     diagnostics::{self, Usb},
     gamepad::{self, Control},
     global,

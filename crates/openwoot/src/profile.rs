@@ -14,7 +14,7 @@ pub use changes::Changes;
 pub use colors::Colors;
 pub use configurator::Configurator;
 pub use edition::{Edition, Unit};
-pub use face::{face_of, stored_face};
+pub use face::stored_face;
 pub use factory::{Factory, Preset};
 pub use model::Model;
 pub use records::{Count, Revision};

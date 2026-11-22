@@ -53,7 +53,7 @@ pub const SERIAL_PAGE: Region = Region {
 pub const KEY_ROWS: usize = 6;
 pub const KEY_COLUMNS: usize = 14;
 pub const DESCRIPTOR: Descriptor = Descriptor::new(NAME, USB_IDS, IMAGE, UPDATE_MODE);
-pub const CLOCK_TREE: rcu::Config = rcu::Config {
+pub const CLOCK_TREE: rcu::ClockTree = rcu::ClockTree {
     pll_multiplier: PllMultiplier::new::<30>(),
     ahb_divider: AhbDivider::By1,
     apb1_divider: ApbDivider::By2,

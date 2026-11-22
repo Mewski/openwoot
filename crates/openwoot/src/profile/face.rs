@@ -6,21 +6,6 @@ use crate::{
     usb::{Face, Speed},
 };
 
-#[must_use]
-pub fn face_of(stored: Option<device::Settings>, factory: Face) -> Face {
-    let Some(stored) = stored else {
-        return factory;
-    };
-    let face = Face::from(stored);
-    Face {
-        speed: match face.speed {
-            Speed::Full => Speed::Full,
-            Speed::High => factory.speed,
-        },
-        ..face
-    }
-}
-
 pub async fn stored_face<F: MultiwriteNorFlash>(
     settings: Option<&mut Settings<F>>,
     factory: Face,
@@ -34,6 +19,20 @@ pub async fn stored_face<F: MultiwriteNorFlash>(
         None => None,
     };
     face_of(stored, factory)
+}
+
+fn face_of(stored: Option<device::Settings>, factory: Face) -> Face {
+    let Some(stored) = stored else {
+        return factory;
+    };
+    let face = Face::from(stored);
+    Face {
+        speed: match face.speed {
+            Speed::Full => Speed::Full,
+            Speed::High => factory.speed,
+        },
+        ..face
+    }
 }
 
 #[cfg(test)]

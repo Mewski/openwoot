@@ -5,11 +5,11 @@ use super::{
 };
 
 pub const DESCRIPTOR: &[u8] = &descriptor().to_array::<{ descriptor().len() }>();
-pub const SYSTEM_REPORT_ID: u8 = 1;
-pub const CONSUMER_REPORT_ID: u8 = 2;
-pub const MOUSE_REPORT_ID: u8 = 3;
+pub(super) const SYSTEM_REPORT_ID: u8 = 1;
+pub(super) const CONSUMER_REPORT_ID: u8 = 2;
+pub(super) const MOUSE_REPORT_ID: u8 = 3;
 pub const CONSUMER_SLOTS: usize = 3;
-pub const MOUSE_BUTTONS: u8 = 5;
+pub(super) const MOUSE_BUTTONS: u8 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SystemControl {

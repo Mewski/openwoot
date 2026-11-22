@@ -130,3 +130,12 @@ fn keyboard_keys_are_muted_in_the_gamepad_modes_unless_the_profile_allows_them()
     });
     assert_eq!(step(&mut keys, &[(KEY_F, 2000)], 1), [0x09]);
 }
+
+#[test]
+fn with_key_reports_off_presses_reach_no_report_until_they_are_on_again() {
+    let mut keys = engine(&[(KEY_A, Action::Keyboard(0x04))]);
+    keys.set_key_reports(false);
+    assert_eq!(step(&mut keys, &[(KEY_A, 3000)], 1), []);
+    keys.set_key_reports(true);
+    assert_eq!(step(&mut keys, &[(KEY_A, 3001)], 1), [0x04]);
+}

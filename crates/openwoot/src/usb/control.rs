@@ -185,8 +185,8 @@ impl Handler for Control<'_> {
     }
 }
 
-fn copy_into<'a>(buf: &'a mut [u8], bytes: &[u8]) -> InResponse<'a> {
-    match buf.get_mut(..bytes.len()) {
+fn copy_into<'a>(buffer: &'a mut [u8], bytes: &[u8]) -> InResponse<'a> {
+    match buffer.get_mut(..bytes.len()) {
         Some(response) => {
             response.copy_from_slice(bytes);
             InResponse::Accepted(response)

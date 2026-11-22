@@ -8,6 +8,8 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal}
 use super::{FeatureRequests, HidProtocol};
 use crate::{diagnostics::Counter, hid::Leds};
 
+const NO_PLAYER: u8 = u8::MAX;
+
 pub struct HostState {
     keyboard_leds: AtomicU8,
     keyboard_boot_protocol: AtomicBool,
@@ -16,6 +18,9 @@ pub struct HostState {
     configuration_changes: Signal<CriticalSectionRawMutex, bool>,
     suspended: AtomicBool,
     resets: Counter,
+    key_reports: AtomicBool,
+    gamepad_detection: AtomicBool,
+    xinput_player: AtomicU8,
 }
 
 impl HostState {
@@ -29,6 +34,9 @@ impl HostState {
             configuration_changes: Signal::new(),
             suspended: AtomicBool::new(false),
             resets: Counter::new(),
+            key_reports: AtomicBool::new(true),
+            gamepad_detection: AtomicBool::new(false),
+            xinput_player: AtomicU8::new(NO_PLAYER),
         }
     }
 
@@ -64,6 +72,31 @@ impl HostState {
         self.resets.value()
     }
 
+    pub fn key_reports(&self) -> bool {
+        self.key_reports.load(Ordering::Relaxed)
+    }
+
+    pub fn gamepad_detection(&self) -> bool {
+        self.gamepad_detection.load(Ordering::Relaxed)
+    }
+
+    pub fn xinput_player(&self) -> Option<u8> {
+        let player = self.xinput_player.load(Ordering::Relaxed);
+        (player != NO_PLAYER).then_some(player)
+    }
+
+    pub(crate) fn set_key_reports(&self, enabled: bool) {
+        self.key_reports.store(enabled, Ordering::Relaxed);
+    }
+
+    pub(crate) fn set_gamepad_detection(&self, enabled: bool) {
+        self.gamepad_detection.store(enabled, Ordering::Relaxed);
+    }
+
+    pub(crate) fn set_xinput_player(&self, player: u8) {
+        self.xinput_player.store(player, Ordering::Relaxed);
+    }
+
     pub(crate) async fn configuration_change(&self) -> bool {
         self.configuration_changes.wait().await
     }
@@ -83,6 +116,10 @@ impl HostState {
 
     pub(super) fn set_configured(&self, configured: bool) {
         self.configured.store(configured, Ordering::Relaxed);
+        self.xinput_player.store(NO_PLAYER, Ordering::Relaxed);
+        if configured {
+            self.key_reports.store(true, Ordering::Relaxed);
+        }
         self.configuration_changes.signal(configured);
     }
 
@@ -107,5 +144,34 @@ impl fmt::Debug for HostState {
             .field("configured", &self.configured)
             .field("suspended", &self.suspended)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configuring_turns_key_reports_back_on_and_forgets_the_player() {
+        let host = HostState::new();
+        host.set_key_reports(false);
+        host.set_xinput_player(2);
+        assert!(!host.key_reports());
+        assert_eq!(host.xinput_player(), Some(2));
+        host.set_configured(true);
+        assert!(host.key_reports());
+        assert_eq!(host.xinput_player(), None);
+    }
+
+    #[test]
+    fn deconfiguring_keeps_key_reports_and_detection_as_set() {
+        let host = HostState::new();
+        host.set_key_reports(false);
+        host.set_gamepad_detection(true);
+        host.set_xinput_player(1);
+        host.set_configured(false);
+        assert!(!host.key_reports());
+        assert!(host.gamepad_detection());
+        assert_eq!(host.xinput_player(), None);
     }
 }

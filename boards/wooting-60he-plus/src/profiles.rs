@@ -293,7 +293,7 @@ const fn key_colors<const WIDTH: usize>(map: &[[u16; WIDTH]; KEY_ROWS]) -> KeyCo
 mod tests {
     use openwoot::{
         keys::Key,
-        lighting::{Canvas, Frame, KeyEvent, Layers, Painter},
+        lighting::{Canvas, EffectStack, Frame, KeyEvent, Painter},
     };
     use openwoot_protocol::keys::Layer;
 
@@ -433,7 +433,7 @@ mod tests {
     ];
 
     fn frames_of(preset: &Preset) -> [u64; 60] {
-        let mut layers = Layers::<KEY_ROWS, KEY_COLUMNS>::new();
+        let mut layers = EffectStack::<KEY_ROWS, KEY_COLUMNS>::new();
         layers.apply(&preset.lighting.effects);
         let mut digests = [0; 60];
         for (number, digest) in (1..).zip(digests.iter_mut()) {

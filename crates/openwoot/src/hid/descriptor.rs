@@ -1,7 +1,7 @@
 const CAPACITY: usize = 192;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Builder {
+pub(super) struct Builder {
     bytes: [u8; CAPACITY],
     len: usize,
     depth: u8,
@@ -16,11 +16,11 @@ pub enum Collection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MainFlags(u8);
+pub(super) struct MainFlags(u8);
 
 impl Builder {
     #[must_use]
-    pub const fn new() -> Self {
+    pub(super) const fn new() -> Self {
         Self {
             bytes: [0; CAPACITY],
             len: 0,
@@ -30,52 +30,52 @@ impl Builder {
     }
 
     #[must_use]
-    pub const fn usage_page(self, page: u16) -> Self {
+    pub(super) const fn usage_page(self, page: u16) -> Self {
         self.unsigned(Item::UsagePage, page as u32)
     }
 
     #[must_use]
-    pub const fn usage(self, usage: u16) -> Self {
+    pub(super) const fn usage(self, usage: u16) -> Self {
         self.unsigned(Item::Usage, usage as u32)
     }
 
     #[must_use]
-    pub const fn usage_minimum(self, usage: u16) -> Self {
+    pub(super) const fn usage_minimum(self, usage: u16) -> Self {
         self.unsigned(Item::UsageMinimum, usage as u32)
     }
 
     #[must_use]
-    pub const fn usage_maximum(self, usage: u16) -> Self {
+    pub(super) const fn usage_maximum(self, usage: u16) -> Self {
         self.unsigned(Item::UsageMaximum, usage as u32)
     }
 
     #[must_use]
-    pub const fn logical_minimum(self, value: i32) -> Self {
+    pub(super) const fn logical_minimum(self, value: i32) -> Self {
         self.signed(Item::LogicalMinimum, value)
     }
 
     #[must_use]
-    pub const fn logical_maximum(self, value: i32) -> Self {
+    pub(super) const fn logical_maximum(self, value: i32) -> Self {
         self.signed(Item::LogicalMaximum, value)
     }
 
     #[must_use]
-    pub const fn physical_minimum(self, value: i32) -> Self {
+    pub(super) const fn physical_minimum(self, value: i32) -> Self {
         self.signed(Item::PhysicalMinimum, value)
     }
 
     #[must_use]
-    pub const fn physical_maximum(self, value: i32) -> Self {
+    pub(super) const fn physical_maximum(self, value: i32) -> Self {
         self.signed(Item::PhysicalMaximum, value)
     }
 
     #[must_use]
-    pub const fn unit(self, unit: u32) -> Self {
+    pub(super) const fn unit(self, unit: u32) -> Self {
         self.unsigned(Item::Unit, unit)
     }
 
     #[must_use]
-    pub const fn report_id(self, report_id: u8) -> Self {
+    pub(super) const fn report_id(self, report_id: u8) -> Self {
         if report_id == 0 {
             self.malformed()
         } else {
@@ -84,32 +84,32 @@ impl Builder {
     }
 
     #[must_use]
-    pub const fn report_size(self, bits: usize) -> Self {
+    pub(super) const fn report_size(self, bits: usize) -> Self {
         self.length(Item::ReportSize, bits)
     }
 
     #[must_use]
-    pub const fn report_count(self, count: usize) -> Self {
+    pub(super) const fn report_count(self, count: usize) -> Self {
         self.length(Item::ReportCount, count)
     }
 
     #[must_use]
-    pub const fn input(self, flags: MainFlags) -> Self {
+    pub(super) const fn input(self, flags: MainFlags) -> Self {
         self.unsigned(Item::Input, flags.0 as u32)
     }
 
     #[must_use]
-    pub const fn output(self, flags: MainFlags) -> Self {
+    pub(super) const fn output(self, flags: MainFlags) -> Self {
         self.unsigned(Item::Output, flags.0 as u32)
     }
 
     #[must_use]
-    pub const fn feature(self, flags: MainFlags) -> Self {
+    pub(super) const fn feature(self, flags: MainFlags) -> Self {
         self.unsigned(Item::Feature, flags.0 as u32)
     }
 
     #[must_use]
-    pub const fn collection(mut self, collection: Collection) -> Self {
+    pub(super) const fn collection(mut self, collection: Collection) -> Self {
         self.depth += 1;
         let kind = match collection {
             Collection::Physical => 0,
@@ -120,7 +120,7 @@ impl Builder {
     }
 
     #[must_use]
-    pub const fn end_collection(mut self) -> Self {
+    pub(super) const fn end_collection(mut self) -> Self {
         if self.depth == 0 {
             return self.malformed();
         }
@@ -129,17 +129,12 @@ impl Builder {
     }
 
     #[must_use]
-    pub const fn len(&self) -> usize {
+    pub(super) const fn len(&self) -> usize {
         self.len
     }
 
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    #[must_use]
-    pub const fn to_array<const LEN: usize>(&self) -> [u8; LEN] {
+    pub(super) const fn to_array<const LEN: usize>(self) -> [u8; LEN] {
         assert!(
             !self.malformed && self.depth == 0 && self.len == LEN,
             "report descriptor is malformed or does not fit"
@@ -214,27 +209,22 @@ impl Default for Builder {
 }
 
 impl MainFlags {
-    pub const CONSTANT: Self = Self(0x01);
-    pub const DATA: Self = Self(0x00);
+    pub(super) const CONSTANT: Self = Self(0x01);
+    pub(super) const DATA: Self = Self(0x00);
 
     #[must_use]
-    pub const fn variable(self) -> Self {
+    pub(super) const fn variable(self) -> Self {
         Self(self.0 | 0x02)
     }
 
     #[must_use]
-    pub const fn relative(self) -> Self {
+    pub(super) const fn relative(self) -> Self {
         Self(self.0 | 0x04)
     }
 
     #[must_use]
-    pub const fn null_state(self) -> Self {
+    pub(super) const fn null_state(self) -> Self {
         Self(self.0 | 0x40)
-    }
-
-    #[must_use]
-    pub const fn bits(self) -> u8 {
-        self.0
     }
 }
 

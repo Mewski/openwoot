@@ -9,7 +9,7 @@ use openwoot_protocol::keys::ScanMode;
 use super::{KeyNotices, KeyReports};
 use crate::{
     diagnostics::Diagnostics,
-    keys::{Functions, Keys, Notice, Parts, Shared, Switch},
+    keys::{Functions, Keys, Notice, Parts, ProfileSource, Shared, Switch},
     lighting::{KeyActivity, KeyEvents, LockState},
     scan::{self, Sensing},
     usb::{Face, HidProtocol, HostState, KeyboardFormat},
@@ -105,7 +105,9 @@ impl<M: RawMutex> KeyTask<'_, M> {
             self.face.keyboard == KeyboardFormat::Boot
                 || self.host.keyboard_protocol() == HidProtocol::Boot,
         );
-        keys.set_player(self.reports.player());
+        keys.set_key_reports(self.host.key_reports());
+        keys.set_gamepad_detection(self.host.gamepad_detection());
+        keys.set_xinput_player(self.host.xinput_player());
         let travel = scan.travel();
         let processed = scan.with(|scanner| {
             let map = *scanner.map();
@@ -116,10 +118,8 @@ impl<M: RawMutex> KeyTask<'_, M> {
             }
             let parts = self.shared.take_changes();
             if !parts.is_empty() {
-                let scan_mode = self.shared.read(|profile| {
-                    keys.configure(profile, parts);
-                    profile.settings.scan_mode
-                });
+                keys.configure(self.shared, parts);
+                let scan_mode = self.shared.read(|profile| profile.settings.scan_mode);
                 if parts.contains(Parts::SETTINGS)
                     && let Some(scan_mode) = scan_mode
                 {

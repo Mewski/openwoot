@@ -1,6 +1,6 @@
 use openwoot_protocol::{
     advanced,
-    config::{Capabilities, Rejection},
+    configuration::{Capabilities, Rejection},
     device::{self, Layout},
     gamepad, global,
     keys::{self, Layer},

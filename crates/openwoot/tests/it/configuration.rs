@@ -1,13 +1,17 @@
 use core::future::{Future, ready};
 
 use embassy_futures::block_on;
-use openwoot::protocol::{Configuration, Handler};
+use openwoot::{
+    protocol::{Configuration, Handler},
+    usb::HostState,
+};
 use openwoot_protocol::{
     Endpoint, FirmwareVersion, PROTOCOL_VERSION, VarHeader, VarKey, VarSeq, Version, WireError,
-    config::{Capabilities, Invalid, Rejection},
+    configuration::{Capabilities, Invalid, Rejection},
     decode_response, encode_message, encode_request,
     endpoints::{
-        ActivateProfile, GetCapabilities, GetKeymap, GetVersion, Save, SetKeymap, SetLighting,
+        ActivateProfile, GetCapabilities, GetKeymap, GetVersion, Save, SetGamepadDetection,
+        SetKeyReports, SetKeymap, SetLighting,
     },
     heapless::Vec,
     keys::{Action, Keymap, Layer},
@@ -238,4 +242,29 @@ fn a_body_that_does_not_decode_answers_deser_failed() {
         Err(openwoot_protocol::Error::Device(WireError::DeserFailed))
     );
     assert_eq!(handler.configuration().changes, 0);
+}
+
+#[test]
+fn key_reports_and_gamepad_detection_switch_the_host_state() {
+    static HOST: HostState = HostState::new();
+    let mut handler = configured().with_host(&HOST);
+    assert_eq!(ask!(handler, SetKeyReports, false), Ok(Some(Ok(()))));
+    assert!(!HOST.key_reports());
+    assert_eq!(ask!(handler, SetGamepadDetection, true), Ok(Some(Ok(()))));
+    assert!(HOST.gamepad_detection());
+    assert_eq!(ask!(handler, SetKeyReports, true), Ok(Some(Ok(()))));
+    assert!(HOST.key_reports());
+}
+
+#[test]
+fn key_reports_and_gamepad_detection_are_unsupported_without_host_state() {
+    let mut handler = configured();
+    assert_eq!(
+        ask!(handler, SetKeyReports, false),
+        Ok(Some(Err(Rejection::Unsupported)))
+    );
+    assert_eq!(
+        ask!(handler, SetGamepadDetection, true),
+        Ok(Some(Err(Rejection::Unsupported)))
+    );
 }

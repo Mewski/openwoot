@@ -75,6 +75,11 @@ impl<
     }
 
     #[must_use]
+    pub const fn host(&self) -> &HostState {
+        &self.host
+    }
+
+    #[must_use]
     pub const fn readout(
         &self,
         negotiated_speed: fn() -> Option<driver::Speed>,

@@ -1,19 +1,24 @@
 use openwoot::{
     hid::Hat,
     keys::{
-        AxisPriority, Gamepad, GamepadInput, combine_axis, normalize_travel, response_curve,
-        shape_stick,
+        AxisPriority, Gamepad, GamepadInput, GamepadReport, combine_axis, normalize_travel,
+        response_curve, shape_stick,
     },
     usb::Mode,
     xinput::Stick,
 };
-use openwoot_protocol::gamepad::{
-    Control::{
-        self, Accelerator, Back, DpadDown, Guide, HatLeft, LeftStickDown, LeftStickLeft,
-        LeftStickRight, LeftTrigger, RightStickRight, RightStickUp, RxPositive, Start,
+use openwoot_protocol::{
+    gamepad::{
+        Control::{
+            self, Accelerator, Back, DpadDown, Guide, HatLeft, LeftStickDown, LeftStickLeft,
+            LeftStickRight, LeftTrigger, RightStickRight, RightStickUp, RxPositive, Start,
+        },
+        CurvePoint, Normalization, Settings,
     },
-    CurvePoint, Normalization, Settings,
+    keys::Action,
 };
+
+use super::support::{KEY_A, engine, step};
 
 type Binding = (Control, u16, bool);
 type StickSample = (f32, f32, bool, f32, Option<&'static Settings>, (f32, f32));
@@ -878,5 +883,30 @@ fn the_host_detection_sees_a_fixed_pattern() {
             0x3FFF,
             Hat::Centered
         )
+    );
+}
+
+#[test]
+fn gamepad_detection_replaces_the_report_with_the_pattern_of_the_player() {
+    let mut keys = engine(&[(KEY_A, Action::Gamepad(Control::ButtonA))]);
+    keys.set_mode(Mode::Xinput);
+    keys.set_gamepad_detection(true);
+    keys.set_xinput_player(Some(1));
+    step(&mut keys, &[(KEY_A, 3000)], 1);
+    assert_eq!(
+        keys.output().gamepad(),
+        Some(&GamepadReport::Xinput(Gamepad::xinput_detection(Some(1))))
+    );
+    keys.set_mode(Mode::Gamepad);
+    step(&mut keys, &[(KEY_A, 3000)], 1);
+    assert_eq!(
+        keys.output().gamepad(),
+        Some(&GamepadReport::Hid(Gamepad::hid_detection()))
+    );
+    keys.set_gamepad_detection(false);
+    step(&mut keys, &[(KEY_A, 3000)], 1);
+    assert_ne!(
+        keys.output().gamepad(),
+        Some(&GamepadReport::Hid(Gamepad::hid_detection()))
     );
 }

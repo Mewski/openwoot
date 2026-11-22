@@ -12,8 +12,8 @@ pub struct Identity<'a> {
 
 #[must_use]
 pub fn serial_number_from_page(page: &[u8]) -> Option<&str> {
-    let (&len, text) = page.split_first()?;
-    let text = core::str::from_utf8(text.get(..usize::from(len))?).ok()?;
+    let (&length, text) = page.split_first()?;
+    let text = core::str::from_utf8(text.get(..usize::from(length))?).ok()?;
     let printable = !text.is_empty()
         && text.len() <= SERIAL_NUMBER_CAPACITY
         && text.bytes().all(|byte| byte.is_ascii_graphic());

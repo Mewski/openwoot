@@ -34,6 +34,8 @@ const CHANNEL_IN: u8 = 0x83;
 const CONTROLS_IN: u8 = 0x84;
 const KEY_STATE_IN: u8 = 0x85;
 const CHANNEL_PACKET_SIZE: usize = 64;
+const XINPUT_OUT: u8 = 0x01;
+const XINPUT_PACKET_SIZE: usize = 32;
 
 struct Session {
     device: Vec<u8>,
@@ -42,6 +44,7 @@ struct Session {
     configured: Option<Outcome>,
     idle_reports: Vec<(u8, Vec<Vec<u8>>)>,
     version_response: Vec<u8>,
+    xinput_player: Option<u8>,
 }
 
 const HIGH_SPEED: fn() -> Option<BusSpeed> = || Some(BusSpeed::High);
@@ -52,6 +55,7 @@ fn connect(
     face: Face,
     negotiated_speed: fn() -> Option<BusSpeed>,
     version_request: &[u8],
+    xinput_leds: &[u8],
 ) -> Result<Session, Outcome> {
     let host = Host::default();
     let state = HostState::new();
@@ -108,6 +112,9 @@ fn connect(
     if !version_request.is_empty() {
         host.send_packets(CHANNEL_OUT, version_request, CHANNEL_PACKET_SIZE);
     }
+    if !xinput_leds.is_empty() {
+        host.send_packets(XINPUT_OUT, xinput_leds, XINPUT_PACKET_SIZE);
+    }
     settle(firmware.as_mut());
     Ok(Session {
         device: device_descriptor,
@@ -116,6 +123,7 @@ fn connect(
         configured,
         idle_reports,
         version_response: host.take_sent(CHANNEL_IN).concat(),
+        xinput_player: state.xinput_player(),
     })
 }
 
@@ -137,7 +145,7 @@ fn the_firmware_enumerates_and_answers_get_version_at_both_speeds() {
     let mut request = [0; report::MAX_LEN];
     let request = encode_request::<GetVersion>(7, &(), &mut request).unwrap();
     for negotiated_speed in [HIGH_SPEED, FULL_SPEED] {
-        let session = connect(Face::default(), negotiated_speed, request).unwrap();
+        let session = connect(Face::default(), negotiated_speed, request, &[]).unwrap();
         assert_eq!(session.device[..2], [18, 1]);
         assert_eq!(
             u16::from_le_bytes([session.device[10], session.device[11]]),
@@ -173,7 +181,7 @@ fn the_gamepad_interval_follows_the_negotiated_speed() {
         (PollingRate::Every125Microseconds, FULL_SPEED, 1),
         (PollingRate::Every4Milliseconds, BEFORE_RESET, 6),
     ] {
-        let session = connect(gamepad_face(polling), negotiated_speed, &[]).unwrap();
+        let session = connect(gamepad_face(polling), negotiated_speed, &[], &[]).unwrap();
         let configuration = parse_configuration(&session.configuration).unwrap();
         let gamepad = &configuration.interfaces[0].endpoints[0];
         assert_eq!(gamepad.address, GAMEPAD_IN);
@@ -189,7 +197,7 @@ fn the_gamepad_interval_follows_the_negotiated_speed() {
 
 #[test]
 fn every_input_endpoint_sends_its_idle_report_once_configured() {
-    let session = connect(Face::default(), FULL_SPEED, &[]).unwrap();
+    let session = connect(Face::default(), FULL_SPEED, &[], &[]).unwrap();
     assert_eq!(
         session.idle_reports,
         [
@@ -211,6 +219,7 @@ fn every_input_endpoint_sends_its_idle_report_once_configured() {
         gamepad_face(PollingRate::Every1Millisecond),
         HIGH_SPEED,
         &[],
+        &[],
     )
     .unwrap();
     assert_eq!(
@@ -226,4 +235,16 @@ fn packets<Report: InputReport>(report: &Report, packet_size: usize) -> Vec<Vec<
         .chunks(packet_size)
         .map(<[u8]>::to_vec)
         .collect()
+}
+
+#[test]
+fn the_xinput_led_pattern_from_the_host_sets_the_player() {
+    let xinput = Face {
+        mode: Mode::Xinput,
+        ..Face::default()
+    };
+    let session = connect(xinput, HIGH_SPEED, &[], &[0x01, 0x03, 0x07]).unwrap();
+    assert_eq!(session.xinput_player, Some(1));
+    let unknown = connect(xinput, HIGH_SPEED, &[], &[0x01, 0x03, 0x00]).unwrap();
+    assert_eq!(unknown.xinput_player, None);
 }

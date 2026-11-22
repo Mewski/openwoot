@@ -1,4 +1,4 @@
-use openwoot_protocol::keys::{Action, Keymap, Layer};
+use openwoot_protocol::keys::{Action, Layer};
 
 use crate::keys::Key;
 
@@ -33,8 +33,7 @@ impl<const ROWS: usize, const COLUMNS: usize> DefaultKeymap<ROWS, COLUMNS> {
             .unwrap_or_default()
     }
 
-    #[must_use]
-    pub fn keymap(&self, layer: Layer, variant: u8) -> Keymap {
+    pub fn actions(&self, layer: Layer, variant: u8) -> impl Iterator<Item = Action> + '_ {
         (0..ROWS)
             .flat_map(|row| (0..COLUMNS).map(move |column| (row, column)))
             .filter_map(|(row, column)| {
@@ -43,13 +42,14 @@ impl<const ROWS: usize, const COLUMNS: usize> DefaultKeymap<ROWS, COLUMNS> {
                     u8::try_from(column).ok()?,
                 ))
             })
-            .map(|key| self.action(layer, key, variant))
-            .collect()
+            .map(move |key| self.action(layer, key, variant))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use heapless::Vec;
+
     use super::*;
 
     const LAYERS: [[[Action; 2]; 1]; 2] = [
@@ -65,23 +65,24 @@ mod tests {
         variant_patches: &[&[], &VARIANT],
     };
 
+    fn actions(layer: Layer, variant: u8) -> Vec<Action, 2> {
+        KEYMAP.actions(layer, variant).collect()
+    }
+
     #[test]
     fn variants_patch_the_base_layer_only() {
         assert_eq!(
-            KEYMAP.keymap(Layer::Base, 0).as_slice(),
+            actions(Layer::Base, 0),
             [Action::Keyboard(0x04), Action::Keyboard(0x05)]
         );
         assert_eq!(
-            KEYMAP.keymap(Layer::Base, 1).as_slice(),
+            actions(Layer::Base, 1),
             [Action::Keyboard(0x04), Action::Keyboard(0x89)]
         );
         assert_eq!(
-            KEYMAP.keymap(Layer::One, 1).as_slice(),
+            actions(Layer::One, 1),
             [Action::None, Action::Keyboard(0x06)]
         );
-        assert_eq!(
-            KEYMAP.keymap(Layer::Two, 0).as_slice(),
-            [Action::None, Action::None]
-        );
+        assert_eq!(actions(Layer::Two, 0), [Action::None, Action::None]);
     }
 }

@@ -4,7 +4,7 @@ use openwoot::{
     scan::Map,
 };
 use openwoot_protocol::{
-    config::Capabilities,
+    configuration::Capabilities,
     device::Layout,
     heapless::Vec,
     keys::{Action, Function, Layer},
@@ -348,7 +348,10 @@ pub fn sensor_map(variant: u8) -> Map<INPUTS, ADDRESSES> {
 #[cfg(test)]
 mod tests {
     use openwoot::keys::Key;
-    use openwoot_protocol::keys::Layer;
+    use openwoot_protocol::{
+        configuration::Validate,
+        keys::{Keymap, Layer},
+    };
 
     use super::*;
 
@@ -357,7 +360,7 @@ mod tests {
         let capabilities = capabilities();
         for variant in 0..u8::try_from(LAYOUT_VARIANTS).unwrap() {
             for layer in Layer::ALL {
-                let keymap = KEYMAP.keymap(layer, variant);
+                let keymap: Keymap = KEYMAP.actions(layer, variant).collect();
                 assert_eq!(keymap.len(), KEY_ROWS * KEY_COLUMNS);
                 for action in keymap {
                     assert_eq!(action.validate(&capabilities), Ok(()), "{action:?}");
@@ -369,7 +372,7 @@ mod tests {
     #[test]
     fn the_base_layer_types_every_letter_once_and_has_an_fn_key() {
         for variant in 0..u8::try_from(LAYOUT_VARIANTS).unwrap() {
-            let keymap = KEYMAP.keymap(Layer::Base, variant);
+            let keymap: Keymap = KEYMAP.actions(Layer::Base, variant).collect();
             for letter in 0x04..=0x1D {
                 let count = keymap
                     .iter()

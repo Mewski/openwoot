@@ -395,7 +395,7 @@ mod tests {
     use openwoot::{
         keys::Key,
         lighting::{
-            Bar, Canvas, Frame, KeyEvent, Layers, Lightbar, Painter, ProfileState, Signals,
+            Bar, Canvas, EffectStack, Frame, KeyEvent, Lightbar, Painter, ProfileState, Signals,
         },
         profile::Unit,
         storage::{DeviceInfo, SerialNumber},
@@ -648,7 +648,7 @@ mod tests {
     ];
 
     fn frames_of(preset: &Preset) -> [u64; 60] {
-        let mut layers = Layers::<KEY_ROWS, KEY_COLUMNS>::new();
+        let mut layers = EffectStack::<KEY_ROWS, KEY_COLUMNS>::new();
         layers.apply(&preset.lighting.effects);
         let mut digests = [0; 60];
         for (number, digest) in (1..).zip(digests.iter_mut()) {

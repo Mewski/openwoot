@@ -10,17 +10,18 @@ cargo xtask flash wooting-80he --dry-run
 
 ## State
 
-Scaffold: the image links and carries its descriptor, the firmware does nothing yet. Do not flash
-it.
+Working keyboard: it enumerates at high speed, types, shows the factory profiles' effects on the
+keys and the light bar, switches profiles with the Mode key, and answers `openwoot version`,
+`openwoot status` and `openwoot flash` over the configuration channel.
 
 ## Memory
 
 | Area | Addresses |
 | --- | --- |
-| factory bootloader, never written | `0x08000000`-`0x08007FFF` |
-| image (`FLASH` in `memory.x`): vector table, descriptor, code | `0x08008000`-`0x080FDFFF` |
-| serial number mirror page, never linked | `0x080FE000`-`0x080FEFFF` |
-| RAM, stack from the top | `0x20000000`-`0x2002FFFF` |
+| factory bootloader, never written | `0x0800_0000`-`0x0800_7FFF` |
+| image (`FLASH` in `memory.x`): vector table, descriptor, code | `0x0800_8000`-`0x080F_DFFF` |
+| serial number mirror page, never linked | `0x080F_E000`-`0x080F_EFFF` |
+| RAM, stack from the top | `0x2000_0000`-`0x2002_FFFF` |
 
-USB vendor id `0x31E3`, product id base `0x1400`; update mode (factory bootloader) product id
-`0x140F`, 256-byte blocks.
+USB ids `31e3:1400` (product id base); update mode (factory bootloader) `31e3:140f`, blocks of
+256 bytes.

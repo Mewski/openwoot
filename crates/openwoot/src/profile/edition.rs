@@ -19,13 +19,6 @@ pub struct Unit<const ROWS: usize, const COLUMNS: usize> {
 
 impl<const ROWS: usize, const COLUMNS: usize> Edition<ROWS, COLUMNS> {
     #[must_use]
-    pub fn code_of(&self, device_info: Option<&DeviceInfo>) -> Option<u8> {
-        device_info
-            .and_then(|info| info.serial.edition)
-            .filter(|code| self.codes.contains(code))
-    }
-
-    #[must_use]
     pub fn unit(
         &'static self,
         regular: Unit<ROWS, COLUMNS>,
@@ -37,6 +30,12 @@ impl<const ROWS: usize, const COLUMNS: usize> Edition<ROWS, COLUMNS> {
             switch_type: self.switch_type,
             edition: Some(code),
         })
+    }
+
+    fn code_of(&self, device_info: Option<&DeviceInfo>) -> Option<u8> {
+        device_info
+            .and_then(|info| info.serial.edition)
+            .filter(|code| self.codes.contains(code))
     }
 }
 

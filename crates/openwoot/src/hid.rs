@@ -8,16 +8,15 @@ mod placeholder;
 mod usage;
 
 pub use channel::{
-    DESCRIPTOR as CHANNEL_DESCRIPTOR, FEATURE_REPORT_ID as CHANNEL_FEATURE_REPORT_ID,
-    FEATURE_REPORT_LEN as CHANNEL_FEATURE_REPORT_LEN,
+    DESCRIPTOR as CHANNEL_DESCRIPTOR, FEATURE_REPORT_LEN as CHANNEL_FEATURE_REPORT_LEN,
 };
 pub use controls::{
-    CONSUMER_REPORT_ID, CONSUMER_SLOTS, ConsumerReport, DESCRIPTOR as CONTROLS_DESCRIPTOR,
-    MOUSE_BUTTONS, MOUSE_REPORT_ID, MouseReport, SYSTEM_REPORT_ID, SystemControl, SystemReport,
+    CONSUMER_SLOTS, ConsumerReport, DESCRIPTOR as CONTROLS_DESCRIPTOR, MouseReport, SystemControl,
+    SystemReport,
 };
-pub use descriptor::{Builder as DescriptorBuilder, Collection, MainFlags};
+pub use descriptor::Collection;
 pub use gamepad::{
-    BUTTONS as GAMEPAD_BUTTONS, DESCRIPTOR as GAMEPAD_DESCRIPTOR, Hat, Report as GamepadReport,
+    DESCRIPTOR as GAMEPAD_DESCRIPTOR, Hat, Report as GamepadReport,
     SLIDER_MAX as GAMEPAD_SLIDER_MAX, STICK_CENTER as GAMEPAD_STICK_CENTER,
     STICK_MAX as GAMEPAD_STICK_MAX,
 };
@@ -26,8 +25,8 @@ pub use key_state::{
     Kind as KeyStateKind, LEN as KEY_STATE_LEN, Report as KeyStateReport, Travel,
 };
 pub use keyboard::{
-    BOOT_DESCRIPTOR as BOOT_KEYBOARD_DESCRIPTOR, BOOT_KEY_SLOTS, BootReport, KeyGroup, Leds,
-    Modifiers, NKRO_BITMAP_LEN, NKRO_DESCRIPTOR, NKRO_KEY_GROUPS, NkroReport,
+    BOOT_DESCRIPTOR as BOOT_KEYBOARD_DESCRIPTOR, BootReport, Leds, Modifiers, NKRO_DESCRIPTOR,
+    NkroReport,
 };
 pub use placeholder::{DESCRIPTOR as PLACEHOLDER_DESCRIPTOR, LEN as PLACEHOLDER_LEN};
 

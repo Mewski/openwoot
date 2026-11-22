@@ -3,7 +3,7 @@ use embassy_sync::{blocking_mutex::raw::RawMutex, mutex::Mutex};
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use openwoot_protocol::{
     advanced,
-    config::{Capabilities, Rejection},
+    configuration::{Capabilities, Rejection},
     device, gamepad, global,
     keys::{self as config, Keymap, Layer, Overrides},
     lightbar,
