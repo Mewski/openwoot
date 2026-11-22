@@ -213,6 +213,10 @@ impl<const INPUTS: usize> scan::Converter for Converter<INPUTS> {
         trigger::start();
     }
 
+    fn recover(&mut self) {
+        transport::restart();
+    }
+
     #[inline(always)]
     fn micros(&self) -> u16 {
         time::microseconds()

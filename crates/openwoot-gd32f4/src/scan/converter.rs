@@ -114,6 +114,9 @@ impl<const INPUTS: usize> scan::Converter for Converter<INPUTS> {
     #[inline(always)]
     fn acknowledge() {
         adc::acknowledge();
+        if adc::take_overflow() {
+            adc::restart_transport(transport::restart);
+        }
     }
 
     #[inline(always)]
@@ -207,6 +210,11 @@ impl<const INPUTS: usize> scan::Converter for Converter<INPUTS> {
         trigger::set_counter(0);
         trigger::set_compare(u32::from(period_us));
         trigger::start();
+    }
+
+    fn recover(&mut self) {
+        adc::take_overflow();
+        adc::restart_transport(transport::restart);
     }
 
     #[inline(always)]

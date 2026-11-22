@@ -57,7 +57,7 @@ const LAYERS: [[[Action; COLUMNS]; ROWS]; 1] = [[
     [NOTHING; COLUMNS],
     [NOTHING; COLUMNS],
 ]];
-const KEYMAP: DefaultKeymap<ROWS, COLUMNS> = DefaultKeymap {
+pub(super) const KEYMAP: DefaultKeymap<ROWS, COLUMNS> = DefaultKeymap {
     layers: &LAYERS,
     variant_patches: &[],
 };
@@ -90,8 +90,8 @@ const MAP: Map<6, 15> = Map::from_codes([
 ]);
 const KEY_A: Key = Key::new(3, 1);
 const KEY_S: Key = Key::new(3, 2);
-const PROFILE_KEY: Key = Key::new(3, 6);
-const FULL: u16 = 1400;
+pub(super) const PROFILE_KEY: Key = Key::new(3, 6);
+pub(super) const FULL: u16 = 1400;
 const THREE_QUARTERS: u16 = 900;
 const SETTLING_CYCLES: u32 = 6;
 const MAX_CONVERSIONS: usize = 100_000;
@@ -100,7 +100,7 @@ fn input_of(key: Key) -> u8 {
     MAP.position(key).map_or(0, Position::input)
 }
 
-fn capabilities() -> Capabilities {
+pub(super) fn capabilities() -> Capabilities {
     Capabilities {
         key_rows: u8::try_from(ROWS).unwrap_or(u8::MAX),
         key_columns: u8::try_from(COLUMNS).unwrap_or(u8::MAX),
@@ -128,16 +128,16 @@ fn storage() -> Option<Settings<Nor>> {
         .map(|(settings, _)| settings)
 }
 
-struct Bench80<'a> {
-    scan: Scan,
+pub(super) struct Bench80<'a> {
+    pub(super) scan: Scan,
     task: KeyTask<'a, Mutual>,
-    keys: Keys<Standard, ROWS, COLUMNS>,
+    pub(super) keys: Keys<Standard, ROWS, COLUMNS>,
     progress: Progress,
     now_ms: u32,
 }
 
 impl<'a> Bench80<'a> {
-    fn new(task: KeyTask<'a, Mutual>) -> Self {
+    pub(super) fn new(task: KeyTask<'a, Mutual>) -> Self {
         let scan = Scan::new();
         assert!(scan.install(Scanner::new(Simulated::default(), MAP, [0, 1, 2, 3, 4, 5])));
         let mut keys = Keys::new(Standard);
@@ -166,7 +166,7 @@ impl<'a> Bench80<'a> {
         assert!(finished.is_some(), "the scan never finished");
     }
 
-    fn cycle(&mut self) {
+    pub(super) fn cycle(&mut self) {
         self.now_ms += 1;
         let now_ms = self.now_ms;
         self.scan.with(|scanner| scanner.prepare(now_ms));
@@ -175,7 +175,7 @@ impl<'a> Bench80<'a> {
             .step(&self.scan, &mut self.keys, &mut self.progress, now_ms);
     }
 
-    fn press(&self, key: Key, magnitude: u16) {
+    pub(super) fn press(&self, key: Key, magnitude: u16) {
         self.scan
             .with(|scanner| scanner.converter_mut().press(input_of(key), 0, magnitude));
     }
@@ -186,16 +186,16 @@ impl<'a> Bench80<'a> {
     }
 }
 
-struct World {
-    shared: Shared<Mutual>,
-    reports: KeyReports<Mutual>,
-    events: KeyEvents,
+pub(super) struct World {
+    pub(super) shared: Shared<Mutual>,
+    pub(super) reports: KeyReports<Mutual>,
+    pub(super) events: KeyEvents,
     notices: KeyNotices,
     host: HostState,
 }
 
 impl World {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             shared: Shared::new(),
             reports: KeyReports::new(),
@@ -205,7 +205,7 @@ impl World {
         }
     }
 
-    fn task(&self, mode: Mode) -> KeyTask<'_, Mutual> {
+    pub(super) fn task(&self, mode: Mode) -> KeyTask<'_, Mutual> {
         KeyTask {
             shared: &self.shared,
             reports: &self.reports,
@@ -219,11 +219,11 @@ impl World {
         }
     }
 
-    fn model(&self) -> Mutex<Mutual, Model<'_, Mutual, Nor, ROWS, COLUMNS>> {
+    pub(super) fn model(&self) -> Mutex<Mutual, Model<'_, Mutual, Nor, ROWS, COLUMNS>> {
         Mutex::new(block_on(Model::open(&self.shared, storage(), KEYMAP, 0, 4)))
     }
 
-    fn keyboard(&self) -> Option<Vec<u8>> {
+    pub(super) fn keyboard(&self) -> Option<Vec<u8>> {
         match self.reports.take().keyboard? {
             Keyboard::NKeyRollover(report) => Some(nkro_usages(&report)),
             Keyboard::Boot(_) => None,
@@ -380,6 +380,17 @@ fn a_profile_key_switches_the_profile_through_the_configuration_model() {
         block_on(configurator.profiles()).map(|summary| summary.active),
         Ok(Slot::new(1))
     );
+    bench.press(PROFILE_KEY, 0);
+    for _ in 0..5 {
+        bench.cycle();
+    }
+    let _ = world.reports.take();
+    bench.press(KEY_A, FULL);
+    bench.cycle();
+    assert_eq!(world.keyboard(), Some(vec![0x04]));
+    bench.press(KEY_A, 0);
+    bench.cycle();
+    assert_eq!(world.keyboard(), Some(vec![]));
 }
 
 #[test]

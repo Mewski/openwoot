@@ -1,6 +1,9 @@
-use embassy_futures::yield_now;
+use embassy_futures::{
+    select::{Either, select},
+    yield_now,
+};
 use embassy_sync::blocking_mutex::raw::RawMutex;
-use embassy_time::Instant;
+use embassy_time::{Duration, Instant, Timer};
 use openwoot_protocol::keys::ScanMode;
 
 use super::{KeyNotices, KeyReports};
@@ -10,6 +13,9 @@ use crate::{
     scan::{self, Sensing},
     usb::{Face, HidProtocol, HostState, KeyboardFormat},
 };
+
+const CALIBRATION_TIMEOUT: Duration = Duration::from_secs(1);
+const CYCLE_TIMEOUT: Duration = Duration::from_millis(50);
 
 pub struct KeyTask<'d, M: RawMutex> {
     pub shared: &'d Shared<M>,
@@ -44,16 +50,24 @@ impl<M: RawMutex> KeyTask<'_, M> {
         F: Functions,
     {
         keys.set_mode(self.face.mode);
-        while !scan.calibrate().await {
-            yield_now().await;
+        loop {
+            match select(scan.calibrate(), Timer::after(CALIBRATION_TIMEOUT)).await {
+                Either::First(true) => break,
+                Either::First(false) => yield_now().await,
+                Either::Second(()) => {
+                    scan.recover();
+                }
+            }
         }
         let mut progress = Progress::default();
         loop {
             let now_ms = now_ms();
-            if scan.cycle(now_ms).await {
-                self.step(scan, keys, &mut progress, now_ms);
-            } else {
-                yield_now().await;
+            match select(scan.cycle(now_ms), Timer::after(CYCLE_TIMEOUT)).await {
+                Either::First(true) => self.step(scan, keys, &mut progress, now_ms),
+                Either::First(false) => yield_now().await,
+                Either::Second(()) => {
+                    scan.recover();
+                }
             }
         }
     }

@@ -17,6 +17,7 @@ pub(super) const MAX_RANKS: usize = 16;
 const SETTLE_US: u16 = 1000;
 const APB2EN_ADC0EN: u32 = 1 << 8;
 const STAT_EOC: u32 = 1 << 1;
+const STAT_ROVF: u32 = 1 << 5;
 const CTL0_EOCIE: u32 = 1 << 5;
 const CTL0_DISRC: u32 = 1 << 11;
 const CTL0_DISIC: u32 = 1 << 12;
@@ -139,6 +140,23 @@ pub(super) fn configure_sequence(length: u32) {
 #[inline(always)]
 pub(super) fn acknowledge() {
     clear_bits(adc().stat(), STAT_EOC);
+}
+
+#[inline(always)]
+pub(super) fn take_overflow() -> bool {
+    let adc = adc();
+    if read_bits(adc.stat()) & STAT_ROVF == 0 {
+        return false;
+    }
+    clear_bits(adc.stat(), STAT_ROVF);
+    true
+}
+
+pub(super) fn restart_transport(restart: impl FnOnce()) {
+    let adc = adc();
+    clear_bits(adc.ctl1(), CTL1_DMA);
+    restart();
+    set_bits(adc.ctl1(), CTL1_DMA);
 }
 
 #[inline(always)]

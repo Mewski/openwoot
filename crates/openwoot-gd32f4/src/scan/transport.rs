@@ -14,8 +14,10 @@ use crate::dma;
 type Channel = dma::Channel<1, 0>;
 
 static SAMPLES: [AtomicU32; MAX_RANKS] = [const { AtomicU32::new(0) }; MAX_RANKS];
+static COUNT: AtomicU32 = AtomicU32::new(1);
 
 pub(super) fn start(count: u32) {
+    COUNT.store(count, Ordering::Relaxed);
     let channel = Channel::new();
     channel.enable_clock();
     channel.clear_control(dma::ENABLE);
@@ -34,7 +36,7 @@ pub(super) fn start(count: u32) {
         (bits & !(dma::PERIPHERAL_WIDTH | dma::MEMORY_WIDTH | dma::PRIORITY | dma::DIRECTION))
             | dma::PERIPHERAL_WIDTH_32
             | dma::MEMORY_WIDTH_32
-            | dma::PRIORITY_HIGH
+            | dma::PRIORITY_ULTRA_HIGH
     });
     channel.clear_control(dma::PERIPHERAL_INCREMENT);
     channel.set_control(dma::MEMORY_INCREMENT);
@@ -42,6 +44,10 @@ pub(super) fn start(count: u32) {
     channel.clear_control(dma::REQUEST);
     channel.set_control(dma::CIRCULAR);
     channel.set_control(dma::ENABLE);
+}
+
+pub(super) fn restart() {
+    start(COUNT.load(Ordering::Relaxed));
 }
 
 #[inline(always)]

@@ -67,10 +67,18 @@ impl Host {
     }
 
     pub(crate) fn attach<F: Future>(&self, device: Pin<&mut F>) {
-        let mut state = self.0.borrow_mut();
-        state.events.push_back(Event::PowerDetected);
-        state.events.push_back(Event::Reset);
-        drop(state);
+        self.attach_with(device, &[Event::PowerDetected, Event::Reset]);
+    }
+
+    pub(crate) fn attach_after_idle_bus<F: Future>(&self, device: Pin<&mut F>) {
+        self.attach_with(
+            device,
+            &[Event::PowerDetected, Event::Suspend, Event::Reset],
+        );
+    }
+
+    fn attach_with<F: Future>(&self, device: Pin<&mut F>, events: &[Event]) {
+        self.0.borrow_mut().events.extend(events.iter().copied());
         settle(device);
     }
 

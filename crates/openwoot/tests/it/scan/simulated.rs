@@ -9,7 +9,7 @@ const ZERO_LEVEL: u16 = 2048;
 const CONVERSION_US: u16 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Operation {
+pub(crate) enum Operation {
     SelectAddress(u8),
     SelectInput(u8, u8),
     EnterSingle(u8),
@@ -18,13 +18,14 @@ pub(super) enum Operation {
     TriggerAfter(u16),
     TriggerAt(u16),
     EndCycle(u16),
+    Recover,
 }
 
 #[derive(Debug)]
 pub(crate) struct Simulated<const INPUTS: usize> {
     pub(super) readings: [[u16; ADDRESSES_PER_INPUT]; INPUTS],
     pub(super) reference: u16,
-    pub(super) operations: Vec<Operation>,
+    pub(crate) operations: Vec<Operation>,
     pub(super) now_us: u16,
     pub(super) noise: Option<fn(u32) -> i16>,
     conversions: u32,
@@ -147,6 +148,10 @@ impl<const INPUTS: usize> Converter for Simulated<INPUTS> {
 
     fn end_cycle(&mut self, period_us: u16) {
         self.operations.push(Operation::EndCycle(period_us));
+    }
+
+    fn recover(&mut self) {
+        self.operations.push(Operation::Recover);
     }
 
     fn micros(&self) -> u16 {

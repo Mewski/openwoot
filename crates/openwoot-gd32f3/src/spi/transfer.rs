@@ -25,7 +25,7 @@ const IDLE_WORD: u8 = 0x00;
 
 static RECEIVED: AtomicWaker = AtomicWaker::new();
 static DISCARDED: AtomicU8 = AtomicU8::new(0);
-static IDLE: u8 = IDLE_WORD;
+static IDLE: AtomicU8 = AtomicU8::new(IDLE_WORD);
 
 #[derive(Debug)]
 pub struct InterruptHandler;
@@ -57,7 +57,7 @@ impl Source {
     fn address(self) -> u32 {
         match self {
             Self::Bytes(pointer) => address(pointer),
-            Self::Idle => address(&raw const IDLE),
+            Self::Idle => address(IDLE.as_ptr().cast_const()),
         }
     }
 }
@@ -158,7 +158,7 @@ const fn receive_control(sink: Sink) -> u32 {
         Sink::Bytes(_) => dma::MEMORY_INCREMENT,
         Sink::Discard => 0,
     };
-    dma::PRIORITY_HIGH | increment | dma::INTERRUPTS
+    dma::PRIORITY_LOW | increment | dma::INTERRUPTS
 }
 
 const fn transmit_control(source: Source) -> u32 {
@@ -166,7 +166,7 @@ const fn transmit_control(source: Source) -> u32 {
         Source::Bytes(_) => dma::MEMORY_INCREMENT,
         Source::Idle => 0,
     };
-    dma::PRIORITY_HIGH | dma::MEMORY_TO_PERIPHERAL | increment
+    dma::PRIORITY_LOW | dma::MEMORY_TO_PERIPHERAL | increment
 }
 
 fn address(pointer: *const u8) -> u32 {
@@ -179,9 +179,9 @@ mod tests {
 
     #[test]
     fn receive_and_transmit_channels_serve_spi1_in_the_right_directions() {
-        assert_eq!(receive_control(Sink::Bytes(core::ptr::null_mut())), 0x208A);
-        assert_eq!(receive_control(Sink::Discard), 0x200A);
-        assert_eq!(transmit_control(Source::Bytes(core::ptr::null())), 0x2090);
-        assert_eq!(transmit_control(Source::Idle), 0x2010);
+        assert_eq!(receive_control(Sink::Bytes(core::ptr::null_mut())), 0x008A);
+        assert_eq!(receive_control(Sink::Discard), 0x000A);
+        assert_eq!(transmit_control(Source::Bytes(core::ptr::null())), 0x0090);
+        assert_eq!(transmit_control(Source::Idle), 0x0010);
     }
 }

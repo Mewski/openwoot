@@ -27,5 +27,7 @@ pub trait Converter {
 
     fn end_cycle(&mut self, period_us: u16);
 
+    fn recover(&mut self) {}
+
     fn micros(&self) -> u16;
 }

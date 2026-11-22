@@ -115,6 +115,12 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Shared<S, INPUTS, 
         true
     }
 
+    pub fn recover(&self) -> bool {
+        self.running.store(false, Ordering::Release);
+        self.with(|scanner| scanner.converter_mut().recover())
+            .is_some()
+    }
+
     pub async fn run(
         &self,
         mut between_cycles: impl FnMut(&mut Scanner<S, INPUTS, ADDRESSES>),
