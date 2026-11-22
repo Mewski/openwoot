@@ -1,11 +1,7 @@
-use openwoot::{
-    hid::{
-        BootReport, ConsumerReport, GAMEPAD_STICK_CENTER, GamepadReport, Hat, InputReport,
-        KEY_STATE_ENTRIES, KeyStateEntry as Entry, KeyStateKind as Kind, KeyStateReport, Leds,
-        Modifiers, MouseReport, NkroReport, Stick, SystemControl, SystemReport, Travel,
-        XinputButtons as Buttons, XinputReport,
-    },
-    usb::XinputLedPattern as LedPattern,
+use openwoot::hid::{
+    BootReport, ConsumerReport, GAMEPAD_STICK_CENTER, GamepadReport, Hat, InputReport,
+    KEY_STATE_ENTRIES, KeyStateEntry as Entry, KeyStateKind as Kind, KeyStateReport, Leds,
+    Modifiers, MouseReport, NkroReport, SystemControl, SystemReport, Travel,
 };
 
 #[test]
@@ -135,39 +131,4 @@ fn key_state_report_packs_sixteen_entries_of_four_bytes() {
     }));
     assert_eq!(report.to_bytes()[..8], [0, 0, 0x54, 0x55, 0, 0, 0, 0]);
     assert_eq!(Travel::new(0x400), None);
-}
-
-#[test]
-fn xinput_report_is_the_wired_controller_layout() {
-    let report = XinputReport {
-        buttons: Buttons::BUTTON_A.union(Buttons::DPAD_UP),
-        left_trigger: 0x11,
-        right_trigger: 0x22,
-        left_stick: Stick { x: -2, y: 0x0304 },
-        right_stick: Stick {
-            x: 0x0506,
-            y: -0x8000,
-        },
-    };
-    assert_eq!(
-        report.to_bytes(),
-        [
-            0x00, 0x14, 0x01, 0x10, 0x11, 0x22, 0xFE, 0xFF, 0x04, 0x03, 0x06, 0x05, 0x00, 0x80, 0,
-            0, 0, 0, 0, 0
-        ]
-    );
-    assert!(report.buttons.contains(Buttons::BUTTON_A));
-}
-
-#[test]
-fn xinput_led_command_selects_the_player() {
-    let player = |packet: &[u8]| LedPattern::from_packet(packet).and_then(LedPattern::player);
-    assert_eq!(player(&[0x01, 0x03, 0x02]), Some(0));
-    assert_eq!(player(&[0x01, 0x03, 0x09]), Some(3));
-    assert_eq!(player(&[0x01, 0x03, 0x01]), None);
-    assert_eq!(LedPattern::from_packet(&[0x00, 0x08, 0x00]), None);
-    assert_eq!(
-        LedPattern::from_packet(&[0x01, 0x03, 0x0A]).map(LedPattern::get),
-        Some(0x0A)
-    );
 }

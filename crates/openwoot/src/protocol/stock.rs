@@ -2,14 +2,10 @@ use openwoot_protocol::stock::{
     COMMAND_COUNT, Command, FIRST_CURRENT_COMMAND, Request, Status, encode_reply,
 };
 
-use super::{
-    Answer,
-    requests::Queued,
-    serial::{LEGACY_LEN, SerialNumber},
-};
+use super::Answer;
 use crate::{
-    storage::{FLASH_IDS_LEN, MCU_ID_LEN},
-    usb::{Face, KeyboardFormat, PollingRate, Speed},
+    storage::{FLASH_IDS_LEN, LEGACY_SERIAL_LEN, MCU_ID_LEN, SerialNumber},
+    usb::{Face, FeatureRequest, KeyboardFormat, PollingRate, Speed},
 };
 
 const VERSION: [u8; 3] = [2, 1, 2];
@@ -31,7 +27,7 @@ pub struct StockIdentity {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Responder {
+pub(super) struct Responder {
     serial: Option<SerialNumber>,
     device_settings: [u8; DEVICE_SETTINGS_LEN],
     mcu_id: [u8; MCU_ID_LEN],
@@ -47,7 +43,7 @@ enum SerialSelector {
 }
 
 impl Responder {
-    pub(crate) fn new(identity: StockIdentity) -> Self {
+    pub(super) fn new(identity: StockIdentity) -> Self {
         Self {
             serial: identity.serial.and_then(SerialNumber::parse),
             device_settings: device_settings(identity.face, identity.layout),
@@ -56,10 +52,12 @@ impl Responder {
         }
     }
 
-    pub(crate) fn answer<'a>(&self, queued: Queued, report: &'a mut [u8]) -> Answer<'a> {
-        let request = match queued {
-            Queued::Status { command, status } => return reply(command, status, &[], report),
-            Queued::Command(request) => request,
+    pub(super) fn answer<'a>(&self, request: FeatureRequest, report: &'a mut [u8]) -> Answer<'a> {
+        let request = match request {
+            FeatureRequest::Status { command, status } => {
+                return reply(command, status, &[], report);
+            }
+            FeatureRequest::Command(request) => request,
         };
         let command = request.command;
         let [low, ..] = request.argument.to_le_bytes();
@@ -93,7 +91,7 @@ impl Responder {
         .find(|selector| *selector as u32 == request.argument);
         match (selector, self.serial) {
             (Some(SerialSelector::Legacy), serial) => {
-                let legacy = serial.map_or([0; LEGACY_LEN], SerialNumber::to_legacy);
+                let legacy = serial.map_or([0; LEGACY_SERIAL_LEN], SerialNumber::to_legacy);
                 reply(command, Status::Success, &legacy, report)
             }
             (Some(SerialSelector::McuId), _) => {
@@ -111,11 +109,6 @@ impl Responder {
             (None, _) => reply(command, Status::Error, &[], report),
         }
     }
-}
-
-pub(crate) const fn accepts(command: u8) -> bool {
-    command < COMMAND_COUNT
-        && (command >= FIRST_CURRENT_COMMAND || Command::from_number(command).is_some())
 }
 
 fn reply<'a>(command: u8, status: Status, payload: &[u8], report: &'a mut [u8]) -> Answer<'a> {

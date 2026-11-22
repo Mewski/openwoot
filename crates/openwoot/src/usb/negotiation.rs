@@ -2,7 +2,7 @@ use embassy_usb::driver::{
     self, ControlPipe, Driver, EndpointAddress, EndpointAllocError, EndpointError, EndpointType,
 };
 
-use super::{Face, device::speed_dependent_interval};
+use super::{Face, Mode, interfaces::GAMEPAD_ENDPOINT};
 
 const CONTROL_PACKET_CAPACITY: usize = 64;
 const GET_DESCRIPTOR_REQUEST: [u8; 2] = [0x80, 0x06];
@@ -174,10 +174,15 @@ impl IntervalRewrite {
     }
 }
 
+fn speed_dependent_interval(face: Face, endpoint: EndpointAddress) -> Option<u8> {
+    (face.mode != Mode::NoGamepad && endpoint.index() == GAMEPAD_ENDPOINT)
+        .then(|| face.gamepad_interval())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usb::{Mode, PollingRate, Speed};
+    use crate::usb::{PollingRate, Speed};
 
     fn rewrite<const LEN: usize>(face: Face, mut descriptor: [u8; LEN]) -> [u8; LEN] {
         let mut rewrite = IntervalRewrite::new(face);

@@ -1,4 +1,4 @@
-use openwoot_protocol::REPORT_SIZES;
+use openwoot_protocol::report;
 
 use super::{
     descriptor::{Builder, Collection, MainFlags},
@@ -18,7 +18,7 @@ const fn descriptor() -> Builder {
         .usage_page(page::VENDOR_CHANNEL)
         .usage(0x01)
         .collection(Collection::Application);
-    let mut sizes: &[usize] = &REPORT_SIZES;
+    let mut sizes: &[usize] = &report::SIZES;
     let mut report_id = 1;
     while let [size, rest @ ..] = sizes {
         let input_usage = FIRST_INPUT_USAGE + (report_id as u16 - 1) * USAGE_STEP;

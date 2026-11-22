@@ -3,11 +3,12 @@ use openwoot::{
         BOOT_KEYBOARD_DESCRIPTOR, BootReport, CHANNEL_DESCRIPTOR, CHANNEL_FEATURE_REPORT_LEN,
         CONTROLS_DESCRIPTOR, ConsumerReport, GAMEPAD_DESCRIPTOR, GamepadReport, InputReport,
         KEY_STATE_DESCRIPTOR, KeyStateReport, MouseReport, NKRO_DESCRIPTOR, NkroReport,
-        PLACEHOLDER_DESCRIPTOR, PLACEHOLDER_LEN, SystemReport, XinputReport,
+        PLACEHOLDER_DESCRIPTOR, PLACEHOLDER_LEN, SystemReport,
     },
     usb::{Face, KeyboardFormat, Mode, PollingRate, Speed},
+    xinput,
 };
-use openwoot_protocol::REPORT_SIZES;
+use openwoot_protocol::report;
 
 use crate::support::{
     IDENTITY, Kind, Usages, configuration, enumerate, faces, parse_configuration,
@@ -56,7 +57,7 @@ fn report_descriptors_parse_into_the_sizes_of_the_typed_reports() {
         bytes_of(Kind::Input, 0, PLACEHOLDER_DESCRIPTOR),
         PLACEHOLDER_LEN
     );
-    for (report_id, size) in (1..).zip(REPORT_SIZES) {
+    for (report_id, size) in (1..).zip(report::SIZES) {
         assert_eq!(bytes_of(Kind::Input, report_id, CHANNEL_DESCRIPTOR), size);
         assert_eq!(bytes_of(Kind::Output, report_id, CHANNEL_DESCRIPTOR), size);
     }
@@ -64,7 +65,7 @@ fn report_descriptors_parse_into_the_sizes_of_the_typed_reports() {
         bytes_of(Kind::Feature, 1, CHANNEL_DESCRIPTOR),
         CHANNEL_FEATURE_REPORT_LEN
     );
-    assert_eq!(XinputReport::LEN, 20);
+    assert_eq!(xinput::Report::LEN, 20);
 }
 
 #[test]

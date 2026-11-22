@@ -3,15 +3,13 @@ use embassy_sync::{blocking_mutex::raw::RawMutex, mutex::Mutex};
 use embassy_time::{Instant, Timer};
 
 use crate::{
-    lighting::{
-        KeyEvent, KeyEvents, KeyTravel, LedMatrix, Lightbar, Lighting, OutputChange, Signals,
-    },
+    lighting::{self, KeyEvent, KeyEvents, KeyTravel, LedMatrix, Lightbar, OutputChange, Signals},
     usb::HostState,
 };
 
 pub const LIGHTING_POLL_MS: u64 = 4;
 
-pub struct LightingTask<
+pub struct Lighting<
     'd,
     M: RawMutex,
     H,
@@ -20,13 +18,13 @@ pub struct LightingTask<
     const PAGES: usize,
     const LENGTH: usize,
 > {
-    pub lighting: &'d Mutex<M, Lighting<H, ROWS, COLUMNS, PAGES, LENGTH>>,
+    pub lighting: &'d Mutex<M, lighting::Lighting<H, ROWS, COLUMNS, PAGES, LENGTH>>,
     pub events: &'d KeyEvents,
     pub host: &'d HostState,
 }
 
 impl<M, H, const ROWS: usize, const COLUMNS: usize, const PAGES: usize, const LENGTH: usize>
-    LightingTask<'_, M, H, ROWS, COLUMNS, PAGES, LENGTH>
+    Lighting<'_, M, H, ROWS, COLUMNS, PAGES, LENGTH>
 where
     M: RawMutex,
     H: Lightbar + Signals,

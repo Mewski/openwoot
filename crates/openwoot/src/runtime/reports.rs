@@ -7,9 +7,10 @@ use embassy_usb::driver::{Driver, EndpointIn, EndpointOut};
 use crate::{
     hid::{
         BootReport, ConsumerReport, GamepadReport, KeyStateReport, MouseReport, NkroReport,
-        PLACEHOLDER_LEN, SystemReport, XinputReport,
+        PLACEHOLDER_LEN, SystemReport,
     },
-    usb::{Configured, Face, Gamepad, HostState, KeyboardFormat, Protocol, write_report},
+    usb::{Face, Gamepad, HostState, KeyboardFormat, Protocol, write_report},
+    xinput,
 };
 
 const XINPUT_OUTPUT_CAPACITY: usize = 64;
@@ -17,7 +18,6 @@ const XINPUT_OUTPUT_CAPACITY: usize = 64;
 pub struct Reports<'d, D: Driver<'d>> {
     pub(super) face: Face,
     pub(super) host: &'d HostState,
-    pub(super) configured: &'d Configured,
     pub(super) gamepad: Gamepad<'d, D>,
     pub(super) keyboard: D::EndpointIn,
     pub(super) controls: D::EndpointIn,
@@ -26,12 +26,12 @@ pub struct Reports<'d, D: Driver<'d>> {
 
 impl<'d, D: Driver<'d>> Reports<'d, D> {
     pub async fn run(mut self) -> ! {
-        let configured = self.configured;
+        let host = self.host;
         loop {
-            let mut is_configured = configured.wait().await;
+            let mut is_configured = host.configuration_change().await;
             while is_configured {
-                is_configured = match select(self.send_idle(), configured.wait()).await {
-                    Either::First(()) => configured.wait().await,
+                is_configured = match select(self.send_idle(), host.configuration_change()).await {
+                    Either::First(()) => host.configuration_change().await,
                     Either::Second(next) => next,
                 };
             }
@@ -76,7 +76,7 @@ async fn send_idle_gamepad<'d, D: Driver<'d>>(gamepad: &mut Gamepad<'d, D>) {
         Gamepad::Xinput { input, output } => {
             let mut packet = [0; XINPUT_OUTPUT_CAPACITY];
             let report = async {
-                let _ = write_report(input, &XinputReport::default()).await;
+                let _ = write_report(input, &xinput::Report::default()).await;
             };
             let drain = async { while output.read(&mut packet).await.is_ok() {} };
             join(report, drain).await;

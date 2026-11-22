@@ -1,8 +1,8 @@
 use openwoot_protocol::{
     advanced,
-    config::{Capabilities, GlobalSettings, Rejection},
+    config::{Capabilities, Rejection},
     device::{self, Layout},
-    gamepad,
+    gamepad, global,
     keys::{self, Layer},
     lightbar, lighting,
     profile::{self, Slot, Summary},
@@ -34,11 +34,11 @@ pub trait Configuration {
         Err(Rejection::Unsupported)
     }
 
-    async fn global_settings(&mut self) -> Result<GlobalSettings, Rejection> {
+    async fn global_settings(&mut self) -> Result<global::Settings, Rejection> {
         Err(Rejection::Unsupported)
     }
 
-    async fn set_global_settings(&mut self, _settings: GlobalSettings) -> Result<(), Rejection> {
+    async fn set_global_settings(&mut self, _settings: global::Settings) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 

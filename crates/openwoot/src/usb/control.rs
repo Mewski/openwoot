@@ -1,19 +1,14 @@
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-
 use embassy_usb::{
     Handler,
     control::{InResponse, OutResponse, Recipient, Request, RequestType},
     types::StringIndex,
 };
 
-use super::xinput;
-use crate::{hid::Leds, protocol::FeatureRequests};
-
-pub(super) const INTERFACE_COUNT: usize = 5;
-pub(super) const KEYBOARD_INTERFACE: usize = 1;
-pub(super) const CHANNEL_INTERFACE: usize = 2;
-pub(super) const HID_DESCRIPTOR_TYPE: u8 = 0x21;
-pub(super) const REPORT_DESCRIPTOR_TYPE: u8 = 0x22;
+use super::{
+    HostState, Protocol, hid_class,
+    interfaces::{CHANNEL_INTERFACE, INTERFACE_COUNT, KEYBOARD_INTERFACE},
+};
+use crate::xinput;
 
 const GET_REPORT: u8 = 0x01;
 const GET_IDLE: u8 = 0x02;
@@ -23,26 +18,8 @@ const SET_IDLE: u8 = 0x0A;
 const SET_PROTOCOL: u8 = 0x0B;
 const OUTPUT_REPORT_TYPE: u8 = 0x02;
 const FEATURE_REPORT_TYPE: u8 = 0x03;
-const HID_DESCRIPTOR_LEN: u8 = 9;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Protocol {
-    Boot,
-    #[default]
-    Report,
-}
-
-#[derive(Debug, Default)]
-pub struct HostState {
-    keyboard_leds: AtomicU8,
-    keyboard_boot_protocol: AtomicBool,
-    feature_requests: FeatureRequests,
-    configured: AtomicBool,
-    suspended: AtomicBool,
-}
-
-#[derive(Debug)]
-pub struct Control<'d> {
+pub(super) struct Control<'d> {
     host: &'d HostState,
     interfaces: [Option<HidInterface>; INTERFACE_COUNT],
     xinput: bool,
@@ -53,70 +30,6 @@ struct HidInterface {
     report_descriptor: &'static [u8],
     idle: u8,
     protocol: Protocol,
-}
-
-impl HostState {
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            keyboard_leds: AtomicU8::new(0),
-            keyboard_boot_protocol: AtomicBool::new(false),
-            feature_requests: FeatureRequests::new(),
-            configured: AtomicBool::new(false),
-            suspended: AtomicBool::new(false),
-        }
-    }
-
-    pub fn keyboard_leds(&self) -> Leds {
-        Leds::from_bits(self.keyboard_leds.load(Ordering::Relaxed))
-    }
-
-    pub fn keyboard_protocol(&self) -> Protocol {
-        if self.keyboard_boot_protocol.load(Ordering::Relaxed) {
-            Protocol::Boot
-        } else {
-            Protocol::Report
-        }
-    }
-
-    pub const fn feature_requests(&self) -> &FeatureRequests {
-        &self.feature_requests
-    }
-
-    pub fn is_active(&self) -> bool {
-        self.configured.load(Ordering::Relaxed) && !self.suspended.load(Ordering::Relaxed)
-    }
-
-    fn set_keyboard_protocol(&self, protocol: Protocol) {
-        self.keyboard_boot_protocol
-            .store(protocol == Protocol::Boot, Ordering::Relaxed);
-    }
-
-    fn receive_report(
-        &self,
-        interface: usize,
-        [report_type, report_id]: [u8; 2],
-        data: &[u8],
-    ) -> OutResponse {
-        match (interface, report_type, data) {
-            (KEYBOARD_INTERFACE, OUTPUT_REPORT_TYPE, [leds, ..]) => {
-                self.keyboard_leds.store(*leds, Ordering::Relaxed);
-                OutResponse::Accepted
-            }
-            (CHANNEL_INTERFACE, FEATURE_REPORT_TYPE, [first, rest @ ..])
-                if report_id != 0 && *first == report_id =>
-            {
-                self.feature_requests.submit(rest);
-                OutResponse::Accepted
-            }
-            (CHANNEL_INTERFACE, FEATURE_REPORT_TYPE, _) => {
-                self.feature_requests.submit(data);
-                OutResponse::Accepted
-            }
-            (CHANNEL_INTERFACE, ..) => OutResponse::Accepted,
-            _ => OutResponse::Rejected,
-        }
-    }
 }
 
 impl<'d> Control<'d> {
@@ -146,6 +59,32 @@ impl<'d> Control<'d> {
         let interface = self.interfaces.get_mut(number)?.as_mut()?;
         Some((number, interface))
     }
+
+    fn receive_report(
+        &self,
+        interface: usize,
+        [report_type, report_id]: [u8; 2],
+        data: &[u8],
+    ) -> OutResponse {
+        match (interface, report_type, data) {
+            (KEYBOARD_INTERFACE, OUTPUT_REPORT_TYPE, [leds, ..]) => {
+                self.host.set_keyboard_leds(*leds);
+                OutResponse::Accepted
+            }
+            (CHANNEL_INTERFACE, FEATURE_REPORT_TYPE, [first, rest @ ..])
+                if report_id != 0 && *first == report_id =>
+            {
+                self.host.feature_requests().submit(rest);
+                OutResponse::Accepted
+            }
+            (CHANNEL_INTERFACE, FEATURE_REPORT_TYPE, _) => {
+                self.host.feature_requests().submit(data);
+                OutResponse::Accepted
+            }
+            (CHANNEL_INTERFACE, ..) => OutResponse::Accepted,
+            _ => OutResponse::Rejected,
+        }
+    }
 }
 
 impl Handler for Control<'_> {
@@ -155,21 +94,21 @@ impl Handler for Control<'_> {
             interface.protocol = Protocol::Report;
         }
         self.host.set_keyboard_protocol(Protocol::Report);
-        self.host.configured.store(false, Ordering::Relaxed);
+        self.host.set_configured(false);
     }
 
     fn enabled(&mut self, enabled: bool) {
         if !enabled {
-            self.host.configured.store(false, Ordering::Relaxed);
+            self.host.set_configured(false);
         }
     }
 
     fn configured(&mut self, configured: bool) {
-        self.host.configured.store(configured, Ordering::Relaxed);
+        self.host.set_configured(configured);
     }
 
     fn suspended(&mut self, suspended: bool) {
-        self.host.suspended.store(suspended, Ordering::Relaxed);
+        self.host.set_suspended(suspended);
     }
 
     fn control_out(&mut self, req: Request, data: &[u8]) -> Option<OutResponse> {
@@ -196,7 +135,7 @@ impl Handler for Control<'_> {
                 }
                 Some(OutResponse::Accepted)
             }
-            SET_REPORT => Some(host.receive_report(number, [high, low], data)),
+            SET_REPORT => Some(self.receive_report(number, [high, low], data)),
             _ => Some(OutResponse::Rejected),
         }
     }
@@ -216,14 +155,11 @@ impl Handler for Control<'_> {
         let (number, interface) = self.hid_interface(&req)?;
         let response = match (req.request_type, req.request) {
             (RequestType::Standard, Request::GET_DESCRIPTOR) => match high {
-                REPORT_DESCRIPTOR_TYPE => InResponse::Accepted(interface.report_descriptor),
-                HID_DESCRIPTOR_TYPE => {
-                    let mut descriptor = [0; HID_DESCRIPTOR_LEN as usize];
-                    if let Some((head, body)) = descriptor.split_first_chunk_mut::<2>() {
-                        *head = [HID_DESCRIPTOR_LEN, HID_DESCRIPTOR_TYPE];
-                        body.copy_from_slice(&hid_class_descriptor(interface.report_descriptor));
-                    }
-                    copy_into(buf, &descriptor)
+                hid_class::REPORT_DESCRIPTOR_TYPE => {
+                    InResponse::Accepted(interface.report_descriptor)
+                }
+                hid_class::DESCRIPTOR_TYPE => {
+                    copy_into(buf, &hid_class::descriptor(interface.report_descriptor))
                 }
                 _ => InResponse::Rejected,
             },
@@ -245,21 +181,6 @@ impl Handler for Control<'_> {
         (self.xinput && u8::from(index) == xinput::MS_OS_STRING_INDEX)
             .then_some(xinput::MS_OS_STRING)
     }
-}
-
-pub(super) fn hid_class_descriptor(report_descriptor: &[u8]) -> [u8; 7] {
-    let [length_low, length_high] = u16::try_from(report_descriptor.len())
-        .unwrap_or(u16::MAX)
-        .to_le_bytes();
-    [
-        0x11,
-        0x01,
-        0x00,
-        0x01,
-        REPORT_DESCRIPTOR_TYPE,
-        length_low,
-        length_high,
-    ]
 }
 
 fn copy_into<'a>(buf: &'a mut [u8], bytes: &[u8]) -> InResponse<'a> {

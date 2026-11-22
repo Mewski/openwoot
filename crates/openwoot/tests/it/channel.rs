@@ -1,12 +1,14 @@
 use std::pin::pin;
 
 use openwoot::{
-    protocol::{Channel, FeatureRequests, Handler},
-    usb::{Face, HostState, Resources, build},
+    protocol::{Channel, Handler},
+    usb::{Face, FeatureRequests, HostState, Resources, build},
 };
 use openwoot_protocol::{
-    EnterUpdateMode, Error, FirmwareVersion, GetVersion, Key, MAX_REPORT_LEN, PROTOCOL_VERSION,
-    VarHeader, VarKey, VarSeq, Version, WireError, decode_response, encode_message, encode_request,
+    Error, FirmwareVersion, Key, PROTOCOL_VERSION, VarHeader, VarKey, VarSeq, Version, WireError,
+    decode_response, encode_message, encode_request,
+    endpoints::{EnterUpdateMode, GetVersion},
+    report,
 };
 
 use crate::support::{Host, IDENTITY, Recorder, poll, stock_identity};
@@ -45,7 +47,7 @@ fn exchange(request: &[u8]) -> (Vec<u8>, Recorder) {
 
 #[test]
 fn get_version_round_trips_through_the_channel_endpoints() {
-    let mut request = [0; MAX_REPORT_LEN];
+    let mut request = [0; report::MAX_LEN];
     let request = encode_request::<GetVersion>(42, &(), &mut request).unwrap();
     let (response, keyboard) = exchange(request);
     assert_eq!(response.len(), 33);
@@ -59,7 +61,7 @@ fn get_version_round_trips_through_the_channel_endpoints() {
 
 #[test]
 fn enter_update_mode_answers_then_hands_over_to_the_bootloader_once() {
-    let mut request = [0; MAX_REPORT_LEN];
+    let mut request = [0; report::MAX_LEN];
     let request = encode_request::<EnterUpdateMode>(5, &(), &mut request).unwrap();
     let (response, keyboard) = exchange(request);
     assert_eq!(
@@ -75,7 +77,7 @@ fn an_unknown_endpoint_gets_an_error_reply() {
         key: VarKey::Key8(Key::for_path::<u8>("openwoot/unknown")),
         seq_no: VarSeq::Seq2(9),
     };
-    let mut request = [0; MAX_REPORT_LEN];
+    let mut request = [0; report::MAX_LEN];
     let request = encode_message(&header, &7_u8, &mut request).unwrap();
     let (response, keyboard) = exchange(request);
     assert_eq!(
@@ -91,7 +93,7 @@ fn a_large_request_spans_many_packets() {
         key: VarKey::Key8(Key::for_path::<u8>("openwoot/bulk")),
         seq_no: VarSeq::Seq2(1),
     };
-    let mut request = [0; MAX_REPORT_LEN];
+    let mut request = [0; report::MAX_LEN];
     let body = [0xA5_u8; 1500];
     let request = encode_message(&header, &body[..], &mut request).unwrap();
     assert_eq!(request.len(), 2047);

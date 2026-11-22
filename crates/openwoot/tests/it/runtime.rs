@@ -11,11 +11,11 @@ use openwoot::{
         InputReport, KEY_STATE_DESCRIPTOR, KeyStateReport, MouseReport, NKRO_DESCRIPTOR,
         NkroReport, PLACEHOLDER_DESCRIPTOR, PLACEHOLDER_LEN, SystemReport,
     },
-    protocol::Handler,
-    runtime::{self, Usb},
+    protocol::{self, Handler},
+    runtime::Usb,
     usb::{Face, HostState, KeyboardFormat, Mode, PollingRate, Resources, Speed},
 };
-use openwoot_protocol::{GetVersion, MAX_REPORT_LEN, decode_response, encode_request};
+use openwoot_protocol::{decode_response, encode_request, endpoints::GetVersion, report};
 
 use crate::support::{
     EXAMPLE_SERIAL, Host, IDENTITY, Outcome, Recorder, parse_configuration, poll, setup,
@@ -63,19 +63,19 @@ fn connect(
         &mut resources,
         &state,
     );
-    let mut keyboard = Recorder::default();
+    let mut update_mode = Recorder::default();
     let handler = Handler::new(
-        runtime::version("1", "2", "3"),
+        protocol::version("1", "2", "3"),
         stock_identity(Some(EXAMPLE_SERIAL)),
     );
     let Usb {
         mut device,
-        configuration,
+        channel,
         reports,
     } = usb;
     let mut firmware = pin!(join3(
         device.run(),
-        configuration.run(handler, &mut keyboard),
+        channel.run(handler, &mut update_mode),
         reports.run(),
     ));
     host.attach(firmware.as_mut());
@@ -132,7 +132,7 @@ fn gamepad_face(polling: PollingRate) -> Face {
 
 #[test]
 fn the_firmware_enumerates_and_answers_get_version_at_both_speeds() {
-    let mut request = [0; MAX_REPORT_LEN];
+    let mut request = [0; report::MAX_LEN];
     let request = encode_request::<GetVersion>(7, &(), &mut request).unwrap();
     for negotiated_speed in [HIGH_SPEED, FULL_SPEED] {
         let session = connect(Face::default(), negotiated_speed, request).unwrap();
@@ -157,7 +157,7 @@ fn the_firmware_enumerates_and_answers_get_version_at_both_speeds() {
         let version = decode_response::<GetVersion>(7, &session.version_response)
             .unwrap()
             .unwrap();
-        assert_eq!(version, runtime::version("1", "2", "3"));
+        assert_eq!(version, protocol::version("1", "2", "3"));
     }
 }
 

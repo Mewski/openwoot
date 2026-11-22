@@ -6,7 +6,6 @@ mod key_state;
 mod keyboard;
 mod placeholder;
 mod usage;
-mod xinput;
 
 pub use channel::{
     DESCRIPTOR as CHANNEL_DESCRIPTOR, FEATURE_REPORT_ID as CHANNEL_FEATURE_REPORT_ID,
@@ -31,9 +30,6 @@ pub use keyboard::{
     Modifiers, NKRO_BITMAP_LEN, NKRO_DESCRIPTOR, NKRO_KEY_GROUPS, NkroReport,
 };
 pub use placeholder::{DESCRIPTOR as PLACEHOLDER_DESCRIPTOR, LEN as PLACEHOLDER_LEN};
-pub use xinput::{
-    Buttons as XinputButtons, LEN as XINPUT_REPORT_LEN, Report as XinputReport, Stick,
-};
 
 pub trait InputReport {
     const ID: Option<u8>;

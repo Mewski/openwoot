@@ -1,32 +1,24 @@
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
 use embassy_usb::{
-    Builder, Config, Handler, UsbDevice, UsbVersion,
+    Builder, Config, UsbDevice, UsbVersion,
     driver::{Direction, Driver, EndpointAddress},
 };
-use openwoot_image::UsbIds;
 
 use super::{
-    Control, Face, HostState, KeyboardFormat, Mode,
-    control::{CHANNEL_INTERFACE, HID_DESCRIPTOR_TYPE, KEYBOARD_INTERFACE, hid_class_descriptor},
-    xinput,
+    Face, HostState, Identity, KeyboardFormat, Mode,
+    control::Control,
+    hid_class,
+    interfaces::{
+        CHANNEL_ENDPOINT, CHANNEL_INTERFACE, CONTROLS_ENDPOINT, CONTROLS_INTERFACE,
+        GAMEPAD_ENDPOINT, GAMEPAD_INTERFACE, KEY_STATE_ENDPOINT, KEY_STATE_INTERFACE,
+        KEYBOARD_ENDPOINT, KEYBOARD_INTERFACE,
+    },
 };
-use crate::hid;
+use crate::{hid, xinput};
 
 const CONFIG_DESCRIPTOR_LEN: usize = 256;
 const BOS_DESCRIPTOR_LEN: usize = 16;
 const CONTROL_BUFFER_LEN: usize = 128;
 const MAX_POWER_MILLIAMPERES: u16 = 400;
-const HID_CLASS: u8 = 0x03;
-const BOOT_SUBCLASS: u8 = 0x01;
-const KEYBOARD_PROTOCOL: u8 = 0x01;
-const GAMEPAD_INTERFACE: usize = 0;
-const CONTROLS_INTERFACE: usize = 3;
-const KEY_STATE_INTERFACE: usize = 4;
-const GAMEPAD_ENDPOINT: usize = 1;
-const KEYBOARD_ENDPOINT: usize = 2;
-const CHANNEL_ENDPOINT: usize = 3;
-const CONTROLS_ENDPOINT: usize = 4;
-const KEY_STATE_ENDPOINT: usize = 5;
 const GAMEPAD_MAX_PACKET_SIZE: u16 = 32;
 const PLACEHOLDER_INTERVAL: u8 = 10;
 const NKRO_INTERVAL: u8 = 1;
@@ -36,25 +28,12 @@ const CHANNEL_INTERVAL: u8 = 1;
 const CONTROLS_MAX_PACKET_SIZE: u16 = 8;
 const CONTROLS_INTERVAL: u8 = 4;
 const KEY_STATE_INTERVAL: u8 = 1;
-const SERIAL_NUMBER_CAPACITY: usize = 49;
-
-pub type Configured = Signal<CriticalSectionRawMutex, bool>;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Identity<'a> {
-    pub ids: UsbIds,
-    pub manufacturer: &'a str,
-    pub product: &'a str,
-    pub serial_number: Option<&'a str>,
-}
 
 pub struct Resources<'d> {
     config_descriptor: [u8; CONFIG_DESCRIPTOR_LEN],
     bos_descriptor: [u8; BOS_DESCRIPTOR_LEN],
     control_buffer: [u8; CONTROL_BUFFER_LEN],
     control: Option<Control<'d>>,
-    configured: Configured,
-    configuration: Option<Configuration<'d>>,
 }
 
 pub struct ChannelEndpoints<'d, D: Driver<'d>> {
@@ -73,16 +52,11 @@ pub enum Gamepad<'d, D: Driver<'d>> {
 
 pub struct Device<'d, D: Driver<'d>> {
     pub usb: UsbDevice<'d, D>,
-    pub configured: &'d Configured,
     pub gamepad: Gamepad<'d, D>,
     pub keyboard: D::EndpointIn,
     pub channel: ChannelEndpoints<'d, D>,
     pub controls: D::EndpointIn,
     pub key_states: D::EndpointIn,
-}
-
-struct Configuration<'d> {
-    configured: &'d Configured,
 }
 
 impl Resources<'_> {
@@ -93,8 +67,6 @@ impl Resources<'_> {
             bos_descriptor: [0; BOS_DESCRIPTOR_LEN],
             control_buffer: [0; CONTROL_BUFFER_LEN],
             control: None,
-            configured: Signal::new(),
-            configuration: None,
         }
     }
 }
@@ -117,11 +89,7 @@ pub fn build<'d, D: Driver<'d>>(
         bos_descriptor,
         control_buffer,
         control,
-        configured,
-        configuration,
     } = resources;
-    let configured: &'d Configured = configured;
-    let configuration = configuration.insert(Configuration { configured });
     let control = control.insert(Control::new(host, face.mode == Mode::Xinput));
     let mut builder = Builder::new(
         driver,
@@ -154,47 +122,14 @@ pub fn build<'d, D: Driver<'d>>(
         KEY_STATE_INTERVAL,
     );
     builder.handler(control);
-    builder.handler(configuration);
 
     Device {
         usb: builder.build(),
-        configured,
         gamepad,
         keyboard,
         channel,
         controls,
         key_states,
-    }
-}
-
-#[must_use]
-pub fn serial_number_from_page(page: &[u8]) -> Option<&str> {
-    let (&len, text) = page.split_first()?;
-    let text = core::str::from_utf8(text.get(..usize::from(len))?).ok()?;
-    let printable = !text.is_empty()
-        && text.len() <= SERIAL_NUMBER_CAPACITY
-        && text.bytes().all(|byte| byte.is_ascii_graphic());
-    printable.then_some(text)
-}
-
-pub(super) fn speed_dependent_interval(face: Face, endpoint: EndpointAddress) -> Option<u8> {
-    (face.mode != Mode::NoGamepad && endpoint.index() == GAMEPAD_ENDPOINT)
-        .then(|| face.gamepad_interval())
-}
-
-impl Handler for Configuration<'_> {
-    fn enabled(&mut self, enabled: bool) {
-        if !enabled {
-            self.configured.signal(false);
-        }
-    }
-
-    fn reset(&mut self) {
-        self.configured.signal(false);
-    }
-
-    fn configured(&mut self, configured: bool) {
-        self.configured.signal(configured);
     }
 }
 
@@ -292,10 +227,15 @@ fn keyboard_interface<'d, D: Driver<'d>>(
     control.add_hid_interface(KEYBOARD_INTERFACE, report_descriptor);
     let mut function = builder.function(0, 0, 0);
     let mut interface = function.interface();
-    let mut alternate = interface.alt_setting(HID_CLASS, BOOT_SUBCLASS, KEYBOARD_PROTOCOL, None);
+    let mut alternate = interface.alt_setting(
+        hid_class::CLASS,
+        hid_class::BOOT_SUBCLASS,
+        hid_class::KEYBOARD_PROTOCOL,
+        None,
+    );
     alternate.descriptor(
-        HID_DESCRIPTOR_TYPE,
-        &hid_class_descriptor(report_descriptor),
+        hid_class::DESCRIPTOR_TYPE,
+        &hid_class::descriptor_body(report_descriptor),
     );
     alternate.endpoint_interrupt_in(
         Some(EndpointAddress::from_parts(
@@ -314,10 +254,10 @@ fn channel_interface<'d, D: Driver<'d>>(
     control.add_hid_interface(CHANNEL_INTERFACE, hid::CHANNEL_DESCRIPTOR);
     let mut function = builder.function(0, 0, 0);
     let mut interface = function.interface();
-    let mut alternate = interface.alt_setting(HID_CLASS, 0, 0, None);
+    let mut alternate = interface.alt_setting(hid_class::CLASS, 0, 0, None);
     alternate.descriptor(
-        HID_DESCRIPTOR_TYPE,
-        &hid_class_descriptor(hid::CHANNEL_DESCRIPTOR),
+        hid_class::DESCRIPTOR_TYPE,
+        &hid_class::descriptor_body(hid::CHANNEL_DESCRIPTOR),
     );
     let output = alternate.endpoint_interrupt_out(
         Some(EndpointAddress::from_parts(
@@ -347,10 +287,10 @@ fn hid_input_interface<'d, D: Driver<'d>>(
     control.add_hid_interface(number, report_descriptor);
     let mut function = builder.function(0, 0, 0);
     let mut interface = function.interface();
-    let mut alternate = interface.alt_setting(HID_CLASS, 0, 0, None);
+    let mut alternate = interface.alt_setting(hid_class::CLASS, 0, 0, None);
     alternate.descriptor(
-        HID_DESCRIPTOR_TYPE,
-        &hid_class_descriptor(report_descriptor),
+        hid_class::DESCRIPTOR_TYPE,
+        &hid_class::descriptor_body(report_descriptor),
     );
     alternate.endpoint_interrupt_in(
         Some(EndpointAddress::from_parts(endpoint, Direction::In)),
@@ -361,27 +301,4 @@ fn hid_input_interface<'d, D: Driver<'d>>(
 
 fn max_packet_size(report_len: usize) -> u16 {
     u16::try_from(report_len).unwrap_or(u16::MAX)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_serial_page_holds_a_length_byte_and_the_text() {
-        let mut page = [0xFF; 64];
-        assert_eq!(serial_number_from_page(&page), None);
-        let text = b"A02B2412W031H01234";
-        page[0] = 18;
-        page[1..19].copy_from_slice(text);
-        assert_eq!(serial_number_from_page(&page), Some("A02B2412W031H01234"));
-        page[0] = 0;
-        assert_eq!(serial_number_from_page(&page), None);
-        page[0] = 19;
-        assert_eq!(serial_number_from_page(&page), None);
-        page[0] = 50;
-        page[1..51].fill(b'A');
-        assert_eq!(serial_number_from_page(&page), None);
-        assert_eq!(serial_number_from_page(&[]), None);
-    }
 }

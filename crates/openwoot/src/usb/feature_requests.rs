@@ -1,21 +1,21 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-use openwoot_protocol::stock::{Request, Status, WrongMagic};
-
-use super::stock;
+use openwoot_protocol::stock::{
+    COMMAND_COUNT, Command, FIRST_CURRENT_COMMAND, Request, Status, WrongMagic,
+};
 
 const QUEUE_LEN: usize = 4;
 const PENDING_COMMANDS: u8 = 3;
 
 #[derive(Debug)]
 pub struct FeatureRequests {
-    queue: Channel<CriticalSectionRawMutex, Queued, QUEUE_LEN>,
+    queue: Channel<CriticalSectionRawMutex, FeatureRequest, QUEUE_LEN>,
     pending_commands: AtomicU8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Queued {
+pub(crate) enum FeatureRequest {
     Command(Request),
     Status { command: u8, status: Status },
 }
@@ -29,35 +29,35 @@ impl FeatureRequests {
         }
     }
 
-    pub(crate) fn submit(&self, data: &[u8]) {
-        let queued = match Request::parse(data) {
-            Err(WrongMagic { command }) => Queued::Status {
+    pub(super) fn submit(&self, data: &[u8]) {
+        let request = match Request::parse(data) {
+            Err(WrongMagic { command }) => FeatureRequest::Status {
                 command,
                 status: Status::Error,
             },
-            Ok(request) if !stock::accepts(request.command) => Queued::Status {
+            Ok(request) if !accepts(request.command) => FeatureRequest::Status {
                 command: request.command,
                 status: Status::Unknown,
             },
             Ok(request) if self.pending_commands.load(Ordering::Relaxed) >= PENDING_COMMANDS => {
-                Queued::Status {
+                FeatureRequest::Status {
                     command: request.command,
                     status: Status::Busy,
                 }
             }
-            Ok(request) => Queued::Command(request),
+            Ok(request) => FeatureRequest::Command(request),
         };
-        if self.queue.try_send(queued).is_ok() && matches!(queued, Queued::Command(_)) {
+        if self.queue.try_send(request).is_ok() && matches!(request, FeatureRequest::Command(_)) {
             self.pending_commands.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    pub(crate) async fn receive(&self) -> Queued {
-        let queued = self.queue.receive().await;
-        if matches!(queued, Queued::Command(_)) {
+    pub(crate) async fn receive(&self) -> FeatureRequest {
+        let request = self.queue.receive().await;
+        if matches!(request, FeatureRequest::Command(_)) {
             self.pending_commands.fetch_sub(1, Ordering::Relaxed);
         }
-        queued
+        request
     }
 }
 
@@ -67,13 +67,18 @@ impl Default for FeatureRequests {
     }
 }
 
+const fn accepts(command: u8) -> bool {
+    command < COMMAND_COUNT
+        && (command >= FIRST_CURRENT_COMMAND || Command::from_number(command).is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use embassy_futures::block_on;
 
     use super::*;
 
-    fn drain(requests: &FeatureRequests) -> [Option<Queued>; QUEUE_LEN] {
+    fn drain(requests: &FeatureRequests) -> [Option<FeatureRequest>; QUEUE_LEN] {
         core::array::from_fn(|_| requests.queue.try_receive().ok())
     }
 
@@ -87,19 +92,19 @@ mod tests {
         assert_eq!(
             drain(&requests),
             [
-                Some(Queued::Status {
+                Some(FeatureRequest::Status {
                     command: 1,
                     status: Status::Error
                 }),
-                Some(Queued::Status {
+                Some(FeatureRequest::Status {
                     command: 4,
                     status: Status::Unknown
                 }),
-                Some(Queued::Status {
+                Some(FeatureRequest::Status {
                     command: 89,
                     status: Status::Unknown
                 }),
-                Some(Queued::Command(Request {
+                Some(FeatureRequest::Command(Request {
                     command: 38,
                     argument: 0
                 })),
@@ -115,7 +120,7 @@ mod tests {
         }
         assert_eq!(
             block_on(requests.receive()),
-            Queued::Command(Request {
+            FeatureRequest::Command(Request {
                 command: 0,
                 argument: 0
             })
@@ -124,15 +129,15 @@ mod tests {
         assert_eq!(
             drain(&requests),
             [
-                Some(Queued::Command(Request {
+                Some(FeatureRequest::Command(Request {
                     command: 1,
                     argument: 0
                 })),
-                Some(Queued::Command(Request {
+                Some(FeatureRequest::Command(Request {
                     command: 3,
                     argument: 0
                 })),
-                Some(Queued::Status {
+                Some(FeatureRequest::Status {
                     command: 19,
                     status: Status::Busy
                 }),

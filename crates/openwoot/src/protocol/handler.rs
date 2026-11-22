@@ -1,19 +1,23 @@
 use openwoot_protocol::{
-    ActivateProfile, CreateProfile, DeleteProfile, ERROR_KEY, Endpoint, EnterUpdateMode,
-    FactoryReset, GetAdvancedKeys, GetCapabilities, GetDeviceSettings, GetGamepadMapping,
-    GetGamepadSettings, GetGlobalLightbar, GetGlobalSettings, GetHostSignals, GetKeyColors,
-    GetKeyOverrides, GetKeySettings, GetKeymap, GetLayout, GetLightbar, GetLighting,
-    GetProfileInfo, GetProfileRevision, GetProfiles, GetSwitchModels, GetSwitches, GetVersion, Key,
-    Message, Revert, Save, SetAdvancedKeys, SetDeviceSettings, SetGamepadMapping,
-    SetGamepadSettings, SetGlobalLightbar, SetGlobalSettings, SetHostSignals, SetKeyColors,
-    SetKeyOverrides, SetKeySettings, SetKeymap, SetLayout, SetLightbar, SetLighting,
-    SetProfileInfo, SetSwitches, VarKey, Version, WireError,
+    ERROR_KEY, Endpoint, Key, Message, VarKey, Version, WireError,
     config::{Rejection, Validate},
     decode_message, encode_message,
+    endpoints::{
+        ActivateProfile, CreateProfile, DeleteProfile, EnterUpdateMode, FactoryReset,
+        GetAdvancedKeys, GetCapabilities, GetDeviceSettings, GetGamepadMapping, GetGamepadSettings,
+        GetGlobalLightbar, GetGlobalSettings, GetHostSignals, GetKeyColors, GetKeyOverrides,
+        GetKeySettings, GetKeymap, GetLayout, GetLightbar, GetLighting, GetProfileInfo,
+        GetProfileRevision, GetProfiles, GetSwitchModels, GetSwitches, GetVersion, Revert, Save,
+        SetAdvancedKeys, SetDeviceSettings, SetGamepadMapping, SetGamepadSettings,
+        SetGlobalLightbar, SetGlobalSettings, SetHostSignals, SetKeyColors, SetKeyOverrides,
+        SetKeySettings, SetKeymap, SetLayout, SetLightbar, SetLighting, SetProfileInfo,
+        SetSwitches,
+    },
 };
 use serde::{Serialize, de::DeserializeOwned};
 
-use super::{Configuration, StockIdentity, requests::Queued, stock::Responder};
+use super::{Configuration, StockIdentity, stock::Responder};
+use crate::usb::FeatureRequest;
 
 const UPDATE_MODE_OPTION: u8 = 0;
 
@@ -75,8 +79,12 @@ impl<C: Configuration> Handler<C> {
         }
     }
 
-    pub(crate) fn answer_stock<'a>(&self, queued: Queued, response: &'a mut [u8]) -> Answer<'a> {
-        self.stock.answer(queued, response)
+    pub(super) fn answer_stock<'a>(
+        &self,
+        request: FeatureRequest,
+        response: &'a mut [u8],
+    ) -> Answer<'a> {
+        self.stock.answer(request, response)
     }
 }
 

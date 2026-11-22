@@ -3,15 +3,17 @@ use core::future::{Future, ready};
 use embassy_futures::block_on;
 use openwoot::protocol::{Configuration, Handler};
 use openwoot_protocol::{
-    ActivateProfile, Endpoint, FirmwareVersion, GetCapabilities, GetKeymap, GetVersion,
-    MAX_REPORT_LEN, PROTOCOL_VERSION, Save, SetKeymap, SetLighting, VarHeader, VarKey, VarSeq,
-    Version, WireError,
+    Endpoint, FirmwareVersion, PROTOCOL_VERSION, VarHeader, VarKey, VarSeq, Version, WireError,
     config::{Capabilities, Invalid, Rejection},
     decode_response, encode_message, encode_request,
+    endpoints::{
+        ActivateProfile, GetCapabilities, GetKeymap, GetVersion, Save, SetKeymap, SetLighting,
+    },
     heapless::Vec,
     keys::{Action, Keymap, Layer},
     lighting::{self, Indicators},
     profile::{Change, LayerChange, LayerRef, Slot},
+    report,
 };
 
 use crate::support::stock_identity;
@@ -89,9 +91,9 @@ impl Configuration for Memory {
 
 macro_rules! ask {
     ($handler:expr, $endpoint:ty, $request:expr) => {{
-        let mut request = [0; MAX_REPORT_LEN];
+        let mut request = [0; report::MAX_LEN];
         let request = encode_request::<$endpoint>(SEQUENCE, &$request, &mut request).unwrap();
-        let mut response = [0; MAX_REPORT_LEN];
+        let mut response = [0; report::MAX_LEN];
         let answer = block_on($handler.respond(request, &mut response));
         assert_eq!(answer.update_mode, None);
         decode_response::<$endpoint>(SEQUENCE, answer.reply.unwrap())
@@ -225,9 +227,9 @@ fn a_body_that_does_not_decode_answers_deser_failed() {
         key: VarKey::Key8(SetKeymap::REQ_KEY),
         seq_no: VarSeq::Seq2(SEQUENCE),
     };
-    let mut request = [0; MAX_REPORT_LEN];
+    let mut request = [0; report::MAX_LEN];
     let request = encode_message(&header, &(), &mut request).unwrap();
-    let mut response = [0; MAX_REPORT_LEN];
+    let mut response = [0; report::MAX_LEN];
     let answer = block_on(handler.respond(request, &mut response));
     assert_eq!(
         decode_response::<SetKeymap>(SEQUENCE, answer.reply.unwrap()),
