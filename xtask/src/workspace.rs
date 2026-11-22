@@ -1,12 +1,9 @@
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use cargo_metadata::{Metadata, MetadataCommand, Package, TargetKind};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct Board {
     pub(crate) name: String,
     pub(crate) binary: String,
@@ -56,10 +53,10 @@ impl Workspace {
             .iter()
             .find(|board| board.name == name)
             .with_context(|| {
-                let known: Vec<&str> = self
+                let known: Vec<String> = self
                     .boards
                     .iter()
-                    .map(|board| board.name.as_str())
+                    .map(|board| format!("`{}`", board.name))
                     .collect();
                 format!("unknown board `{name}`; boards: {}", known.join(", "))
             })
@@ -133,18 +130,4 @@ impl Workspace {
 
 pub(crate) fn chip_target(package: &Package) -> Option<&str> {
     package.metadata.get("openwoot")?.get("target")?.as_str()
-}
-
-pub(crate) fn cargo(root: &Path) -> Command {
-    let mut command = Command::new("cargo");
-    command.current_dir(root);
-    command
-}
-
-pub(crate) fn execute(command: &mut Command) -> Result<()> {
-    let status = command
-        .status()
-        .with_context(|| format!("could not start {command:?}"))?;
-    ensure!(status.success(), "{command:?} ended with {status}");
-    Ok(())
 }

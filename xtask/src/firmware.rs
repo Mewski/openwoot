@@ -1,14 +1,13 @@
 use std::{fs, path::PathBuf};
 
-use anyhow::{Context, Result, anyhow, ensure};
+use anyhow::{Context, Result, ensure};
 use ihex::Record;
-use object::{
-    LittleEndian,
-    elf::{FileHeader32, PT_LOAD},
-    read::elf::{FileHeader, ProgramHeader, SectionHeader},
-};
 
-use crate::workspace::{self, Board, Workspace};
+use crate::{
+    elf::{Elf, Segment},
+    process,
+    workspace::{Board, Workspace},
+};
 
 const HEX_RECORD_LEN: usize = 16;
 const ERASED_BYTE: u8 = 0xFF;
@@ -19,25 +18,9 @@ pub(crate) struct Images {
     pub(crate) bin: PathBuf,
 }
 
-pub(crate) struct Segment<'a> {
-    pub(crate) address: u32,
-    pub(crate) bytes: &'a [u8],
-}
-
-pub(crate) struct Section<'a> {
-    pub(crate) address: u32,
-    pub(crate) bytes: &'a [u8],
-}
-
-pub(crate) struct Elf<'a> {
-    data: &'a [u8],
-    header: &'a FileHeader32<LittleEndian>,
-    endian: LittleEndian,
-}
-
 pub(crate) fn build(workspace: &Workspace, board: &Board) -> Result<Images> {
     let root = &workspace.root;
-    workspace::execute(workspace::cargo(root).args([
+    process::execute(process::cargo(root).args([
         "build",
         "--release",
         "--package",
@@ -74,52 +57,7 @@ pub(crate) fn build(workspace: &Workspace, board: &Board) -> Result<Images> {
     Ok(images)
 }
 
-impl<'a> Elf<'a> {
-    pub(crate) fn parse(data: &'a [u8]) -> Result<Self> {
-        let header = FileHeader32::<LittleEndian>::parse(data).context("not a 32-bit ELF file")?;
-        let endian = header.endian().context("not a little-endian ELF file")?;
-        Ok(Self {
-            data,
-            header,
-            endian,
-        })
-    }
-
-    pub(crate) fn entry(&self) -> u32 {
-        self.header.e_entry(self.endian)
-    }
-
-    pub(crate) fn loadable_segments(&self) -> Result<Vec<Segment<'a>>> {
-        let mut segments = Vec::new();
-        for header in self.header.program_headers(self.endian, self.data)? {
-            if header.p_type(self.endian) == PT_LOAD && header.p_filesz(self.endian) > 0 {
-                let bytes = header
-                    .data(self.endian, self.data)
-                    .map_err(|()| anyhow!("a loadable segment lies outside the file"))?;
-                segments.push(Segment {
-                    address: header.p_paddr(self.endian),
-                    bytes,
-                });
-            }
-        }
-        segments.sort_by_key(|segment| segment.address);
-        Ok(segments)
-    }
-
-    pub(crate) fn section(&self, name: &str) -> Result<Option<Section<'a>>> {
-        let sections = self.header.sections(self.endian, self.data)?;
-        let Some((_, header)) = sections.section_by_name(self.endian, name.as_bytes()) else {
-            return Ok(None);
-        };
-        let bytes = header.data(self.endian, self.data)?;
-        Ok(Some(Section {
-            address: header.sh_addr(self.endian),
-            bytes,
-        }))
-    }
-}
-
-pub(crate) fn flatten(segments: &[Segment<'_>]) -> Result<Vec<u8>> {
+fn flatten(segments: &[Segment<'_>]) -> Result<Vec<u8>> {
     let start = segments
         .first()
         .context("the ELF file has no loadable data")?
@@ -138,7 +76,7 @@ pub(crate) fn flatten(segments: &[Segment<'_>]) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub(crate) fn intel_hex(segments: &[Segment<'_>], entry: u32) -> Result<String> {
+fn intel_hex(segments: &[Segment<'_>], entry: u32) -> Result<String> {
     let mut records = Vec::new();
     let mut upper_address = None;
     for segment in segments {
@@ -165,7 +103,7 @@ pub(crate) fn intel_hex(segments: &[Segment<'_>], entry: u32) -> Result<String> 
     Ok(ihex::create_object_file_representation(&records)?)
 }
 
-fn address_halves(address: u32) -> [u16; 2] {
+const fn address_halves(address: u32) -> [u16; 2] {
     let [byte0, byte1, byte2, byte3] = address.to_le_bytes();
     [
         u16::from_le_bytes([byte2, byte3]),

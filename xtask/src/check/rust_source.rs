@@ -1,25 +1,25 @@
-pub(crate) struct Comment {
-    pub(crate) line: usize,
-    pub(crate) text: String,
+pub(super) struct Comment {
+    pub(super) line: usize,
+    pub(super) text: String,
 }
 
-pub(crate) struct Scanned {
-    pub(crate) comments: Vec<Comment>,
-    pub(crate) code_lines: Vec<String>,
+pub(super) struct Scanned {
+    pub(super) comments: Vec<Comment>,
+    code_lines: Vec<String>,
 }
 
 impl Scanned {
-    pub(crate) fn comment_on(&self, line: usize) -> Option<&Comment> {
+    pub(super) fn comment_on(&self, line: usize) -> Option<&Comment> {
         self.comments.iter().find(|comment| comment.line == line)
     }
 
-    pub(crate) fn code_on(&self, line: usize) -> &str {
+    pub(super) fn code_on(&self, line: usize) -> &str {
         line.checked_sub(1)
             .and_then(|index| self.code_lines.get(index))
             .map_or("", String::as_str)
     }
 
-    pub(crate) fn keyword_lines(&self, keyword: &str) -> Vec<usize> {
+    pub(super) fn keyword_lines(&self, keyword: &str) -> Vec<usize> {
         self.code_lines
             .iter()
             .enumerate()
@@ -29,7 +29,7 @@ impl Scanned {
     }
 }
 
-pub(crate) fn scan(source: &str) -> Scanned {
+pub(super) fn scan(source: &str) -> Scanned {
     let mut scanner = Scanner {
         input: source.chars().collect(),
         position: 0,
