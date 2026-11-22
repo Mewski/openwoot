@@ -1,7 +1,11 @@
+use core::pin::pin;
+
+use embassy_futures::select::{Either, select};
 use embassy_usb::driver::{EndpointError, EndpointIn, EndpointOut};
 use openwoot_protocol::MAX_REPORT_LEN;
 
-use super::Handler;
+use super::{Answer, FeatureRequests, Handler};
+use crate::Keyboard;
 
 pub struct Channel<Output, Input> {
     output: Output,
@@ -20,19 +24,59 @@ impl<Output: EndpointOut, Input: EndpointIn> Channel<Output, Input> {
         }
     }
 
-    pub async fn run(&mut self, handler: &mut Handler) -> ! {
+    pub async fn run<Board: Keyboard>(
+        &mut self,
+        handler: &mut Handler,
+        requests: &FeatureRequests,
+        keyboard: &mut Board,
+    ) -> ! {
         loop {
             self.output.wait_enabled().await;
-            while self.serve(handler).await != Err(EndpointError::Disabled) {}
+            while self.serve(handler, requests, keyboard).await != Err(EndpointError::Disabled) {}
         }
     }
 
-    pub async fn serve(&mut self, handler: &mut Handler) -> Result<(), EndpointError> {
-        let len = self.output.read_transfer(&mut self.request).await?;
-        let request = self.request.get(..len).unwrap_or_default();
-        match handler.respond(request, &mut self.response) {
-            Some(response) => self.input.write_transfer(response, false).await,
-            None => Ok(()),
-        }
+    pub async fn serve<Board: Keyboard>(
+        &mut self,
+        handler: &mut Handler,
+        requests: &FeatureRequests,
+        keyboard: &mut Board,
+    ) -> Result<(), EndpointError> {
+        let Self {
+            output,
+            input,
+            request,
+            response,
+        } = self;
+        let len = {
+            let mut read = pin!(output.read_transfer(request));
+            loop {
+                match select(read.as_mut(), requests.receive()).await {
+                    Either::First(len) => break len?,
+                    Either::Second(queued) => {
+                        let answer = handler.answer_stock(queued, response);
+                        deliver(input, answer, keyboard).await?;
+                    }
+                }
+            }
+        };
+        let request = request.get(..len).unwrap_or_default();
+        let answer = handler.respond(request, response);
+        deliver(input, answer, keyboard).await
     }
+}
+
+async fn deliver<Input: EndpointIn, Board: Keyboard>(
+    input: &mut Input,
+    answer: Answer<'_>,
+    keyboard: &mut Board,
+) -> Result<(), EndpointError> {
+    let written = match answer.reply {
+        Some(reply) => input.write_transfer(reply, false).await,
+        None => Ok(()),
+    };
+    if let Some(option) = answer.update_mode {
+        keyboard.enter_update_mode(option);
+    }
+    written
 }

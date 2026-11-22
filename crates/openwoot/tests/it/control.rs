@@ -60,6 +60,14 @@ fn hid_class_requests_reach_the_host_state() {
             setup(CLASS_INTERFACE_OUT, SET_REPORT, 0x0301, 2, 8),
             &[1, 0, 0, 0, 0, 0, 0, 0]
         ),
+        Some(Outcome::Accepted)
+    );
+    assert_eq!(
+        host.control_out(
+            run.as_mut(),
+            setup(CLASS_INTERFACE_OUT, SET_REPORT, 0x0301, 3, 8),
+            &[1, 0, 0, 0, 0, 0, 0, 0]
+        ),
         Some(Outcome::Rejected)
     );
 

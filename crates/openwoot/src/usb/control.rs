@@ -7,19 +7,22 @@ use embassy_usb::{
 };
 
 use super::xinput;
-use crate::hid::Leds;
+use crate::{hid::Leds, protocol::FeatureRequests};
 
 pub(super) const INTERFACE_COUNT: usize = 5;
 pub(super) const KEYBOARD_INTERFACE: usize = 1;
+pub(super) const CHANNEL_INTERFACE: usize = 2;
 pub(super) const HID_DESCRIPTOR_TYPE: u8 = 0x21;
 pub(super) const REPORT_DESCRIPTOR_TYPE: u8 = 0x22;
 
+const GET_REPORT: u8 = 0x01;
 const GET_IDLE: u8 = 0x02;
 const GET_PROTOCOL: u8 = 0x03;
 const SET_REPORT: u8 = 0x09;
 const SET_IDLE: u8 = 0x0A;
 const SET_PROTOCOL: u8 = 0x0B;
 const OUTPUT_REPORT_TYPE: u8 = 0x02;
+const FEATURE_REPORT_TYPE: u8 = 0x03;
 const HID_DESCRIPTOR_LEN: u8 = 9;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -33,6 +36,7 @@ pub enum Protocol {
 pub struct HostState {
     keyboard_leds: AtomicU8,
     keyboard_boot_protocol: AtomicBool,
+    feature_requests: FeatureRequests,
 }
 
 #[derive(Debug)]
@@ -55,6 +59,7 @@ impl HostState {
         Self {
             keyboard_leds: AtomicU8::new(0),
             keyboard_boot_protocol: AtomicBool::new(false),
+            feature_requests: FeatureRequests::new(),
         }
     }
 
@@ -70,17 +75,37 @@ impl HostState {
         }
     }
 
+    pub const fn feature_requests(&self) -> &FeatureRequests {
+        &self.feature_requests
+    }
+
     fn set_keyboard_protocol(&self, protocol: Protocol) {
         self.keyboard_boot_protocol
             .store(protocol == Protocol::Boot, Ordering::Relaxed);
     }
 
-    fn receive_report(&self, interface: usize, report_type: u8, data: &[u8]) -> OutResponse {
+    fn receive_report(
+        &self,
+        interface: usize,
+        [report_type, report_id]: [u8; 2],
+        data: &[u8],
+    ) -> OutResponse {
         match (interface, report_type, data) {
             (KEYBOARD_INTERFACE, OUTPUT_REPORT_TYPE, [leds, ..]) => {
                 self.keyboard_leds.store(*leds, Ordering::Relaxed);
                 OutResponse::Accepted
             }
+            (CHANNEL_INTERFACE, FEATURE_REPORT_TYPE, [first, rest @ ..])
+                if report_id != 0 && *first == report_id =>
+            {
+                self.feature_requests.submit(rest);
+                OutResponse::Accepted
+            }
+            (CHANNEL_INTERFACE, FEATURE_REPORT_TYPE, _) => {
+                self.feature_requests.submit(data);
+                OutResponse::Accepted
+            }
+            (CHANNEL_INTERFACE, ..) => OutResponse::Accepted,
             _ => OutResponse::Rejected,
         }
     }
@@ -148,7 +173,7 @@ impl Handler for Control<'_> {
                 }
                 Some(OutResponse::Accepted)
             }
-            SET_REPORT => Some(host.receive_report(number, high, data)),
+            SET_REPORT => Some(host.receive_report(number, [high, low], data)),
             _ => Some(OutResponse::Rejected),
         }
     }
@@ -164,8 +189,8 @@ impl Handler for Control<'_> {
             };
             return self.xinput.then_some(response);
         }
-        let [high, _] = req.value.to_be_bytes();
-        let (_, interface) = self.hid_interface(&req)?;
+        let [high, low] = req.value.to_be_bytes();
+        let (number, interface) = self.hid_interface(&req)?;
         let response = match (req.request_type, req.request) {
             (RequestType::Standard, Request::GET_DESCRIPTOR) => match high {
                 REPORT_DESCRIPTOR_TYPE => InResponse::Accepted(interface.report_descriptor),
@@ -179,6 +204,11 @@ impl Handler for Control<'_> {
                 }
                 _ => InResponse::Rejected,
             },
+            (RequestType::Class, GET_REPORT)
+                if number == CHANNEL_INTERFACE && low != 0 && req.length > 1 =>
+            {
+                copy_into(buf, &[low])
+            }
             (RequestType::Class, GET_IDLE) => copy_into(buf, &[interface.idle]),
             (RequestType::Class, GET_PROTOCOL) => {
                 copy_into(buf, &[u8::from(interface.protocol == Protocol::Report)])
