@@ -325,7 +325,8 @@ fn the_largest_lighting_configuration_fits_one_frame() {
 fn the_largest_diagnostics_report_fits_one_frame() {
     use openwoot_protocol::{
         diagnostics::{
-            Bus, BusError, BusErrors, Keys, Lighting, Profile, Report, Scan, Speed, Storage, Usb,
+            Bus, BusError, BusErrors, Keys, Lighting, Profile, Report, Scan, Speed, Stack, Storage,
+            Usb,
         },
         endpoints::GetDiagnostics,
     };
@@ -383,6 +384,10 @@ fn the_largest_diagnostics_report_fits_one_frame() {
                 suspended: true,
                 speed: Some(Speed::High),
                 resets: u32::MAX,
+            },
+            stack: Stack {
+                size: u32::MAX,
+                peak: u32::MAX,
             },
         },
     );

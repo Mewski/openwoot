@@ -13,6 +13,13 @@ pub struct Report {
     pub storage: Storage,
     pub flash_bus: Bus,
     pub usb: Usb,
+    pub stack: Stack,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+pub struct Stack {
+    pub size: u32,
+    pub peak: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]

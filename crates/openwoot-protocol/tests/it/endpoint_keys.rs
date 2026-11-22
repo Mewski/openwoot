@@ -12,9 +12,9 @@ const PINNED_KEYS: &[(&str, u64, u64)] = &[
         0xcd60_8649_8d23_c62d,
     ),
     (
-        "openwoot/diagnostics",
-        0x4466_b3c7_b1d9_44c3,
-        0x8daf_fc2f_6831_afd1,
+        "openwoot/diagnostics/2",
+        0x4783_4152_f45f_8b84,
+        0xe9fd_d1ae_b300_dcd2,
     ),
     (
         "openwoot/capabilities",

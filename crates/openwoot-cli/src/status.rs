@@ -36,6 +36,7 @@ impl Status {
             storage,
             flash_bus,
             usb,
+            stack,
         } = &self.report;
         let mut lines = vec![
             ("device", self.device.clone()),
@@ -112,6 +113,10 @@ impl Status {
                     .map_or_else(|| "unknown".to_owned(), |speed| speed.to_string()),
             ),
             ("usb resets", usb.resets.to_string()),
+            (
+                "stack peak",
+                format!("{} of {} bytes", stack.peak, stack.size),
+            ),
         ]);
         lines
     }

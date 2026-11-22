@@ -1,6 +1,6 @@
 use openwoot_cli::status::Status;
 use openwoot_protocol::diagnostics::{
-    Bus, BusError, BusErrors, Keys, Lighting, Profile, Report, Scan, Speed, Storage, Usb,
+    Bus, BusError, BusErrors, Keys, Lighting, Profile, Report, Scan, Speed, Stack, Storage, Usb,
 };
 
 const DEVICE: &str = "31e3:1400 \"Wooting 80HE\"";
@@ -52,6 +52,10 @@ fn running() -> Report {
             speed: Some(Speed::High),
             resets: 2,
         },
+        stack: Stack {
+            size: 125_904,
+            peak: 21_480,
+        },
     }
 }
 
@@ -90,6 +94,7 @@ fn status_prints_every_counter_as_one_aligned_label_and_value_per_line() {
             "usb state:            configured\n",
             "usb speed:            high speed (480 Mbit/s)\n",
             "usb resets:           2\n",
+            "stack peak:           21480 of 125904 bytes\n",
         )
     );
 }
