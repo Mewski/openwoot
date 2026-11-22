@@ -2,14 +2,14 @@
 
 Keyboard firmware for Wooting hall-effect keyboards, written in Rust, with its own configuration protocol shared with a Rust host application. This branch (`rust`) is a new firmware; the branch `main` holds the earlier C firmware, which is the reference for features and hardware behaviour. Read code there; never copy it.
 
-**State: toward milestone M1** (the 80HE boots, enumerates and answers `openwoot version`). Done: generated PACs, image descriptor, chip bring-up on both families (clocks, GPIO, time, interrupts, executors, update-mode hand-over), USB device-controller drivers on both families, the USB face and the configuration channel with `GetVersion` (host-tested), the CLI (`version`, `flash`). In progress: the runtime that joins them (M1) and the stock identification responder. Not yet: scanning, keys, storage, lighting, profiles. Nothing has run on hardware. Update this file whenever the layout, commands or rules change.
+**State: milestone M1 built, not yet run on hardware** (the 80HE boots, enumerates and answers `openwoot version`). Done: generated PACs, image descriptor, chip bring-up on both families (clocks, GPIO, time, interrupts, executors, update-mode hand-over, read-only flash), USB device-controller drivers on both families, the USB face with descriptors for the negotiated speed, the configuration channel (`GetVersion`, `EnterUpdateMode`), the stock identification responder (so the official Wootility offers the stock firmware), the runtime (USB device, channel and idle HID report tasks), the CLI (`version`, `flash`). Not yet: scanning, keys, storage, lighting, profiles. Update this file whenever the layout, commands or rules change.
 
 ## Layout
 
 | Path | Holds | May depend on |
 | --- | --- | --- |
 | `crates/openwoot/` | the firmware: the `Keyboard` trait a board implements, `hid` (descriptor builder, typed reports), `usb` (the USB face over any `embassy_usb_driver::Driver`), `protocol` (configuration channel), runtime; later keys, layout, storage, profiles, lighting; `no_std`, no hardware access, tested on the host | `openwoot-protocol`, `openwoot-drivers`, `openwoot-image`, ecosystem crates |
-| `crates/openwoot-protocol/` | the configuration protocol between firmware and host software: postcard-rpc endpoints (`GetVersion`), HID report framing; `no_std` | ecosystem crates only |
+| `crates/openwoot-protocol/` | the configuration protocol between firmware and host software: postcard-rpc endpoints (`GetVersion`, `EnterUpdateMode`), HID report framing, `stock` (the stock feature-command framing shared by the firmware's identification responder and the CLI); `no_std` | ecosystem crates only |
 | `crates/openwoot-image/` | the firmware image format: the image descriptor, its location, the image checks, the `memory.x` reader; `no_std`; used by boards, the CLI and `xtask` | ecosystem crates only |
 | `crates/openwoot-drivers/` | chip drivers (`is31fl3741` LED matrix, `spi_nor` flash), generic over `embedded-hal-async` traits | `embedded-hal-async` |
 | `crates/gd32f425-pac/`, `crates/gd32f303-pac/` | generated register access (`cargo xtask pac`); exempt from the comment and `unsafe` rules | `cortex-m`, `cortex-m-rt`, `vcell` |
@@ -43,7 +43,7 @@ Optional features (light bar, host signals, editions, ...) and alternative behav
 | `cargo xtask check` | file types, dependency direction, file-set symmetry (boards: every file; chip HALs: top-level `src/*.rs`, since a peripheral module's children are chip-specific), names in shared code, comment, `unsafe` and module-name rules, formatting, clippy (host and every board target), every board image |
 | `cargo xtask pac` | regenerates the PAC crates |
 | `openwoot version` | firmware and protocol version over the configuration channel |
-| `openwoot flash <image> [--dry-run]` | checks the image; enters update mode (stock firmware), writes through the factory bootloader with CRC-24 verification; `--dry-run` only checks |
+| `openwoot flash <image> [--dry-run]` | checks the image; enters update mode (openwoot: `EnterUpdateMode`; stock: feature command 2), writes through the factory bootloader with CRC-24 verification; `--dry-run` only checks |
 
 ## Rules
 
