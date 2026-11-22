@@ -1,5 +1,7 @@
 # Architecture
 
+The microcontrollers, peripherals, pins, interrupts and DMA channels of each board are in [hardware](hardware.md).
+
 ## Crates
 
 ```
@@ -57,7 +59,7 @@ the key notices, brightness steps, the profile slot, count and colour), and `pro
 carries the profile's light-bar settings, the keyboard-wide entries and the host signals
 (`lighting::HostExchange`) from the configuration task to it. A board with a special edition
 (the 80HE TenZ) gives a `profile::Edition`; `Edition::unit` picks the product string, the
-factory profiles and the default switch type from the edition code of the serial number.
+factory profiles and the default switch model from the edition code of the serial number.
 
 The configuration descriptor is built once for the face of the board (`FACE`, high speed on the
 Wooting 80HE, full speed on the Wooting 60HE+), and `usb::Negotiated` wraps the chip driver so

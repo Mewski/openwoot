@@ -1,6 +1,6 @@
 # Extending the keys
 
-How a key press becomes a report, and where a new key feature goes. The C firmware on `main` is the behavioural reference; its `docs/extending-keys.md` describes the same pipeline in more depth.
+How a key press becomes a report, and where a new key feature goes. The C firmware on the branch `c-firmware` is the behavioural reference; its `docs/extending-keys.md` describes the same pipeline in more depth.
 
 ## Pipeline
 
@@ -27,7 +27,7 @@ Travel is the unit of every threshold inside `keys`: the configuration's distanc
 
 ## Settings and storage
 
-`profile::Model` holds the active profile: its key part (settings, keymaps, overrides, advanced keys, gamepad mapping and settings) in `keys::Shared`, its lighting part in `profile::Shared`. Each key part is its own record (`keys/profile.rs`, items `0x10`..`0x15` per profile, the active profile as global item `0x10`). `profile::Configurator` answers the configuration channel: a `Set*` applies at once, `Save` stores the changed parts of the active profile, `Revert` reloads them. The key task applies a changed part between two scan cycles, reading it through `keys::ProfileSource` one entry (one key's action, override or binding, one advanced key) per critical section, and the model resets a profile's keymaps one key per critical section, so a profile switch holds each critical section for one entry or one copy of a loaded part, never for the conversion of a whole profile; `Parts::PROFILES` carries a changed profile count, and the release-rebound filter of the global settings reaches the scanner through `keys::Shared::rebound_filter`. Key reports on and off, gamepad detection and the XInput player are host-link state in `usb::HostState`, which the key task copies into `keys::Keys` every cycle.
+`profile::Model` holds the active profile: its key part (settings, keymaps, overrides, advanced keys, gamepad mapping and settings) in `keys::Shared`, its lighting part in `profile::Shared`. Each key part is its own record (`keys/profile.rs`, items `0x10`..`0x15` per profile, the active profile as global item `0x10`). `profile::Configurator` answers the configuration channel: a `Set*` applies at once, `Save` stores the changed parts of the active profile, `Revert` reloads them. The key task applies a changed part between two scan cycles, reading it through `keys::ProfileSource` one entry (one key's action, override or binding, one advanced key) per critical section, the model resets a profile's keymaps one key per critical section, and `Save` encodes a key part the same way (`profile/key_part.rs`: one sequence length or one entry copied per critical section, encoded outside it), so a profile switch or a save holds each critical section for one entry or one copy of a loaded part, never for the conversion of a whole profile; `Parts::PROFILES` carries a changed profile count, and the release-rebound filter of the global settings reaches the scanner through `keys::Shared::rebound_filter`. Key reports on and off, gamepad detection and the XInput player are host-link state in `usb::HostState`, which the key task copies into `keys::Keys` every cycle.
 
 ## Tests
 

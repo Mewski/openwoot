@@ -19,10 +19,10 @@ and the host tool refuses to flash it.
 
 | Area | Addresses |
 | --- | --- |
-| factory bootloader, never written | `0x0800_0000`-`0x0800_6FFF` |
-| image (`FLASH` in `memory.x`): vector table, descriptor, code | `0x0800_7000`-`0x080F_CFFF` |
-| serial number page, never linked | `0x080F_D000`-`0x080F_DFFF` |
-| unused page and factory device information, never linked | `0x080F_E000`-`0x080F_FFFF` |
-| RAM, stack from the top | `0x2000_0000`-`0x2001_7FFF` |
+| factory bootloader, never written | `0x0800_0000`-`0x0800_6fff` |
+| image (`FLASH` in `memory.x`): vector table, descriptor, code | `0x0800_7000`-`0x080f_cfff` |
+| serial number page, never linked | `0x080f_d000`-`0x080f_dfff` |
+| unused page and factory device information, never linked | `0x080f_e000`-`0x080f_ffff` |
+| RAM, stack from the top | `0x2000_0000`-`0x2001_7fff` |
 
 USB ids `31e3:1320` (product id base).

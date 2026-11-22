@@ -18,10 +18,10 @@ keys and the light bar, switches profiles with the Mode key, and answers `openwo
 
 | Area | Addresses |
 | --- | --- |
-| factory bootloader, never written | `0x0800_0000`-`0x0800_7FFF` |
-| image (`FLASH` in `memory.x`): vector table, descriptor, code | `0x0800_8000`-`0x080F_DFFF` |
-| serial number mirror page, never linked | `0x080F_E000`-`0x080F_EFFF` |
-| RAM, stack from the top | `0x2000_0000`-`0x2002_FFFF` |
+| factory bootloader, never written | `0x0800_0000`-`0x0800_7fff` |
+| image (`FLASH` in `memory.x`): vector table, descriptor, code | `0x0800_8000`-`0x080f_dfff` |
+| serial number mirror page, never linked | `0x080f_e000`-`0x080f_efff` |
+| RAM, stack from the top | `0x2000_0000`-`0x2002_ffff` |
 
 USB ids `31e3:1400` (product id base); update mode (factory bootloader) `31e3:140f`, blocks of
 256 bytes.
