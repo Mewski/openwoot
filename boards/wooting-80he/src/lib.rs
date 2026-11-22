@@ -1,6 +1,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod keys;
 pub mod lighting;
 pub mod scan;
 pub mod storage;

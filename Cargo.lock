@@ -2068,6 +2068,8 @@ dependencies = [
  "openwoot-drivers",
  "openwoot-gd32f3",
  "openwoot-image",
+ "openwoot-protocol",
+ "static_cell",
 ]
 
 [[package]]
@@ -2083,6 +2085,8 @@ dependencies = [
  "openwoot-drivers",
  "openwoot-gd32f4",
  "openwoot-image",
+ "openwoot-protocol",
+ "static_cell",
 ]
 
 [[package]]

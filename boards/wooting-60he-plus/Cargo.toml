@@ -20,6 +20,8 @@ openwoot = { workspace = true }
 openwoot-drivers = { workspace = true }
 openwoot-gd32f3 = { workspace = true }
 openwoot-image = { workspace = true }
+openwoot-protocol = { workspace = true }
+static_cell = { workspace = true }
 
 [target.'cfg(target_os = "none")'.dependencies]
 embassy-executor = { workspace = true }
