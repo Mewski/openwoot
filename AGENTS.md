@@ -1,48 +1,100 @@
 # openwoot: notes for coding agents
 
-Open firmware for Wooting hall-effect keyboards. Plain C11 for Cortex-M, GNU make, no RTOS. The architecture is described in `docs/architecture.md`; how to add a board, family, driver, feature or strategy in `docs/porting.md`. Read those before changing structure.
+Keyboard firmware for Wooting hall-effect keyboards, written in Rust, with its own configuration protocol shared with a Rust host application.
+
+**State: feature-complete; a daily keyboard on the Wooting 80HE.** On the owner's 80HE (TenZ edition): enumerates at 480 Mbit/s as stock does; types with stock-like actuation; LEDs and light bar show the factory profiles and react; the Mode key, Fn + 1 to 4 and Fn + F11/F12 brightness work; `openwoot version`, `openwoot status` and `openwoot flash` work over the configuration channel; the official Wootility returns it to stock. Host-tested against recorded reference vectors: scanning and the analog model, keys incl. advanced keys, gamepad and XInput, storage, lighting, light bar and signals, profiles and editions, the configuration model, runtime commands, the stock identification responder and RGB SDK commands. Not yet checked on hardware: advanced keys, gamepad, XInput, host LED control, sensor readout. The Wooting 60HE+ has never run on hardware. Update this file whenever the layout, commands or rules change.
 
 ## Layout
 
-| Directory | Holds | May include |
+| Path | Holds | May depend on |
 | --- | --- | --- |
-| `src/app/` | `main`, the task loop, the tick call-back | everything below |
-| `src/core/` | registration lists, start-up order, clock, soft timers, run state | `hal/` only |
-| `src/<module>/` | firmware logic: `adc_scan`, `analog`, `keys`, `layout`, `hid`, `usb`, `rgb`, `profile`, `protocol`, `storage`, `tables`, `proto` | `src/core/`, other modules, `drivers/include/`, `hal/include/` |
-| features (`src/rgb/signals/`, `src/rgb/lightbar/`, `src/profile/edition/`, `src/adc_scan/reference/`, `src/adc_scan/recheck/`) | optional parts a board lists in `board.mk` | like modules |
-| strategies (`src/storage/device_info/`, `src/storage/layout_variant/`, `src/analog/noise_recal/`) | one variant per directory, selected in `board.mk` | like modules |
-| `drivers/<chip>/` | chip drivers, written against `hal/include/` only | `hal/include/`, `drivers/include/` |
-| `hal/include/hal/` | the hardware interface the firmware uses | nothing family-specific |
-| `hal/<family>/` | one implementation per microcontroller family; the only place that uses a peripheral library | the family's peripheral library |
-| `boards/<board>/` | `board.h` (numbers), `wiring.h` (pins), `board.json`, `board.mk`, `linker.ld`, `tables/`, `defaults/`, `layout/` | |
+| `crates/openwoot/` | the firmware: `hid` (descriptor builder, typed reports), `xinput` (XInput report and interface), `usb` (the USB face over any `embassy_usb_driver::Driver`), `protocol` (configuration channel, stock responder, the `UpdateMode` trait the chip HAL's bootloader implements), `diagnostics` (relaxed atomic counters in `runtime::State`, the `Transfers` bus counters the chip HALs keep, the `Readout` behind `GetDiagnostics`), runtime, analog, scan, storage, lighting; it defines the traits it needs from hardware; `no_std`, no hardware access, tested on the host | `openwoot-protocol`, `openwoot-drivers`, `openwoot-image`, ecosystem crates |
+| `crates/openwoot-protocol/` | the configuration protocol between firmware and host software: postcard-rpc endpoints (`GetVersion`, `EnterUpdateMode`, `GetDiagnostics`, the configuration model), HID report framing, `stock` (the stock feature-command framing shared by the firmware's identification responder and the CLI); `no_std` | ecosystem crates only |
+| `crates/openwoot-image/` | the firmware image format: the image descriptor, its location, the image checks, the `memory.x` reader; `no_std`; used by boards, the CLI and `xtask` | ecosystem crates only |
+| `crates/openwoot-drivers/` | chip drivers (`is31fl3741` LED matrix, `spi_nor` flash), generic over `embedded-hal-async` traits | `embedded-hal-async` |
+| `crates/gd32f425-pac/`, `crates/gd32f303-pac/` | generated register access (`cargo xtask pac`); exempt from the comment and `unsafe` rules | `cortex-m`, `cortex-m-rt`, `vcell` |
+| `crates/openwoot-gd32f4/`, `crates/openwoot-gd32f3/` | one HAL per microcontroller family on its PAC (`rt` only for `target_os = "none"`): `rcu`, `gpio` (typed `Pin`s and the runtime `Line`), `i2c`, `spi`, `scan` (the hall-sensor converter), `flash`, `time` (embassy-time driver), `interrupt` (`bind_interrupts!`), `executor`, `system` (reset, update-mode hand-over), `usb` (`usb::Driver`, `usb::negotiated_speed()`; the GD32F425 wraps `embassy-usb-synopsys-otg` with the ULPI PHY, the GD32F303 has a port of embassy-stm32's fsdev driver under `src/usb/`), `diagnostics::hardware()` (converter overruns, `i2c::transfers()`, `spi::transfers()`); private `basepri` (critical section), `dma` (the only code on DMA channels) and `register`; `system::Bootloader` implements `openwoot::protocol::UpdateMode`; `app_descriptor!`; the only hand-written crates with `unsafe` (`#![allow(unsafe_code, reason = ...)]`) | their PAC, `openwoot`, `openwoot-image`, `cortex-m`, `embedded-hal`, `embassy-usb-driver`, `embassy-sync`, `embassy-time`, `embassy-usb-synopsys-otg` |
+| `crates/openwoot-cli/` | host tool `openwoot` (`version`, `status`, `flash [--dry-run]`): image checks, stock enter-update-mode command, factory bootloader session with CRC-24 verification, configuration channel; `async-hid` with `async-io`, `indicatif` | `openwoot-protocol`, `openwoot-image` |
+| `boards/<board>/` | one board support crate per keyboard (see Boards) | everything above except the CLI |
+| `xtask/` | build helper: list boards, build images, checks, flashing via the CLI, PAC generation | `openwoot-image` |
+
+Optional features (light bar, host signals, editions, ...) and alternative behaviours (noise recalibration methods, device-information storage) are modules with types in `crates/openwoot/`; a board selects them in its library. Shared crates have no Cargo features that depend on a board, and no shared code names a board or a family.
+
+## Boards
+
+- A board is a board support crate `boards/<board>/`, kebab-case, package name = directory name: a library with the board facts as typed constants (name, USB ids, update mode, protected flash areas, key matrix), `DESCRIPTOR`, `pub struct Board` (the configured drivers and peripherals by board function, built by `Board::new(peripherals)`), per-area modules with data only (`scan`, `lighting`, `storage`), re-exports `hal` (its chip HAL) and `entry`; the binary `openwoot-<board>` in `src/main.rs`; `memory.x` and `build.rs` as board support crates ship them.
+- `memory.x` is the single source of the image area and RAM, and places the image descriptor (section `.app_descriptor`) on the first 64-byte boundary behind the vector table; `build.rs` reads it into the constant `IMAGE`.
+- The image describes itself: the descriptor (`openwoot_image::Descriptor`) carries the board name, USB ids, update mode and image area. There is no `board.json`; the CLI never lists boards, and `xtask` finds them under `boards/`.
+
+## Real time
+
+- Interrupt priorities: 0 the hall-sensor scan only (never masked), 1 the time driver, 2 USB, 3 the key executor (on the UART4 vector). Critical sections raise BASEPRI to `0x10` and never mask the scan interrupt.
+- TIMER4 belongs to the time driver, UART4's vector to the key executor.
+- `memory.x` aligns `_stext` to 8 bytes behind the descriptor.
+- The key executor runs the board's task named `scanning` and nothing else; `xtask check` finds its poll function by that name and treats it like an interrupt handler.
+- No panic is reachable from an interrupt vector or the key task (`xtask check`, call graph from the image's relocations; boards link with `--emit-relocs`). A panic site of a pinned dependency that cannot fire goes into `xtask/src/check/panic_paths/reviewed.rs` with crate, function and reason; panics in our code are fixed, never listed.
+- Statics plus the stack bound of the call graph fit each board's RAM with 2048 bytes to spare (`xtask check` prints the budget per board). Start-up work with large values runs in its own `#[inline(never)]` function so its frame is gone before the tasks run; `main` only starts the executor.
 
 ## Commands
 
-```sh
-make BOARD=wooting_80he              # build one board (BOARD is required); LTO=1 for the smaller variant
-make boards                          # list boards
-make all-boards                      # build every board
-make check                           # tree rules + registration lists of the built images
-python3 tools/check_tree.py --list-rules
-python3 tools/openwoot.py plan build/<board>/openwoot-<board>.hex
-```
+| Command | Does |
+| --- | --- |
+| `cargo test --workspace` | host tests of every crate |
+| `cargo xtask boards [--json]` | lists the boards |
+| `cargo xtask build <board>` / `--all` | `build/<board>/openwoot-<board>.{elf,hex,bin}` |
+| `cargo xtask flash <board> --dry-run` | builds and checks the image with `openwoot flash --dry-run`; without `--dry-run` it would flash, which needs the owner's go-ahead |
+| `cargo xtask check` | file types, dependency direction, `[lints] workspace = true` in every crate but the PACs, file-set symmetry (boards: every file; chip HALs: top-level `src/*.rs`, since a peripheral module's children are chip-specific), names in shared code, comment, `unsafe` and module-name rules, formatting (`cargo +nightly fmt`, `taplo fmt`, `cargo sort`), clippy (host and every board target), every board image, no panic reachable from interrupts and the key task (except the sites in `reviewed.rs`, each of which must still occur), RAM budget (2048 bytes to spare) and flash budget (32768 bytes to spare) per board |
+| `cargo xtask pac` | regenerates the PAC crates |
+| `openwoot version` | firmware and protocol version over the configuration channel |
+| `openwoot status` | diagnostic counters and states of every subsystem (`GetDiagnostics`) as `label: value` lines |
+| `openwoot flash <image> [--dry-run]` | checks the image; enters update mode (openwoot: `EnterUpdateMode`; stock: feature command 2), writes through the factory bootloader with CRC-24 verification; `--dry-run` only checks |
 
-Never build into `build/` of another checkout; pass `BUILD=<dir>` for scratch builds.
+## Rules
 
-## Rules the tree check enforces (do not work around them)
+- Pure Rust: no C, assembly files, Python, shell scripts or make. Prefer maintained ecosystem crates over own code; justify each new dependency (maintenance, `no_std`, `unsafe`, licence compatible with MIT). Exact version pins live in `[workspace.dependencies]`, added when a crate first uses them (cargo warns about unused entries).
+- `unsafe` only in the chip HAL crates (and the generated PACs), each with a `// SAFETY:` comment.
+- No panics on the scan or USB path; no heap.
+- The microcontroller flash below the image base holds the factory bootloader, and the pages above the image end hold the serial number and device information. Code must never erase or program either; `memory.x` keeps the linker out of them and each board tests its image area against them.
+- The USB face (ids, interfaces, HID reports, the analog report read by the Wooting Analog SDK) stays close to stock; deviations are listed in `docs/protocol.md`.
+- Nothing is flashed to a keyboard and nothing is pushed without the owner's go-ahead.
+- Commits: one line, conventional (`feat(keys): ...`, `fix(usb): ...`, `docs: ...`).
 
-- No `#if` on a board, family or device name anywhere in `src/`, `drivers/`, `hal/include/`.
-- `FEATURE_<NAME>` appears only in that feature's public header; callers call the header, which provides do-nothing inline versions when the board does not list the feature.
-- No peripheral-library header and no peripheral register address in `src/`, `drivers/`, `hal/include/`.
-- No board or product name in shared code, comments included.
-- Every `hal/<family>/` has the same file names and implements every function of every HAL header. Every `boards/<board>/` has the same file set and the same `board.h` constants in the same order.
-- Start-up steps, profile sections and host commands are registered next to their function (`STARTUP_STEP`, `PROFILE_SECTION`, `PROTOCOL_FEATURE_COMMAND`, `PROTOCOL_REPORT_COMMAND`); order and command numbers must be unique.
+## Naming
 
-## Conventions
+- Rust API Guidelines naming: RFC 430 casing; acronyms are one word (`UsbIds`, `Hid`, not `USB`); constructors `new`/`with_*`, conversions `from_*`; `as_`/`to_`/`into_` by cost; getters without `get_`; iterators `iter`/`iter_mut`/`into_iter`; no `-rs`/`-rust` in crate names; Cargo features without `use-`/`with-`.
+- Names say what a thing is in the domain (`actuation_point`, not `ap`, `val`, `data`, `tmp`, `info`, `mgr`, `util`, `helper`, `common`); no modules named `utils`, `misc`, `helpers`, `common` or `types` (`xtask check` rejects them).
+- No stuttering: `keys::Index`, not `keys::KeyIndex`.
+- Enforced by clippy (`pedantic` with `module_name_repetitions`, `min_ident_chars`, `renamed_function_params`, `pub_underscore_fields`, `same_name_method`).
 
-- Behaviour stays compatible with stock firmware 2.14.1 of each board: host protocol, stored formats, order of file reads, order and values of hardware register writes. A stock defect that the host or stored data can observe is kept and marked `KNOWN ISSUE:`.
-- A difference between boards is a number (`board.h`), data (`boards/<board>/tables/`), wiring (`wiring.h`), a feature, or a named strategy; never a conditional in shared code, and never a literal that happens to fit one board.
-- The scan interrupt path is hot: HAL functions it calls are `static inline` in `hal/<family>/inline/`.
-- Every header starts with a comment saying what the unit is for and what it depends on. No commented-out code.
-- `src/proto/settings.pb.c` and `.pb.h` are generated; edit `settings.proto` and regenerate with the command in `src/proto/README.md`.
-- The microcontroller's own flash below the application start holds the factory bootloader. Code must never erase or program it. Boards whose `board.json` says updates are not supported must stay that way until their update mode is understood.
+## Messages and strings
+
+One voice everywhere a person reads text: errors, CLI output, help, `xtask` output, logs, panic messages, docs examples.
+
+- Errors (`Display` of error types, `anyhow` context, `bail!`): lowercase first word, no trailing period, say what failed and with what (`could not read \`image.hex\``, `reset vector 0x0800_0000 lies outside the image`). Context is added at each layer with `with_context`, and printed as one chain with `{error:#}` (`openwoot: could not read \`image.hex\`: No such file or directory`). Never `Error:`/`error:` prefixes inside messages and never `failed to`; prefer `could not <verb>`.
+- Error enums derive their messages with `thiserror` `#[error("...")]`, same rules; variants name the condition (`ResetVectorOutsideImage`), not the check.
+- Help text (clap `about`/`help`): sentence case, no trailing period, imperative (`Write a firmware image through the factory bootloader`).
+- CLI output: results to stdout as aligned `label: value` lines (labels lowercase, padded to one width per command), progress and diagnostics to stderr; every program prefixes its own fatal error with its name (`openwoot: ...`, `xtask: ...`).
+- Identifiers, paths, commands and values from input appear in backticks in messages (`` `wooting-80he` ``, `` `--dry-run` ``).
+- Numbers: addresses and register values as lowercase hex with `0x` and `_` every four digits (`0x0800_8000`); USB ids as `31e3:1400`; sizes with their unit spelled out (`3 blocks of 256 bytes`, `768 bytes`); durations with units (`250 ms`).
+- Names of products as their makers write them (`Wooting 80HE`, `Wooting 60HE+`, `GD32F425`); everything else lowercase in running text.
+- All user-facing strings of one kind live next to the type they describe (error enums, one `show`/output function per binary), never scattered `println!` with ad-hoc formats.
+
+## Code style
+
+- Code documents itself: names, types and small functions carry the meaning. No comments, no doc comments and no commented-out code. The one exception is the `// SAFETY:` comment that every `unsafe` block or attribute requires.
+- Lints are set once in the workspace `Cargo.toml` (`[workspace.lints]`, clippy pedantic plus denials of panics, `unwrap`, indexing, `todo!` and undocumented `unsafe`); every crate except the generated PACs has `[lints] workspace = true`. An `#[allow]` or `#[expect]` must give a `reason`.
+- Formatting is enforced, never hand-tuned:
+  - Rust: `cargo +nightly fmt` (`rustfmt.toml`; import grouping, import merging and impl item ordering are nightly-only options, so formatting uses nightly while building uses the pinned stable toolchain).
+  - TOML: `taplo fmt` (`taplo.toml`); `Cargo.toml` dependency and section order: `cargo sort --workspace`.
+- Before every commit: `cargo xtask check` and `cargo test --workspace`.
+- Modules use the 2018+ file layout: a module `keys` with children is `src/keys.rs` plus `src/keys/actuation.rs`; no `mod.rs` anywhere (clippy `mod_module_files` is denied).
+- Every crate and every module with children is a facade: child modules are private (`mod actuation;`), and the parent re-exports the public API (`pub use actuation::{ActuationPoint, Actuation};`). Callers write `openwoot::keys::ActuationPoint`, never `openwoot::keys::actuation::ActuationPoint`. Items shared only inside the crate are `pub(crate)`; `unreachable_pub` warns about anything public that the facade does not export.
+- Small modules named for what they hold, one concept per file; public items first, private helpers after.
+
+## Tests
+
+Follows the Rust Book (ch. 11.3) for unit tests and matklad's "Delete Cargo Integration Tests" for integration tests:
+
+- Unit tests live in the file they test, in `#[cfg(test)] mod tests { use super::*; ... }` at the end of the file.
+- Integration tests: one integration test crate per package, `tests/it/main.rs`, declaring one module per behaviour area (`tests/it/keys.rs`, `tests/it/flash.rs`) and shared setup as a plain module (`tests/it/support.rs`). One binary links faster than one per file, and no `mod.rs` is needed.
+- Test names state the behaviour (`rapid_trigger_releases_after_upstroke`). No test-only code outside test modules and `tests/`.

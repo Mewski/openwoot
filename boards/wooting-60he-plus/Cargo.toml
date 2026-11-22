@@ -1,0 +1,34 @@
+[package]
+name = "wooting-60he-plus"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "openwoot-wooting-60he-plus"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+cortex-m-rt = { workspace = true }
+embassy-futures = { workspace = true }
+embassy-sync = { workspace = true }
+openwoot = { workspace = true }
+openwoot-drivers = { workspace = true }
+openwoot-gd32f3 = { workspace = true }
+openwoot-image = { workspace = true }
+openwoot-protocol = { workspace = true }
+static_cell = { workspace = true }
+
+[target.'cfg(target_os = "none")'.dependencies]
+embassy-executor = { workspace = true }
+embassy-usb = { workspace = true }
+
+[build-dependencies]
+openwoot-image = { workspace = true }
+
+[lints]
+workspace = true

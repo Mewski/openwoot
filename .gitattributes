@@ -1,3 +1,0 @@
-* text=auto eol=lf
-*.patch -text
-third_party/** -text

@@ -1,0 +1,17 @@
+[package]
+name = "openwoot-drivers"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+embassy-futures = { workspace = true }
+embedded-hal = { workspace = true }
+embedded-hal-async = { workspace = true }
+embedded-storage-async = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
