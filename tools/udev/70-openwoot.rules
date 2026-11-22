@@ -1,0 +1,18 @@
+# openwoot: access to Wooting keyboards for the logged-in user (Linux).
+#
+# tools/openwoot.py talks to the keyboard through the kernel's hidraw devices, which only root
+# may open by default. This rule tags every hidraw device of USB vendor id 31e3 (Wooting) with
+# "uaccess"; systemd-logind then gives the user of the active local session access to it. This
+# covers the running firmware and the keyboard in update mode.
+#
+# Install:
+#
+#   sudo cp tools/udev/70-openwoot.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#
+# then unplug the keyboard and plug it in again.
+#
+# Keep the number below 73: the "uaccess" tag is evaluated by 73-seat-late.rules, and a rule file
+# that sorts behind it sets the tag too late.
+
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="31e3", TAG+="uaccess"
