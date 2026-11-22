@@ -1,9 +1,10 @@
 use std::{cell::RefCell, collections::VecDeque, future::ready, rc::Rc, time::Duration};
 
-use openwoot_cli::{bootloader::PortError, hid::Reports};
+use openwoot_cli::transfer::{self, Reports};
 use openwoot_protocol::{
-    ERROR_KEY, Endpoint, EnterUpdateMode, GetVersion, MAX_REPORT_LEN, Version, WireError,
-    decode_message, encode_message,
+    ERROR_KEY, Endpoint, VarKey, Version, WireError, decode_message, encode_message,
+    endpoints::{EnterUpdateMode, GetVersion},
+    report,
     stock::{Command, Request, Status, encode_reply},
 };
 
@@ -46,17 +47,15 @@ impl State {
         let Ok(Some(message)) = decode_message(report) else {
             return;
         };
-        let mut reply = [0; MAX_REPORT_LEN];
+        let mut reply = [0; report::MAX_LEN];
         let key = message.header.key;
-        let encoded = if key == openwoot_protocol::VarKey::Key8(GetVersion::REQ_KEY) {
+        let encoded = if key == VarKey::Key8(GetVersion::REQ_KEY) {
             encode_message(
                 &message.reply_header(GetVersion::RESP_KEY),
                 &version,
                 &mut reply,
             )
-        } else if self.knows_update_mode
-            && key == openwoot_protocol::VarKey::Key8(EnterUpdateMode::REQ_KEY)
-        {
+        } else if self.knows_update_mode && key == VarKey::Key8(EnterUpdateMode::REQ_KEY) {
             self.update_mode_requests += 1;
             encode_message(
                 &message.reply_header(EnterUpdateMode::RESP_KEY),
@@ -84,7 +83,7 @@ impl State {
         let Some(version) = self.stock_version else {
             return;
         };
-        let mut reply = [0; MAX_REPORT_LEN];
+        let mut reply = [0; report::MAX_LEN];
         let encoded = match Command::from_number(request.command) {
             Some(Command::Version) => {
                 encode_reply(request.command, Status::Success, &version, &mut reply)
@@ -99,12 +98,15 @@ impl State {
 }
 
 impl Reports for Keyboard {
-    fn write_output(&mut self, report: &[u8]) -> impl Future<Output = Result<(), PortError>> {
+    fn write_output(&mut self, report: &[u8]) -> impl Future<Output = Result<(), transfer::Error>> {
         self.0.borrow_mut().answer_frame(report);
         ready(Ok(()))
     }
 
-    fn write_feature(&mut self, report: &[u8]) -> impl Future<Output = Result<(), PortError>> {
+    fn write_feature(
+        &mut self,
+        report: &[u8],
+    ) -> impl Future<Output = Result<(), transfer::Error>> {
         self.0.borrow_mut().answer_feature(report);
         ready(Ok(()))
     }
@@ -113,7 +115,7 @@ impl Reports for Keyboard {
         &mut self,
         report: &mut [u8],
         _timeout: Duration,
-    ) -> impl Future<Output = Result<Option<usize>, PortError>> {
+    ) -> impl Future<Output = Result<Option<usize>, transfer::Error>> {
         let reply = self.0.borrow_mut().pending.pop_front();
         let received = reply.and_then(|reply| {
             report.get_mut(..reply.len())?.copy_from_slice(&reply);
@@ -122,7 +124,7 @@ impl Reports for Keyboard {
         ready(Ok(received))
     }
 
-    fn discard_input(&mut self) -> impl Future<Output = Result<(), PortError>> {
+    fn discard_input(&mut self) -> impl Future<Output = Result<(), transfer::Error>> {
         self.0.borrow_mut().pending.clear();
         ready(Ok(()))
     }

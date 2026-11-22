@@ -9,7 +9,7 @@ pub struct Content {
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ParseError {
     #[error("record {record}: {reason}")]
-    Record { record: usize, reason: String },
+    InvalidRecord { record: usize, reason: String },
     #[error("record {record}: address below the first data record")]
     BelowFirstRecord { record: usize },
     #[error("no end-of-file record")]
@@ -41,10 +41,11 @@ fn parse_intel_hex(text: &str) -> Result<Content, ParseError> {
     let mut seen_end = false;
     for (index, line) in text.split_whitespace().enumerate() {
         let record = index + 1;
-        let parsed = Record::from_record_string(line).map_err(|error| ParseError::Record {
-            record,
-            reason: error.to_string(),
-        })?;
+        let parsed =
+            Record::from_record_string(line).map_err(|error| ParseError::InvalidRecord {
+                record,
+                reason: error.to_string(),
+            })?;
         match parsed {
             Record::Data { offset, value } => {
                 let address = base + u32::from(offset);

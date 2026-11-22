@@ -2,8 +2,8 @@ use std::{fmt, time::Duration};
 
 use openwoot_image::Hex;
 
-use super::{Command, Port, PortError, REPLY_LEN, REQUEST_LEN, Upload};
-use crate::report;
+use super::{Command, Port, REPLY_LEN, REQUEST_LEN, Upload};
+use crate::{report, transfer};
 
 const MAGIC: [u8; 2] = [0xDF, 0xDB];
 const STATUS_EXECUTED: u8 = 0x88;
@@ -21,7 +21,7 @@ const SHOWN_REPLY_LEN: usize = 16;
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Port(#[from] PortError),
+    Transfer(#[from] transfer::Error),
     #[error("no reply to {command} within {} ms", timeout.as_millis())]
     NoReply { command: Command, timeout: Duration },
     #[error("unexpected reply to {command}: `{reply}`")]
@@ -215,7 +215,7 @@ impl<P: Port> Session<P> {
         }
     }
 
-    async fn send(&mut self, command: Command, parameter: u32) -> Result<(), PortError> {
+    async fn send(&mut self, command: Command, parameter: u32) -> Result<(), transfer::Error> {
         self.port.discard_replies().await?;
         let mut request = [0; REQUEST_LEN];
         let (head, tail) = request.split_at_mut(MAGIC.len() + 1);

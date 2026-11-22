@@ -1,26 +1,25 @@
-use std::{fmt, time::Duration};
+mod firmware;
+mod identity;
+
+use std::time::Duration;
 
 use async_hid::{Device, DeviceInfo};
-use openwoot_image::{UpdateMode, UsbIds};
+pub use firmware::{Firmware, Running};
+pub use identity::Identity;
 use openwoot_protocol::Version;
 
 use crate::{
-    bootloader::PortError,
     channel,
-    hid::{self, Hid, Interface, Reports},
-    stock,
+    hid::{self, Hid, Interface},
+    stock, transfer,
 };
 
-pub const VENDOR_ID: u16 = 0x31E3;
 pub const MODE_CHANGE_TIMEOUT: Duration = Duration::from_secs(20);
-const CHANNEL_USAGE_PAGE: u16 = 0xFF55;
-const UPDATE_MODE_USAGE_PAGE: u16 = 0xFFFF;
-const USB_MODE_COUNT: u16 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Port(#[from] PortError),
+    Transfer(#[from] transfer::Error),
     #[error(transparent)]
     Open(#[from] hid::OpenError),
     #[error(transparent)]
@@ -52,105 +51,9 @@ pub enum Error {
     FirmwareDidNotAppear,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Identity {
-    usb: UsbIds,
-    update_product_id: u16,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Firmware {
-    Openwoot(Version),
-    Stock(String),
-}
-
-pub struct Running<R> {
-    reports: R,
-    firmware: Firmware,
-}
-
-impl Identity {
-    #[must_use]
-    pub const fn new(usb: UsbIds, update_mode: UpdateMode) -> Self {
-        Self {
-            usb,
-            update_product_id: update_mode.product_id,
-        }
-    }
-
-    #[must_use]
-    pub fn is_update_mode(&self, info: &DeviceInfo) -> bool {
-        info.vendor_id == self.usb.vendor_id
-            && info.product_id == self.update_product_id
-            && info.usage_page == UPDATE_MODE_USAGE_PAGE
-    }
-
-    #[must_use]
-    pub fn is_firmware(&self, info: &DeviceInfo) -> bool {
-        info.vendor_id == self.usb.vendor_id
-            && info
-                .product_id
-                .checked_sub(self.usb.product_id_base)
-                .is_some_and(|mode| mode < USB_MODE_COUNT)
-            && info.usage_page == CHANNEL_USAGE_PAGE
-    }
-}
-
-impl fmt::Display for Firmware {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Openwoot(version) => {
-                write!(formatter, "openwoot firmware {}", format_version(version))
-            }
-            Self::Stock(version) => write!(formatter, "stock firmware {version}"),
-        }
-    }
-}
-
-impl<R: Reports> Running<R> {
-    pub async fn identify(mut reports: R) -> Result<Self, Error> {
-        let firmware = if let Some(version) = channel::firmware_version(&mut reports).await? {
-            Firmware::Openwoot(version)
-        } else if let Some(version) = stock::firmware_version(&mut reports).await? {
-            Firmware::Stock(version)
-        } else {
-            return Err(Error::NoVersionAnswer);
-        };
-        Ok(Self { reports, firmware })
-    }
-
-    #[must_use]
-    pub const fn firmware(&self) -> &Firmware {
-        &self.firmware
-    }
-
-    #[must_use]
-    pub const fn reports(&self) -> &R {
-        &self.reports
-    }
-
-    pub async fn enter_update_mode(mut self) -> Result<(), Error> {
-        match self.firmware {
-            Firmware::Stock(_) => {
-                stock::enter_update_mode(&mut self.reports).await;
-                Ok(())
-            }
-            Firmware::Openwoot(version) => {
-                match channel::enter_update_mode(&mut self.reports).await {
-                    Ok(()) | Err(channel::Error::Port(PortError::Disconnected)) => Ok(()),
-                    Err(channel::Error::Response(openwoot_protocol::Error::Device(_))) => {
-                        Err(Error::UpdateModeNotSupported(format_version(&version)))
-                    }
-                    Err(error) => Err(error.into()),
-                }
-            }
-        }
-    }
-}
-
 pub async fn firmware_version(hid: &Hid) -> Result<(DeviceInfo, Version), Error> {
-    let Some(device) = hid.find(is_any_firmware).await? else {
-        if hid.find(is_any_update_mode).await?.is_some() {
+    let Some(device) = hid.find(identity::is_any_firmware).await? else {
+        if hid.find(identity::is_any_update_mode).await?.is_some() {
             return Err(Error::InUpdateMode);
         }
         return Err(Error::NotFound);
@@ -192,84 +95,4 @@ pub async fn wait_for_firmware(hid: &Hid, identity: Identity) -> Result<Device, 
     )
     .await?
     .ok_or(Error::FirmwareDidNotAppear)
-}
-
-#[must_use]
-pub fn format_version(version: &Version) -> String {
-    let firmware = version.firmware;
-    format!("{}.{}.{}", firmware.major, firmware.minor, firmware.patch)
-}
-
-fn is_any_firmware(info: &DeviceInfo) -> bool {
-    info.vendor_id == VENDOR_ID && info.usage_page == CHANNEL_USAGE_PAGE
-}
-
-fn is_any_update_mode(info: &DeviceInfo) -> bool {
-    info.vendor_id == VENDOR_ID && info.usage_page == UPDATE_MODE_USAGE_PAGE
-}
-
-#[cfg(test)]
-mod tests {
-    use async_hid::DeviceId;
-
-    use super::*;
-
-    fn info(product_id: u16, usage_page: u16) -> DeviceInfo {
-        DeviceInfo {
-            id: device_id(),
-            name: "Wooting 80HE".to_owned(),
-            manufacturer: None,
-            product_id,
-            vendor_id: VENDOR_ID,
-            usage_id: 1,
-            usage_page,
-            serial_number: None,
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn device_id() -> DeviceId {
-        DeviceId::RegistryEntryId(1)
-    }
-
-    #[cfg(target_os = "linux")]
-    fn device_id() -> DeviceId {
-        DeviceId::DevPath("/sys/class/hidraw/hidraw0".into())
-    }
-
-    #[cfg(target_os = "windows")]
-    fn device_id() -> DeviceId {
-        DeviceId::UncPath("\\\\?\\hid".into())
-    }
-
-    fn identity() -> Identity {
-        Identity::new(
-            UsbIds {
-                vendor_id: VENDOR_ID,
-                product_id_base: 0x1400,
-            },
-            UpdateMode {
-                product_id: 0x140F,
-                block_size: 256,
-            },
-        )
-    }
-
-    #[test]
-    fn the_firmware_is_recognised_in_every_usb_mode() {
-        let identity = identity();
-        for product_id in 0x1400..0x1403 {
-            assert!(identity.is_firmware(&info(product_id, CHANNEL_USAGE_PAGE)));
-        }
-        assert!(!identity.is_firmware(&info(0x1403, CHANNEL_USAGE_PAGE)));
-        assert!(!identity.is_firmware(&info(0x1400, 0xFF53)));
-    }
-
-    #[test]
-    fn update_mode_needs_its_product_id_and_usage_page() {
-        let identity = identity();
-        assert!(identity.is_update_mode(&info(0x140F, UPDATE_MODE_USAGE_PAGE)));
-        assert!(!identity.is_update_mode(&info(0x140F, CHANNEL_USAGE_PAGE)));
-        assert!(!identity.is_update_mode(&info(0x1400, UPDATE_MODE_USAGE_PAGE)));
-    }
 }

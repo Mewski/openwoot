@@ -66,7 +66,7 @@ async fn version() -> Result<()> {
         .await
         .context("could not read the firmware version")?;
     show("device", hid::describe(&device));
-    show("firmware", keyboard::format_version(&version));
+    show("firmware", version.firmware);
     show("protocol", version.protocol);
     Ok(())
 }

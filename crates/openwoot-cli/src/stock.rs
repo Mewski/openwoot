@@ -1,11 +1,14 @@
 use std::time::{Duration, Instant};
 
 use openwoot_protocol::{
-    MAX_REPORT_LEN,
+    report,
     stock::{Command, Request, Status, decode_reply},
 };
 
-use crate::{bootloader::PortError, hid::Reports, report};
+use crate::{
+    report::to_hex,
+    transfer::{self, Reports},
+};
 
 const REPLY_TIMEOUT: Duration = Duration::from_secs(2);
 const VERSION_LEN: usize = 3;
@@ -14,12 +17,12 @@ const SHOWN_REPLY_LEN: usize = 32;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Port(#[from] PortError),
+    Transfer(#[from] transfer::Error),
     #[error("unexpected reply to feature command {command}: `{reply}`")]
     UnexpectedReply { command: u8, reply: String },
 }
 
-pub async fn firmware_version(reports: &mut impl Reports) -> Result<Option<String>, Error> {
+pub(crate) async fn firmware_version(reports: &mut impl Reports) -> Result<Option<String>, Error> {
     let Some(payload) = command(reports, Command::Version).await? else {
         return Ok(None);
     };
@@ -32,7 +35,7 @@ pub async fn firmware_version(reports: &mut impl Reports) -> Result<Option<Strin
     Ok(Some(version))
 }
 
-pub async fn enter_update_mode(reports: &mut impl Reports) {
+pub(crate) async fn enter_update_mode(reports: &mut impl Reports) {
     send(reports, Command::EnterUpdateMode).await.ok();
 }
 
@@ -40,21 +43,21 @@ async fn command(reports: &mut impl Reports, command: Command) -> Result<Option<
     send(reports, command).await?;
     let number = u8::from(command);
     let deadline = Instant::now() + REPLY_TIMEOUT;
-    let mut buffer = vec![0; MAX_REPORT_LEN];
+    let mut buffer = vec![0; report::MAX_LEN];
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         let Some(len) = reports.read_input(&mut buffer, remaining).await? else {
             return Ok(None);
         };
-        let report = buffer.get(..len).unwrap_or_default();
-        match decode_reply(report) {
+        let received = buffer.get(..len).unwrap_or_default();
+        match decode_reply(received) {
             Some(reply) if reply.command == number && reply.status == u8::from(Status::Success) => {
                 return Ok(Some(reply.payload.to_vec()));
             }
             Some(reply) if reply.command == number => {
                 return Err(Error::UnexpectedReply {
                     command: number,
-                    reply: report::to_hex(report.get(..SHOWN_REPLY_LEN).unwrap_or(report)),
+                    reply: to_hex(received.get(..SHOWN_REPLY_LEN).unwrap_or(received)),
                 });
             }
             _ => {}
@@ -62,7 +65,7 @@ async fn command(reports: &mut impl Reports, command: Command) -> Result<Option<
     }
 }
 
-async fn send(reports: &mut impl Reports, command: Command) -> Result<(), PortError> {
+async fn send(reports: &mut impl Reports, command: Command) -> Result<(), transfer::Error> {
     reports.discard_input().await?;
     reports
         .write_feature(&Request::new(command, 0).to_report())

@@ -1,6 +1,9 @@
 use std::{future::ready, time::Duration};
 
-use openwoot_cli::bootloader::{Port, PortError, REPLY_LEN, Reply, Request, crc24};
+use openwoot_cli::{
+    bootloader::{Port, REPLY_LEN, Reply, Request, crc24},
+    transfer,
+};
 
 const BLOCK_LEN: usize = 256;
 const PAGE_BLOCKS: u32 = 16;
@@ -60,9 +63,9 @@ impl Bootloader {
         }
     }
 
-    fn connected(&self) -> Result<(), PortError> {
+    fn connected(&self) -> Result<(), transfer::Error> {
         if self.disconnected {
-            Err(PortError::Disconnected)
+            Err(transfer::Error::Disconnected)
         } else {
             Ok(())
         }
@@ -167,12 +170,12 @@ impl Bootloader {
         self.pending = Some(reply);
     }
 
-    fn accept_request(&mut self, request: Request) -> Result<(), PortError> {
+    fn accept_request(&mut self, request: Request) -> Result<(), transfer::Error> {
         self.connected()?;
         if let Some(limit) = &mut self.faults.disconnect_after_requests {
             if *limit == 0 {
                 self.disconnected = true;
-                return Err(PortError::Disconnected);
+                return Err(transfer::Error::Disconnected);
             }
             *limit -= 1;
         }
@@ -182,7 +185,7 @@ impl Bootloader {
         Ok(())
     }
 
-    fn accept_block(&mut self, block: &[u8]) -> Result<(), PortError> {
+    fn accept_block(&mut self, block: &[u8]) -> Result<(), transfer::Error> {
         self.connected()?;
         for &byte in block {
             self.staging.push(byte);
@@ -193,7 +196,7 @@ impl Bootloader {
         Ok(())
     }
 
-    fn take_reply(&mut self, reply: &mut Reply) -> Result<Option<usize>, PortError> {
+    fn take_reply(&mut self, reply: &mut Reply) -> Result<Option<usize>, transfer::Error> {
         self.connected()?;
         Ok(self.pending.take().map(|pending| {
             *reply = pending;
@@ -203,16 +206,19 @@ impl Bootloader {
 }
 
 impl Port for Bootloader {
-    fn discard_replies(&mut self) -> impl Future<Output = Result<(), PortError>> {
+    fn discard_replies(&mut self) -> impl Future<Output = Result<(), transfer::Error>> {
         self.pending = None;
         ready(self.connected())
     }
 
-    fn send_request(&mut self, request: &Request) -> impl Future<Output = Result<(), PortError>> {
+    fn send_request(
+        &mut self,
+        request: &Request,
+    ) -> impl Future<Output = Result<(), transfer::Error>> {
         ready(self.accept_request(*request))
     }
 
-    fn send_block(&mut self, block: &[u8]) -> impl Future<Output = Result<(), PortError>> {
+    fn send_block(&mut self, block: &[u8]) -> impl Future<Output = Result<(), transfer::Error>> {
         ready(self.accept_block(block))
     }
 
@@ -220,7 +226,7 @@ impl Port for Bootloader {
         &mut self,
         reply: &mut Reply,
         _timeout: Duration,
-    ) -> impl Future<Output = Result<Option<usize>, PortError>> {
+    ) -> impl Future<Output = Result<Option<usize>, transfer::Error>> {
         ready(self.take_reply(reply))
     }
 

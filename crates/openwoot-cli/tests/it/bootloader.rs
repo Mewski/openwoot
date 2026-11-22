@@ -2,7 +2,10 @@ mod fake;
 
 use fake::Bootloader;
 use futures_lite::future::block_on;
-use openwoot_cli::bootloader::{Command, Error, Flags, PortError, Session, Upload};
+use openwoot_cli::{
+    bootloader::{Command, Error, Flags, Session, Upload},
+    transfer,
+};
 
 const BLOCK_SIZE: usize = 256;
 const BLOCKS: usize = 40;
@@ -88,7 +91,7 @@ fn a_disappearing_keyboard_stops_the_upload() {
     let mut bootloader = Bootloader::new();
     bootloader.faults.disconnect_after_requests = Some(10);
     let (result, bootloader, progress) = install(bootloader);
-    assert_eq!(result, Err(Error::Port(PortError::Disconnected)));
+    assert_eq!(result, Err(Error::Transfer(transfer::Error::Disconnected)));
     assert_eq!(progress.len(), 8);
     assert_eq!(bootloader.marker, u32::MAX);
     assert_eq!(bootloader.rebooted_with, None);

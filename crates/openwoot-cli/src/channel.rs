@@ -1,11 +1,13 @@
 use std::time::{Duration, Instant};
 
 use openwoot_protocol::{
-    Endpoint, EnterUpdateMode, GetVersion, MAX_REPORT_LEN, Version, decode_response, encode_request,
+    Endpoint, Version, decode_response, encode_request,
+    endpoints::{EnterUpdateMode, GetVersion},
+    report,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::{bootloader::PortError, hid::Reports};
+use crate::transfer::{self, Reports};
 
 const SEQUENCE_NUMBER: u16 = 1;
 const REPLY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -13,18 +15,18 @@ const REPLY_TIMEOUT: Duration = Duration::from_secs(2);
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Port(#[from] PortError),
+    Transfer(#[from] transfer::Error),
     #[error("could not encode the request")]
     Encode(#[source] openwoot_protocol::Error),
     #[error("the firmware answered with an error")]
     Response(#[source] openwoot_protocol::Error),
 }
 
-pub async fn firmware_version(reports: &mut impl Reports) -> Result<Option<Version>, Error> {
+pub(crate) async fn firmware_version(reports: &mut impl Reports) -> Result<Option<Version>, Error> {
     request::<GetVersion>(reports, &()).await
 }
 
-pub async fn enter_update_mode(reports: &mut impl Reports) -> Result<(), Error> {
+pub(crate) async fn enter_update_mode(reports: &mut impl Reports) -> Result<(), Error> {
     request::<EnterUpdateMode>(reports, &()).await?;
     Ok(())
 }
@@ -38,13 +40,13 @@ where
     E::Request: Serialize,
     E::Response: DeserializeOwned,
 {
-    let mut encoded = [0; MAX_REPORT_LEN];
+    let mut encoded = [0; report::MAX_LEN];
     let report =
         encode_request::<E>(SEQUENCE_NUMBER, request, &mut encoded).map_err(Error::Encode)?;
     reports.discard_input().await?;
     reports.write_output(report).await?;
     let deadline = Instant::now() + REPLY_TIMEOUT;
-    let mut reply = vec![0; MAX_REPORT_LEN];
+    let mut reply = vec![0; report::MAX_LEN];
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         let Some(len) = reports.read_input(&mut reply, remaining).await? else {

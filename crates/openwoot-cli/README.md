@@ -16,8 +16,11 @@ openwoot flash --dry-run build/wooting-80he/openwoot-wooting-80he.hex
 stock firmware.
 
 Device access uses `async-hid` (pure Rust: hidraw, IOHIDManager, Win32) driven by `async-io`'s
-`block_on` and timers. The bootloader protocol (`src/bootloader/`) runs over the `Port` trait;
-`tests/bootloader/` runs it against a fake bootloader on the host.
+`block_on` and timers (`hid`). The configuration channel (`channel`) and the stock feature
+commands (`stock`) run over the `transfer::Reports` trait, the bootloader protocol (`bootloader`)
+over its `Port` trait; `tests/it/firmware.rs` and `tests/it/bootloader.rs` run them against fakes
+on the host. `keyboard` finds the keyboard, identifies its firmware and switches it into update
+mode; the binary (`src/main.rs`) holds the command line and the output.
 
 ## Linux
 
