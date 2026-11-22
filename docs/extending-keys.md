@@ -1,6 +1,6 @@
 # Extending the keys
 
-How a key press becomes a report, and where a new key feature goes. The C firmware on the branch `c-firmware` is the behavioural reference; its `docs/extending-keys.md` describes the same pipeline in more depth.
+How a key press becomes a report, and where a new key feature goes. The earlier C firmware in the repository history is the behavioural reference; its `docs/extending-keys.md` describes the same pipeline in more depth.
 
 ## Pipeline
 
