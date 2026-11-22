@@ -4,6 +4,7 @@
 pub mod advanced;
 pub mod config;
 pub mod device;
+pub mod diagnostics;
 pub mod endpoints;
 mod error;
 pub mod gamepad;

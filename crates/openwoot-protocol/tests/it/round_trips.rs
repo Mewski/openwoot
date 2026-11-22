@@ -320,3 +320,70 @@ fn the_largest_lighting_configuration_fits_one_frame() {
         DONE,
     );
 }
+
+#[test]
+fn the_largest_diagnostics_report_fits_one_frame() {
+    use openwoot_protocol::{
+        diagnostics::{
+            Bus, BusError, BusErrors, Keys, Lighting, Profile, Report, Scan, Speed, Storage, Usb,
+        },
+        endpoints::GetDiagnostics,
+    };
+
+    let bus = Bus {
+        completed: u32::MAX,
+        errors: BusErrors {
+            timeout: u32::MAX,
+            bus: u32::MAX,
+            arbitration_loss: u32::MAX,
+            no_acknowledge: u32::MAX,
+            overrun: u32::MAX,
+            dma: u32::MAX,
+            other: u32::MAX,
+        },
+        last_error: Some(BusError::ArbitrationLoss),
+    };
+    round_trip!(
+        GetDiagnostics,
+        (),
+        Report {
+            scan: Scan {
+                cycles: u32::MAX,
+                recoveries: u32::MAX,
+                overruns: Some(u32::MAX),
+            },
+            keys: Keys {
+                passes: u32::MAX,
+                reports: u32::MAX,
+            },
+            profile: Profile {
+                active: Some(u8::MAX),
+                requests: u32::MAX,
+                switches: u32::MAX,
+            },
+            lighting: Lighting {
+                initialized: true,
+                active: true,
+                frames: u32::MAX,
+                page_writes: u32::MAX,
+                failed_page_writes: u32::MAX,
+            },
+            led_bus: bus,
+            storage: Storage {
+                loads: u32::MAX,
+                stores: u32::MAX,
+                failures: u32::MAX,
+            },
+            flash_bus: Bus {
+                last_error: Some(BusError::Dma),
+                ..bus
+            },
+            usb: Usb {
+                configured: true,
+                suspended: true,
+                speed: Some(Speed::High),
+                resets: u32::MAX,
+            },
+        },
+    );
+}

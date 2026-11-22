@@ -4,12 +4,13 @@ use crate::{
     Version, advanced,
     config::{Capabilities, Rejection},
     device::{self, Layout},
-    gamepad, global, keys, lightbar, lighting,
+    diagnostics, gamepad, global, keys, lightbar, lighting,
     profile::{self, Change, LayerChange, LayerRef, Slot, Summary},
     switches,
 };
 
 type Done = Result<(), Rejection>;
+type DiagnosticsReport = diagnostics::Report;
 type CapabilitiesReply = Result<Capabilities, Rejection>;
 type DeviceSettingsReply = Result<device::Settings, Rejection>;
 type LayoutReply = Result<Layout, Rejection>;
@@ -53,6 +54,7 @@ endpoints! {
     | ----------            | ---------            | ----------           | ----                                |
     | GetVersion            | ()                   | Version              | "openwoot/version"                  |
     | EnterUpdateMode       | ()                   | ()                   | "openwoot/update-mode"              |
+    | GetDiagnostics        | ()                   | DiagnosticsReport    | "openwoot/diagnostics"              |
     | GetCapabilities       | ()                   | CapabilitiesReply    | "openwoot/capabilities"             |
     | GetDeviceSettings     | ()                   | DeviceSettingsReply  | "openwoot/device"                   |
     | SetDeviceSettings     | DeviceSettings       | Done                 | "openwoot/device/set"               |
