@@ -1,13 +1,17 @@
 mod board_image;
+mod budget;
+mod call_graph;
+mod entry_points;
 mod names;
 mod packages;
+mod panic_paths;
 mod rust_rules;
 mod rust_source;
 mod symmetry;
 mod tools;
 mod tree;
 
-use std::path::Path;
+use std::{collections::BTreeSet, path::Path};
 
 use anyhow::{Context, Result, bail};
 use packages::Kind;
@@ -36,9 +40,37 @@ pub(crate) fn run(root: &Path) -> Result<()> {
 
     tools::formatting(root)?;
     tools::clippy(&workspace, &members)?;
+    let width = workspace
+        .boards()
+        .iter()
+        .map(|board| board.name.len() + 1)
+        .max()
+        .unwrap_or_default();
+    let mut reviewed = BTreeSet::new();
     for board in workspace.boards() {
-        board_image::check(&workspace, board)
+        let analysis = board_image::check(&workspace, board)
             .with_context(|| format!("could not check the image of `{}`", board.name))?;
+        show(&board.name, analysis.budget, width);
+        if let Err(error) = analysis.budget.check() {
+            problems.push(format!("`{}`: {error}", board.name));
+        }
+        for problem in analysis.panics.problems {
+            problems.push(format!("`{}`: panic reachable: {problem}", board.name));
+        }
+        reviewed.extend(analysis.panics.reviewed);
+    }
+    for (index, site) in panic_paths::REVIEWED.iter().enumerate() {
+        if !reviewed.contains(&index) {
+            problems.push(format!(
+                "reviewed panic site {site} occurs in no image; remove it"
+            ));
+        }
+    }
+    if !problems.is_empty() {
+        for problem in &problems {
+            eprintln!("{problem}");
+        }
+        bail!("{} problems in the images", problems.len());
     }
     show("check", "passed", 0);
     Ok(())

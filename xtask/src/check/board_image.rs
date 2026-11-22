@@ -3,6 +3,12 @@ use std::fs;
 use anyhow::{Context, Result, bail};
 use openwoot_image::{Descriptor, Hex, Image, MemoryLayout};
 
+use super::{
+    budget::Budget,
+    call_graph::CallGraph,
+    entry_points::EntryPoints,
+    panic_paths::{self, Findings},
+};
 use crate::{
     elf::Elf,
     firmware,
@@ -11,7 +17,12 @@ use crate::{
 
 const VECTOR_SIZE: usize = 4;
 
-pub(super) fn check(workspace: &Workspace, board: &Board) -> Result<()> {
+pub(super) struct Analysis {
+    pub(super) budget: Budget,
+    pub(super) panics: Findings,
+}
+
+pub(super) fn check(workspace: &Workspace, board: &Board) -> Result<Analysis> {
     let images = firmware::build(workspace, board)?;
     let memory_x_path = board.directory.join("memory.x");
     let memory_x = fs::read_to_string(&memory_x_path)
@@ -74,7 +85,13 @@ pub(super) fn check(workspace: &Workspace, board: &Board) -> Result<()> {
     if *image.descriptor() != descriptor {
         bail!("the descriptor found in the binary differs from the ELF section");
     }
-    Ok(())
+
+    let graph = CallGraph::new(&elf)?;
+    let entry_points = EntryPoints::find(&elf, &graph)?;
+    Ok(Analysis {
+        budget: Budget::measure(&elf, &layout, &graph, &entry_points)?,
+        panics: panic_paths::find(&elf, &graph, &entry_points),
+    })
 }
 
 fn descriptor_placement(

@@ -13,6 +13,7 @@ clap = { workspace = true }
 ihex = { workspace = true }
 object = { workspace = true }
 openwoot-image = { workspace = true }
+rustc-demangle = { workspace = true }
 svd-encoder = { workspace = true }
 svd-parser = { workspace = true }
 svd-rs = { workspace = true }
