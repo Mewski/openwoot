@@ -19,7 +19,7 @@ use crate::lighting::{
 
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "independent states of the light bar, as in the reference firmware"
+    reason = "independent states of the light bar"
 )]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bar {

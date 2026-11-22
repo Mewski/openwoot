@@ -1,6 +1,6 @@
 #![allow(
     clippy::inline_always,
-    reason = "the hook is inlined into the scan interrupt as the C HAL's always_inline helpers"
+    reason = "the hook is inlined into the scan interrupt to keep it short"
 )]
 
 use core::marker::PhantomData;

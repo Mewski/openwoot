@@ -1,6 +1,6 @@
 #![allow(
     clippy::inline_always,
-    reason = "the level writes run inside the scan interrupt as the C HAL's always_inline helpers"
+    reason = "the level writes run inside the scan interrupt, inlined to keep it short"
 )]
 
 use super::{

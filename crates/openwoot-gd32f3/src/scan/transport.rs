@@ -2,8 +2,7 @@
     clippy::cast_possible_truncation,
     clippy::inline_always,
     reason = "the sample buffer address fits 32 bits on this family, each word packs two 16-bit \
-              conversions, and the sample read is inlined into the scan interrupt as the C HAL's \
-              always_inline helpers"
+              conversions, and the sample read is inlined into the scan interrupt to keep it short"
 )]
 
 use core::sync::atomic::{AtomicU32, Ordering};

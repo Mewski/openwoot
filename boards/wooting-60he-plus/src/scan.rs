@@ -145,7 +145,7 @@ mod tests {
     }
 
     #[test]
-    fn the_layouts_differ_where_the_c_tables_differ() {
+    fn each_layout_variant_places_its_own_keys() {
         assert_eq!(
             ANSI.key(Position::new(0, 0)),
             Some(Key { row: 4, column: 2 })

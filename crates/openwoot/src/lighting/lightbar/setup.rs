@@ -95,7 +95,7 @@ impl Setup {
 
     #[expect(
         clippy::float_cmp,
-        reason = "an input changes when its value differs in any way, as in the reference firmware"
+        reason = "an input changes when its value differs in any way"
     )]
     pub(super) fn notify(&mut self, subscriber: Subscriber, signal: Signal, value: f32) {
         let (entries, states) = if subscriber.global {
@@ -140,7 +140,7 @@ impl Setup {
 
 #[expect(
     clippy::float_cmp,
-    reason = "an input changes when its value differs in any way, as in the reference firmware"
+    reason = "an input changes when its value differs in any way"
 )]
 fn notify_effect(entry: &Entry, effect: &mut EffectState, signal: Signal, value: f32) {
     match (&entry.effect, effect) {

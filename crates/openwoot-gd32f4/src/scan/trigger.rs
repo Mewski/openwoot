@@ -1,7 +1,6 @@
 #![allow(
     clippy::inline_always,
-    reason = "the trigger steps are inlined into the scan interrupt as the C HAL's always_inline \
-              helpers"
+    reason = "the trigger steps are inlined into the scan interrupt to keep it short"
 )]
 
 use crate::{

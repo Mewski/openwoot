@@ -49,8 +49,8 @@ pub const fn prescaler(timer_clock: Hertz) -> u32 {
 #[allow(
     clippy::cast_possible_truncation,
     clippy::inline_always,
-    reason = "the scan reads the microsecond count as its low 16 bits as in the C HAL, inlined into \
-              the scan interrupt as the C HAL's always_inline helper"
+    reason = "the scan reads the microsecond count as its low 16 bits, inlined into the scan \
+              interrupt to keep it short"
 )]
 #[inline(always)]
 pub(crate) fn microseconds() -> u16 {

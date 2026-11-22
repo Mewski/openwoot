@@ -5,7 +5,7 @@ use crate::layout::LAYERS;
 
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "the key flags of the C key record are independent states"
+    reason = "the key flags of the key record are independent states"
 )]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Record {

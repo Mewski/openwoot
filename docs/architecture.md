@@ -17,7 +17,7 @@ xtask (host)         ── openwoot-image
 
 | Crate | Holds today |
 | --- | --- |
-| `crates/openwoot` | `keys::Key` (a key by row and column of the key matrix, with the C firmware's key code), `hid` (report descriptors and typed reports), `xinput` (the XInput report, LED command and interface descriptors), `usb` (the stock-like USB face, `Negotiated`: descriptors of the negotiated speed, `HostState`: what the host set), `protocol` (configuration channel on interface 2, the stock identification responder, `UpdateMode`: what the channel needs to hand over to the bootloader), `runtime` (the USB device, configuration channel, HID report and lighting tasks' logic, `Firmware::new` that builds them at start-up) |
+| `crates/openwoot` | `keys::Key` (a key by row and column of the key matrix, with its one-byte key code: row in the upper three bits, column in the lower five), `hid` (report descriptors and typed reports), `xinput` (the XInput report, LED command and interface descriptors), `usb` (the stock-like USB face, `Negotiated`: descriptors of the negotiated speed, `HostState`: what the host set), `protocol` (configuration channel on interface 2, the stock identification responder, `UpdateMode`: what the channel needs to hand over to the bootloader), `runtime` (the USB device, configuration channel, HID report and lighting tasks' logic, `Firmware::new` that builds them at start-up) |
 | `crates/openwoot-protocol` | the configuration protocol: postcard-rpc endpoints (`GetVersion`), HID report framing, the frame magic and the largest frame |
 | `crates/openwoot-drivers` | `Is31fl3741` over `embedded_hal_async::i2c::I2c`, `SpiNor` over `embedded_hal_async::spi::SpiDevice` |
 | `crates/openwoot-image` | `Descriptor` (the image descriptor), `Image` (checks of an image), `MemoryLayout` (reads `memory.x`) |
@@ -72,13 +72,13 @@ the stock firmware), and no serial number string is offered when the page is bla
 ## Sensing
 
 The hall sensors sit behind analog multiplexers that share four address lines; each multiplexer
-has an enable line and its own converter input. The chip HAL's `scan::Converter` drives them the
-way the C HAL does: TIMER1 channel 1 (1 MHz, single pulse) triggers ADC0, a DMA channel moves the
+has an enable line and its own converter input. The chip HAL's `scan::Converter` drives them:
+TIMER1 channel 1 (1 MHz, single pulse) triggers ADC0, a DMA channel moves the
 result words into a buffer, and the end-of-conversion interrupt runs at priority 0, never masked
 by critical sections. On the Wooting 60HE+ ADC1 converts the zero-field reference at the same
 instant (regular parallel mode) and both converters average 8 conversions.
 
-`openwoot::scan::Scanner` is the C scan state machine: the start-up sweep (rest level and noise
+`openwoot::scan::Scanner` is the scan state machine: the start-up sweep (rest level and noise
 band of both scan modes per sensor), single-input and parallel scanning, the mode switch with its
 settling cycles, magnitude, dead band and hysteresis, and the per-key work of the interrupt
 (idle noise recalibration, bottom-out learning, release-rebound filter, travel). Features and
@@ -99,14 +99,12 @@ position is published in `scan::Travel` (one atomic per position), readable from
 The board's `scanning` task runs `Shared::run` on the key executor; the key task replaces its
 empty closure.
 
-Differences from the C firmware: scan modes 2 to 7 (unreachable in C, the profile clamps the mode
-to 0 or 1) do not exist; the end of a cycle is signalled instead of reserving a ring slot, and the
-events of a cycle are a list sized for every key, so none is dropped; a rest level above the
-nominal bottom-out level gives a bottom level of rest + 50 instead of wrapping; the single-input
-scan skips a multiplexer without keys instead of spinning; the parallel scan maps each converter
-rank through the board's multiplexer order (both boards use the identity); the noise statistics
-and the plateau mean use a separate multiply and add where GCC fused them (no difference in the
-reference vectors).
+Only scan modes 0 and 1 exist (the profile clamps the mode to them). The end of a cycle is
+signalled through a waker, and the events of a cycle are a list sized for every key, so none is
+dropped. A rest level above the nominal bottom-out level gives a bottom level of rest + 50. The
+single-input scan skips a multiplexer without keys. The parallel scan maps each converter rank
+through the board's multiplexer order (both boards use the identity). The noise statistics and
+the plateau mean use a separate multiply and add, not a fused multiply-add.
 
 ## Real time
 

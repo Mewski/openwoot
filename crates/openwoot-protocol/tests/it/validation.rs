@@ -114,7 +114,7 @@ fn distances_of_zero_and_broken_advanced_keys_are_refused() {
 }
 
 #[test]
-fn gamepad_curves_must_rise_and_effects_keep_the_c_rate_limits() {
+fn gamepad_curves_must_rise_and_effects_keep_their_rate_limits() {
     let capabilities = capabilities();
     let mut curve = gamepad_settings();
     curve.curve[2].travel = 70;

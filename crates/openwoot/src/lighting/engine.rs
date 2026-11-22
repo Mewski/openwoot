@@ -32,7 +32,7 @@ pub enum OutputChange {
 
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "independent mode switches of the lighting state, as in the reference firmware"
+    reason = "independent mode switches of the lighting state"
 )]
 pub struct Lighting<
     H,

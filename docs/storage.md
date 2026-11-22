@@ -18,7 +18,7 @@ Both boards carry an 8 MiB SPI NOR flash (W25Q64 or GD25Q64 class, 4096-byte sec
 
 ## Bus and driver
 
-`hal::spi::Spi` is the SPI master as the C HAL sets it up: mode 0, 8 bit, most significant bit first, software chip select, clock = bus clock / 2 (80HE: `SPI0` at 50 MHz on PB3, PA7, PB4; 60HE+: `SPI1` at 30 MHz on PB13, PB15, PB14). Every transfer runs by DMA in both directions; the receive channel's interrupt (priority 1) wakes the waiting task, and the completion is also visible in the DMA flags, so the same code works under `embassy_futures::block_on` at start-up. Dropping a transfer aborts it. Bytes sent while reading are `0x00`, as in C.
+`hal::spi::Spi` is the SPI master: mode 0, 8 bit, most significant bit first, software chip select, clock = bus clock / 2 (80HE: `SPI0` at 50 MHz on PB3, PA7, PB4; 60HE+: `SPI1` at 30 MHz on PB13, PB15, PB14). Every transfer runs by DMA in both directions; the receive channel's interrupt (priority 1) wakes the waiting task, and the completion is also visible in the DMA flags, so the same code works under `embassy_futures::block_on` at start-up. Dropping a transfer aborts it. Bytes sent while reading are `0x00`.
 
 | Board | Receive | Transmit | Interrupt |
 | --- | --- | --- | --- |
@@ -27,7 +27,7 @@ Both boards carry an 8 MiB SPI NOR flash (W25Q64 or GD25Q64 class, 4096-byte sec
 
 `hal::spi::Device` adds the chip-select pin (PD2 on the 80HE, PB12 on the 60HE+): low for one `embedded_hal_async::spi::SpiDevice` transaction, high again afterwards, also when the transaction is dropped.
 
-`SpiNor` implements `embedded_storage_async::nor_flash::NorFlash` (read size 1, write size 4, erase size 4096) and `MultiwriteNorFlash` with the commands of the C driver:
+`SpiNor` implements `embedded_storage_async::nor_flash::NorFlash` (read size 1, write size 4, erase size 4096) and `MultiwriteNorFlash` with these commands:
 
 | Command | Use |
 | --- | --- |
@@ -37,7 +37,7 @@ Both boards carry an 8 MiB SPI NOR flash (W25Q64 or GD25Q64 class, 4096-byte sec
 | `0x02` page program | split at 256-byte page boundaries |
 | `0x20` sector erase | one 4096-byte sector |
 | `0x90` manufacturer and device id | address 0, two bytes |
-| `0x4b` unique id | address 0, four dummy bytes `0xff`, eight bytes (the C byte sequence, so the answer equals stock's) |
+| `0x4b` unique id | address 0, four dummy bytes `0xff`, eight bytes (so the answer equals stock's) |
 
 ## Settings store
 
@@ -53,11 +53,11 @@ The settings are a `sequential-storage` 8.0.2 map (`storage::Settings`) on the p
 
 Global item 0 is the format record (`Format { generation: 1 }`). `Settings::open` erases the partition and writes it when it is missing or different (first boot, the stock littlefs volume, a future incompatible store) and reports `Opened::Formatted(FormatReason::Unrecognised)`; a format request of the factory bootloader (`0x420` in backup register 1, taken by `Bootloader::take_format_request`) erases it too (`FormatReason::Requested`). A read error of the flash is reported and changes nothing.
 
-Switching from stock or C openwoot to this firmware therefore replaces the stock littlefs volume in sectors 0 to 127 with this store; the device-information sector is untouched. Switching back, the stock firmware finds no littlefs volume, formats the chip and starts with factory settings.
+Switching from stock to this firmware therefore replaces the stock littlefs volume in sectors 0 to 127 with this store; the device-information sector is untouched. Switching back, the stock firmware finds no littlefs volume, formats the chip and starts with factory settings.
 
 ## Device information
 
-The factory record is read once at start-up through a `storage::DeviceInfoSource` (`storage::NorSector` on the 80HE, `storage::McuPage` on the 60HE+) into `storage::DeviceInfo`: the serial number (`SerialNumber`, printed by `SerialNumber::text` as `A<supplier>B<year><week>W<product>[T<pcb design>]<revision>[<minor revision>][S<edition>]<stage letter><product id>`, as `storage_format_serial_string` in C), the auxiliary record (`AuxRecord`, at most 58 bytes, kept as bytes), the physical layout and the lock mode (kept as its number).
+The factory record is read once at start-up through a `storage::DeviceInfoSource` (`storage::NorSector` on the 80HE, `storage::McuPage` on the 60HE+) into `storage::DeviceInfo`: the serial number (`SerialNumber`, printed by `SerialNumber::text` as `A<supplier>B<year><week>W<product>[T<pcb design>]<revision>[<minor revision>][S<edition>]<stage letter><product id>`), the auxiliary record (`AuxRecord`, at most 58 bytes, kept as bytes), the physical layout and the lock mode (kept as its number).
 
 | Marker at `+0xffc` | Length prefix | Largest payload |
 | --- | --- | --- |
@@ -66,9 +66,9 @@ The factory record is read once at start-up through a `storage::DeviceInfoSource
 | none, first 30 bytes `0xff` | | blank |
 | none, otherwise | 80HE: 1 byte (`Unmarked::ShortFormat`); 60HE+: the older raw record (`Unmarked::RawRecord`) | |
 
-The payload is the protobuf message `DeviceInfo` of the stock schema (field 1 serial number with required fields 1 to 7, 2 auxiliary record, 3 physical layout, 4 lock mode); a missing required field, a wrong wire type or a value wider than its C field makes the record undecodable, as nanopb does. The raw record of the 60HE+ is the serial number without its optional fields, a length byte at offset 12 and an encoded auxiliary record at offset 13. Defined behaviour instead of the C known issue: a length beyond the 44 bytes of the raw record means "no auxiliary record" instead of decoding the bytes behind the record.
+The payload is the protobuf message `DeviceInfo` of the stock schema (field 1 serial number with required fields 1 to 7, 2 auxiliary record, 3 physical layout, 4 lock mode); a missing required field, a wrong wire type or a value wider than its field makes the record undecodable. The raw record of the 60HE+ is the serial number without its optional fields, a length byte at offset 12 and an encoded auxiliary record at offset 13. A length beyond the 44 bytes of the raw record means "no auxiliary record"; the bytes behind the record are never decoded.
 
-The firmware never writes the device information on either board. Deviation from C and stock on the 80HE: host commands that change the serial number, the auxiliary record, the layout or the lock mode cannot store them there; a later package keeps such values in the settings store if they are needed.
+The firmware never writes the device information on either board. Deviation from stock on the 80HE: host commands that change the serial number, the auxiliary record, the layout or the lock mode cannot store them there; a later package keeps such values in the settings store if they are needed.
 
 The physical layout is a `storage::LayoutVariantSource`: `InDeviceInfo` (80HE: the record's field, 0 when absent) or `OptionBit` (60HE+: bit 0 of the user option byte, read by `hal::flash::user_option`).
 

@@ -2,7 +2,7 @@
     clippy::cast_possible_truncation,
     clippy::inline_always,
     reason = "register addresses fit 32 bits on this family, and the per-sample steps are inlined \
-              into the scan interrupt as the C HAL's always_inline helpers"
+              into the scan interrupt to keep it short"
 )]
 
 use crate::{

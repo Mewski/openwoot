@@ -119,7 +119,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_special_action_keeps_its_c_code() {
+    fn every_special_action_keeps_its_code() {
         for code in 0..=15 {
             if let Some(special) = Special::from_code(code) {
                 assert_eq!(special.code(), code);

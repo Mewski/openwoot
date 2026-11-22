@@ -161,7 +161,7 @@ mod tests {
     const EXAMPLE_SERIAL: &str = "A01B2401W01T00100S01H00300";
 
     #[test]
-    fn the_serial_text_follows_the_c_format() {
+    fn the_serial_text_formats_its_fields() {
         let serial = SerialNumber::parse(EXAMPLE_SERIAL).unwrap();
         assert_eq!(serial.text().as_str(), EXAMPLE_SERIAL);
         let short = SerialNumber {

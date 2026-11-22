@@ -10,9 +10,6 @@ keyboard they expect.
 | Wooting 80HE | GD32F425 | Runs as a daily keyboard: typing, LEDs, light bar, profiles and the Mode key work on hardware. Advanced keys, gamepad and XInput are tested against the stock behaviour on the host, not yet on hardware. |
 | Wooting 60HE+ | GD32F303 | Builds and passes every host test; never run on hardware. Its update mode is unknown, so `openwoot flash` refuses it. |
 
-The earlier C firmware remains in the repository history as the reference for features and
-hardware behaviour.
-
 ## Features
 
 - Hall-effect scanning with per-key actuation point, rapid trigger (normal and continuous),

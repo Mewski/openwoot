@@ -224,7 +224,7 @@ mod tests {
     use crate::hid::CONSUMER_SLOTS;
 
     #[test]
-    fn key_state_entries_carry_the_c_codes_and_ten_bit_travel() {
+    fn key_state_entries_carry_the_key_codes_and_ten_bit_travel() {
         let mut output = Output::default();
         let key = Key::new(1, 2);
         output.log(Action::Keyboard(0xE1), key, 4095, true);

@@ -1,6 +1,6 @@
 # Extending the keys
 
-How a key press becomes a report, and where a new key feature goes. The earlier C firmware in the repository history is the behavioural reference; its `docs/extending-keys.md` describes the same pipeline in more depth.
+How a key press becomes a report, and where a new key feature goes.
 
 ## Pipeline
 
@@ -31,4 +31,4 @@ Travel is the unit of every threshold inside `keys`: the configuration's distanc
 
 ## Tests
 
-Unit tests next to each state machine; `tests/it/keys/` drives the engine pass by pass and the whole pipeline through a simulated scan; the private golden vectors of the C build cover the press decision, the action sink, every advanced key and the gamepad math.
+Unit tests next to each state machine; `tests/it/keys/` drives the engine pass by pass and the whole pipeline through a simulated scan; recorded golden vectors, kept outside this repository, cover the press decision, the action sink, every advanced key and the gamepad math.

@@ -8,7 +8,7 @@ const fn kind(id: u8) -> SwitchModel {
 }
 
 #[test]
-fn switch_models_exist_for_the_49_ids_of_the_c_table() {
+fn switch_models_exist_for_49_ids() {
     assert!(SwitchModel::new(48).is_some());
     assert!(SwitchModel::new(49).is_none());
     assert_eq!(kind(34).travel(), 80);

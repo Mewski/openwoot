@@ -189,7 +189,7 @@ fn programming_only_clears_bits() {
 }
 
 #[test]
-fn identification_and_unique_id_use_the_c_command_bytes() {
+fn identification_and_unique_id_use_the_chip_command_bytes() {
     let mut flash = SpiNor::new(Chip::new(), CAPACITY);
     let id = block_on(flash.identification()).unwrap();
     assert_eq!(

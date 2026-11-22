@@ -2,8 +2,8 @@
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
     clippy::cast_sign_loss,
-    reason = "the gamepad math converts as the C firmware does: travel to float, floats to integers \
-              truncated toward zero and saturated, then cut to the width of the report field"
+    reason = "the gamepad math converts travel to float, floats to integers truncated toward zero \
+              and saturated, then cuts them to the width of the report field"
 )]
 
 mod axis;

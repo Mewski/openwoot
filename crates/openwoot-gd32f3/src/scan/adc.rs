@@ -2,8 +2,8 @@
     clippy::cast_possible_truncation,
     clippy::inline_always,
     reason = "ranks, sequence lengths and the sample register address fit their register fields \
-              on this family, and the per-sample steps are inlined into the scan interrupt as the \
-              C HAL's always_inline helpers"
+              on this family, and the per-sample steps are inlined into the scan interrupt to \
+              keep it short"
 )]
 
 use crate::{

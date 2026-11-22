@@ -2,9 +2,8 @@
     clippy::cast_possible_truncation,
     clippy::inline_always,
     reason = "port letters, input counts and timer counts fit their narrower types on this \
-              family, the timer counter is compared as its low 16 bits as in the C HAL, and the \
-              per-sample steps are inlined into the scan interrupt as the C HAL's always_inline \
-              helpers"
+              family, the timer counter is compared as its low 16 bits, and the per-sample steps \
+              are inlined into the scan interrupt to keep it short"
 )]
 
 use cortex_m::peripheral::NVIC;

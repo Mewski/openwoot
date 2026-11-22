@@ -4,7 +4,7 @@
     clippy::cast_sign_loss,
     clippy::inline_always,
     clippy::struct_excessive_bools,
-    reason = "the scan interrupt inlines its per-sample steps and keeps the C firmware's narrow scan state"
+    reason = "the scan interrupt inlines its per-sample steps and keeps a narrow scan state"
 )]
 
 mod converter;

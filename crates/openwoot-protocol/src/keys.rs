@@ -300,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn tap_durations_are_the_three_c_presets() {
+    fn tap_durations_are_the_three_presets() {
         assert_eq!(
             [
                 TapDuration::OneMillisecond,

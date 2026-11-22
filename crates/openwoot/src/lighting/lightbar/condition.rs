@@ -80,7 +80,7 @@ fn evaluate_term(term: &Term, state: &mut TermState, elapsed_ms: u32) -> bool {
 
 #[expect(
     clippy::float_cmp,
-    reason = "comparisons are exact, as the condition terms of the reference firmware compare"
+    reason = "the condition terms compare their values exactly"
 )]
 fn compare(term: &Term, comparison: &Comparison, state: &mut TermState) -> bool {
     let left = state.left;

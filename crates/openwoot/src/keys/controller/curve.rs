@@ -114,7 +114,7 @@ mod tests {
     }
 
     #[test]
-    fn a_curve_without_input_range_divides_by_zero_as_the_c_firmware_does() {
+    fn a_curve_without_input_range_divides_by_zero() {
         let flat = settings([(0, 0); 4]);
         assert!(normalize_travel(0, Some(&flat)).is_nan());
         assert_eq!(normalize_travel(1, Some(&flat)), 1.0);

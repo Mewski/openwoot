@@ -294,7 +294,7 @@ fn hang() -> ! {
 mod tests {
     use super::*;
 
-    const C_BUILD: ClockTree = ClockTree {
+    const BOARD_TREE: ClockTree = ClockTree {
         crystal: Hertz::from_mhz(25),
         pll: Pll {
             input_divider: 25,
@@ -309,8 +309,8 @@ mod tests {
     };
 
     #[test]
-    fn the_c_configuration_gives_the_c_frequencies() {
-        let clocks = C_BUILD.clocks();
+    fn the_board_tree_runs_at_200_megahertz_from_the_25_megahertz_crystal() {
+        let clocks = BOARD_TREE.clocks();
         assert_eq!(clocks.pll_input, Hertz::from_mhz(1));
         assert_eq!(clocks.pll_vco, Hertz::from_mhz(400));
         assert_eq!(clocks.pll_peripheral, Hertz(44_444_444));
@@ -323,11 +323,17 @@ mod tests {
     }
 
     #[test]
-    fn the_c_configuration_gives_the_c_register_values() {
-        assert_eq!(C_BUILD.pll_register(), 0x0940_6419);
-        assert_eq!(C_BUILD.ahb_divider.field() << CFG0_AHBPSC_SHIFT, 0);
-        assert_eq!(C_BUILD.apb2_divider.field() << CFG0_APB2PSC_SHIFT, 0x8000);
-        assert_eq!(C_BUILD.apb1_divider.field() << CFG0_APB1PSC_SHIFT, 0x1400);
+    fn the_board_tree_gives_its_register_values() {
+        assert_eq!(BOARD_TREE.pll_register(), 0x0940_6419);
+        assert_eq!(BOARD_TREE.ahb_divider.field() << CFG0_AHBPSC_SHIFT, 0);
+        assert_eq!(
+            BOARD_TREE.apb2_divider.field() << CFG0_APB2PSC_SHIFT,
+            0x8000
+        );
+        assert_eq!(
+            BOARD_TREE.apb1_divider.field() << CFG0_APB1PSC_SHIFT,
+            0x1400
+        );
         assert_eq!(AhbDivider::By2.field() << CFG0_AHBPSC_SHIFT, 0x80);
         assert_eq!(AhbDivider::By4.field() << CFG0_AHBPSC_SHIFT, 0x90);
     }
@@ -336,13 +342,13 @@ mod tests {
     fn timers_follow_the_timer_clock_selection() {
         let doubled = ClockTree {
             timer_multiplier: TimerMultiplier::Double,
-            ..C_BUILD
+            ..BOARD_TREE
         };
         assert_eq!(doubled.clocks().apb1_timers, Hertz::from_mhz(100));
         assert_eq!(doubled.clocks().apb2_timers, Hertz::from_mhz(200));
         let slow_apb1 = ClockTree {
             apb1_divider: ApbDivider::By8,
-            ..C_BUILD
+            ..BOARD_TREE
         };
         assert_eq!(slow_apb1.clocks().apb1_timers, Hertz::from_mhz(100));
     }

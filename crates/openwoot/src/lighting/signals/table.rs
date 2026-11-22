@@ -83,7 +83,7 @@ impl Table {
 
     #[expect(
         clippy::float_cmp,
-        reason = "a signal changes when its value differs in any way, as in the reference firmware"
+        reason = "a signal changes when its value differs in any way"
     )]
     pub(crate) fn publish_if_changed(&mut self, builtin: Builtin, value: f32) -> &[Subscriber] {
         match self.builtin.get_mut(index(builtin)) {
@@ -97,7 +97,7 @@ impl Table {
 
     #[expect(
         clippy::float_cmp,
-        reason = "a signal changes when its value differs in any way, as in the reference firmware"
+        reason = "a signal changes when its value differs in any way"
     )]
     pub(crate) fn set_host(&mut self, id: u32, value: f32) -> &[Subscriber] {
         match self.host.iter_mut().find(|host| host.id == id) {

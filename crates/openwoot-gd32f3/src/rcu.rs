@@ -262,7 +262,7 @@ fn hang() -> ! {
 mod tests {
     use super::*;
 
-    const C_BUILD: ClockTree = ClockTree {
+    const BOARD_TREE: ClockTree = ClockTree {
         pll_multiplier: PllMultiplier::new::<30>(),
         ahb_divider: AhbDivider::By1,
         apb1_divider: ApbDivider::By2,
@@ -270,8 +270,8 @@ mod tests {
     };
 
     #[test]
-    fn the_c_configuration_gives_the_c_frequencies() {
-        let clocks = C_BUILD.clocks();
+    fn the_board_tree_runs_at_120_megahertz() {
+        let clocks = BOARD_TREE.clocks();
         assert_eq!(clocks.system, Hertz::from_mhz(120));
         assert_eq!(clocks.ahb, Hertz::from_mhz(120));
         assert_eq!(clocks.apb1, Hertz::from_mhz(60));
@@ -281,11 +281,11 @@ mod tests {
     }
 
     #[test]
-    fn the_c_configuration_gives_the_c_register_values() {
-        assert_eq!(C_BUILD.pll_multiplier.field(), 0x0834_0000);
-        assert_eq!(C_BUILD.ahb_divider.field() << CFG0_AHBPSC_SHIFT, 0);
-        assert_eq!(C_BUILD.apb2_divider.field() << CFG0_APB2PSC_SHIFT, 0);
-        assert_eq!(C_BUILD.apb1_divider.field() << CFG0_APB1PSC_SHIFT, 0x400);
+    fn the_board_tree_gives_its_register_values() {
+        assert_eq!(BOARD_TREE.pll_multiplier.field(), 0x0834_0000);
+        assert_eq!(BOARD_TREE.ahb_divider.field() << CFG0_AHBPSC_SHIFT, 0);
+        assert_eq!(BOARD_TREE.apb2_divider.field() << CFG0_APB2PSC_SHIFT, 0);
+        assert_eq!(BOARD_TREE.apb1_divider.field() << CFG0_APB1PSC_SHIFT, 0x400);
         assert_eq!(AhbDivider::By2.field() << CFG0_AHBPSC_SHIFT, 0x80);
         assert_eq!(
             CFG0_PLLMF_LOW | CFG0_PLLMF_4 | CFG0_PLLMF_5,
