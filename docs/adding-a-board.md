@@ -11,8 +11,9 @@ under `boards/`, and the host tool reads everything it needs from the image desc
 | `Cargo.toml` | package `<board>`, a library and the binary `openwoot-<board>` (`test = false`); dependencies on `openwoot`, `openwoot-image`, `cortex-m-rt` and exactly one chip HAL |
 | `memory.x` | the `FLASH` and `RAM` regions and the `.app_descriptor` section behind the vector table (copy an existing board and change the two regions) |
 | `build.rs` | the same in every board: reads `memory.x`, generates the constant `IMAGE` and passes `link.x` to the linker for thumb targets |
-| `src/lib.rs` | the board facts as constants (name, USB ids, update mode, protected flash areas, key matrix), `DESCRIPTOR`, `Board` and its `impl openwoot::Keyboard`, re-exports `hal` and `entry`, and tests of the facts |
-| `src/main.rs` | `hal::app_descriptor!(DESCRIPTOR)`, the `#[entry]` function and the panic handler |
+| `src/lib.rs` | the board facts as constants (name, USB ids, update mode, protected flash areas, key matrix), `DESCRIPTOR`, `Board` (the configured drivers by board function, built by `Board::new`), re-exports `hal` and `entry`, and tests of the facts |
+| `src/scan.rs`, `src/lighting.rs`, `src/storage.rs` | the data of each area: sensor wiring and maps, LED maps and variants, flash layout |
+| `src/main.rs` | `hal::app_descriptor!(DESCRIPTOR)`, the statics the tasks share, the `#[entry]` function that builds the `Board` and spawns the tasks, the task declarations and the panic handler |
 | `README.md` | the board, its state and its memory layout |
 
 `FLASH` in `memory.x` starts behind the factory bootloader and ends before the pages that hold

@@ -4,9 +4,9 @@ What a host sees when a keyboard runs openwoot: the USB device, its five interfa
 
 | Part | Code |
 | --- | --- |
-| device and interfaces | `crates/openwoot/src/usb/` (`usb::build`, `usb::Face`, `usb::Control`) |
+| device and interfaces | `crates/openwoot/src/usb/` (`usb::build`, `usb::Face`, `usb::HostState`, the HID class request handler) |
 | report descriptors and typed reports | `crates/openwoot/src/hid/` (`hid::DescriptorBuilder`, one module per report, re-exported by `hid`) |
-| configuration channel, firmware side | `crates/openwoot/src/protocol/` (`protocol::Channel`, `protocol::Handler`, the stock identification responder with `protocol::StockIdentity` and `protocol::FeatureRequests`) |
+| configuration channel, firmware side | `crates/openwoot/src/protocol/` (`protocol::Channel`, `protocol::Handler`, `protocol::UpdateMode`, the stock identification responder with `protocol::StockIdentity`); the stock feature-report queue `usb::FeatureRequests` |
 | messages, framing, host side | `crates/openwoot-protocol/` |
 
 Everything above is generic over `embassy_usb_driver::Driver` and runs on the host; the chip HALs provide the drivers (USBHS with an external ULPI PHY on the Wooting 80HE, USBD on the Wooting 60HE+).
@@ -84,8 +84,8 @@ Report descriptors are built at compile time by `hid::DescriptorBuilder` (a `con
 | `hid::ConsumerReport` (id 2) | id, three 16-bit consumer usages (1..`0x02a2`, 0 none) |
 | `hid::MouseReport` (id 3) | id, five button bits and three padding bits, relative X and Y (-127..127) |
 | `hid::GamepadReport` (interface 0, `Gamepad`) | 12 button bits and 4 padding bits, X, Y, Z, Rz, Rx, Ry (0..`0x7ffe`, centre `0x3fff`), throttle, elevator, accelerator, rudder, trigger (0..`0x7fff`), hat (1..8 clockwise from up, 0 centred) |
-| `hid::XinputReport` (interface 0, `Xinput`) | `0x00`, `0x14`, buttons (16 bits), left and right trigger (8 bits each), left X, left Y, right X, right Y (signed 16 bits), six zero bytes |
-| XInput output (`usb::XinputLedPattern`) | `0x01 0x03 <pattern>`: patterns 2..5 and 6..9 select player 1..4 |
+| `xinput::Report` (interface 0, `Xinput`) | `0x00`, `0x14`, buttons (16 bits), left and right trigger (8 bits each), left X, left Y, right X, right Y (signed 16 bits), six zero bytes |
+| XInput output (`xinput::LedPattern`) | `0x01 0x03 <pattern>`: patterns 2..5 and 6..9 select player 1..4 |
 | `hid::KeyStateReport` (interface 4) | 16 entries of 4 bytes: key position, usage code, then a 16-bit word: bit 0 pressed, bits 2..5 kind (0 keyboard, 3 consumer, 4 function, 5 gamepad, 6 advanced), bits 6..15 travel (0..1023); unused entries are 0 |
 
 ## Configuration channel
@@ -98,7 +98,7 @@ The channel uses interface 2 (usage page `0xff55`, usage 1) with the stock repor
 report id | 0x4f 0x57 ("OW") | frame length (u16, little endian) | frame | zero padding
 ```
 
-A frame goes into the smallest report that holds it (up to 2042 bytes in report 6). Stock traffic starts with `d1 da` or `ee` and never with `OW`, so the two cannot be confused (`openwoot_protocol::parse_report` returns `Contents::Foreign` for it).
+A frame goes into the smallest report that holds it (up to 2042 bytes in report 6). Stock traffic starts with `d1 da` or `ee` and never with `OW`, so the two cannot be confused (`openwoot_protocol::report::parse` returns `report::Contents::Foreign` for it).
 
 ### Frame
 
@@ -114,16 +114,16 @@ The host sends requests with 8-byte keys and 2-byte sequence numbers (`openwoot_
 
 ### Endpoints
 
-Every endpoint is declared once in `openwoot_protocol` (`endpoint.rs`, collected in `ENDPOINT_LIST`). `Done` stands for `Result<(), Rejection>`; every other configuration response is `Result<T, Rejection>` with the type shown.
+Every endpoint is declared once in `openwoot_protocol::endpoints` (one table, collected in `endpoints::LIST`). `Done` stands for `Result<(), Rejection>`; every other configuration response is `Result<T, Rejection>` with the type shown.
 
 | Endpoint | Path | Request | Response |
 | --- | --- | --- | --- |
 | `GetVersion` | `openwoot/version` | `()` | `Version { protocol: u16, firmware: FirmwareVersion { major: u16, minor: u16, patch: u16 } }` |
-| `EnterUpdateMode` | `openwoot/update-mode` | `()` | `()`; after sending it the firmware hands over to the factory bootloader (`Keyboard::enter_update_mode` with option byte 0), which stays in update mode for one start |
+| `EnterUpdateMode` | `openwoot/update-mode` | `()` | `()`; after sending it the firmware hands over to the factory bootloader (`UpdateMode::enter_update_mode` with option byte 0), which stays in update mode for one start |
 | `GetCapabilities` | `openwoot/capabilities` | `()` | `config::Capabilities` |
 | `GetDeviceSettings`, `SetDeviceSettings` | `openwoot/device`, `…/set` | `()`, `device::Settings` | `device::Settings`, `Done` |
 | `GetLayout`, `SetLayout` | `openwoot/layout`, `…/set` | `()`, `device::Layout` | `device::Layout`, `Done` |
-| `GetGlobalSettings`, `SetGlobalSettings` | `openwoot/global`, `…/set` | `()`, `config::GlobalSettings` | `config::GlobalSettings`, `Done` |
+| `GetGlobalSettings`, `SetGlobalSettings` | `openwoot/global`, `…/set` | `()`, `global::Settings` | `global::Settings`, `Done` |
 | `GetProfiles` | `openwoot/profiles` | `()` | `profile::Summary { count, active }` |
 | `CreateProfile` | `openwoot/profiles/create` | `()` | `profile::Slot` of the new profile |
 | `DeleteProfile`, `ActivateProfile` | `openwoot/profiles/delete`, `…/activate` | `profile::Slot` | `Done` |
@@ -155,7 +155,7 @@ The configuration is a set of typed parts, each a `no_std` serde type in `openwo
 | capabilities | `config::Capabilities` | key matrix rows and columns, number of profile slots, layouts the board can have, light-bar LEDs (0 = none), host signals, switch models, edition |
 | device | `device::Settings` | USB mode (`Xinput`, `Gamepad`, `NoGamepad`), keyboard report (`NKeyRollover`, `Boot`), speed (`High`, `Full`), gamepad polling (4 ms, 1 ms, 125 µs); converted to `usb::Face` by `From`; takes effect at the next start |
 | layout | `device::Layout` | `Ansi`, `Iso`, `Jis`; must be one of `Capabilities::layouts` |
-| global | `config::GlobalSettings` | idle dimming (`lighting::Idle`: dim after, off after, off enabled; `None` = never), Num Lock indicator inverted, release-rebound filter |
+| global | `global::Settings` | idle dimming (`lighting::Idle`: dim after, off after, off enabled; `None` = never), Num Lock indicator inverted, release-rebound filter |
 | profile info | `profile::Info` | name (up to 32 bytes of UTF-8), colour |
 | key settings | `keys::Settings` | profile-wide actuation point, rapid trigger (enabled, press and release sensitivity, continuous), tap duration (1, 20, 40 ms), scan mode (single or parallel), keyboard keys in the gamepad modes |
 | keymap | `keys::Keymap` | one `keys::Action` per key of one layer (`Base`, `One`, `Two`, `Three`) |
@@ -186,7 +186,7 @@ Differences from the C firmware's configuration: one profile namespace of `Capab
 
 The official Wootility recognises keyboards by vendor id, product id and usage page `0xff55` and talks to them with stock feature commands. The responder answers the few it needs to recognise the keyboard and to install the stock firmware, so that returning to stock is the normal Wootility update (see [flashing](flashing.md)).
 
-A stock feature command is a `SET_REPORT` of feature report 1 on interface 2 (`wValue` `0x0301`): `01 d1 da <command> <a0 a1 a2 a3>` (argument little endian; data without the report id byte is accepted too). `usb::Control` checks and queues it in `HostState::feature_requests` (`protocol::FeatureRequests`: four entries, at most three commands, as stock), and `protocol::Channel` answers it on `0x83` as an input report in the smallest report that holds it, zero padded:
+A stock feature command is a `SET_REPORT` of feature report 1 on interface 2 (`wValue` `0x0301`): `01 d1 da <command> <a0 a1 a2 a3>` (argument little endian; data without the report id byte is accepted too). The USB control handler checks and queues it in `HostState::feature_requests` (`usb::FeatureRequests`: four entries, at most three commands, as stock), and `protocol::Channel` answers it on `0x83` as an input report in the smallest report that holds it, zero padded:
 
 ```
 report id | d1 da | command | status | payload length (u16, little endian) | payload
@@ -196,7 +196,7 @@ report id | d1 da | command | status | payload length (u16, little endian) | pay
 | --- | --- | --- |
 | 0, ping | `a0` | 1 byte: `a0` inverted |
 | 1, version | none | `02 01 02`: version 2.1.2, see below |
-| 2, reset to update mode | `a0`: option bits for the bootloader (bit 0 high speed, bit 1 ignore the key combination, bit 2 no lighting) | none; the channel calls `Keyboard::enter_update_mode(a0)`, which writes `0x504` and `a0` to the backup registers and resets, as stock |
+| 2, reset to update mode | `a0`: option bits for the bootloader (bit 0 high speed, bit 1 ignore the key combination, bit 2 no lighting) | none; the channel calls `UpdateMode::enter_update_mode(a0)`, which writes `0x504` and `a0` to the backup registers and resets, as stock |
 | 3, serial number, selector 0 | `arg` = 0 | 11 bytes: supplier (u16), year, week, product (u16), revision (u16), product id (u16, at most `0xfffe`), stage; all zero without a serial number |
 | 3, selector 1 | `arg` = 1 | 12 bytes: the 96-bit unique id of the microcontroller (`StockIdentity::mcu_id`, read by `hal::flash::unique_id`) |
 | 3, selector 2 | `arg` = 2 | the protobuf message `SerialNumber` (fields 1 to 7 always, 9 edition, 10 PCB design, 11 minor revision when present), encoded as the stock firmware encodes it; without a serial number status `0xff` with the 16-bit error -2 (`fe ff`, no device information) |

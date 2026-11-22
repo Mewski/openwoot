@@ -1,6 +1,6 @@
 # Storage
 
-What the firmware keeps across a power cycle, where it lies, how it is written and what survives a power cut. The code is `openwoot::storage` (`crates/openwoot/src/storage/`), the flash driver `openwoot_drivers::SpiNor`, the bus `hal::spi` of each chip HAL, and the board facts `boards/<board>/src/storage.rs`.
+What the firmware keeps across a power cycle, where it lies, how it is written and what survives a power cut. The code is `openwoot::storage` (`crates/openwoot/src/storage/`), the flash driver `openwoot_drivers::spi_nor::SpiNor`, the bus `hal::spi` of each chip HAL, and the board facts `boards/<board>/src/storage.rs`.
 
 ## Where data lives
 
