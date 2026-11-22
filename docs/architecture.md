@@ -47,6 +47,18 @@ The key interrupt executor (UART4 vector, priority 3) is started but stays empty
 lands. Long-lived state (`usb::Resources`, `usb::HostState`, the key events, the lighting engine)
 lives in one `runtime::State` static of the board binary, handed out once by `runtime::Firmware::new`.
 
+Optional lighting features plug into the engine as its hooks type (`lighting::Lightbar` and
+`lighting::Signals`, `()` for none). The Wooting 80HE binds `lighting::Bar`: the light-bar
+entries of the active profile and the keyboard-wide entries (profile indicator, meter, mirror,
+blink, solid, custom colours; conditions of up to two groups of two terms), its own brightness
+per frame page, and the signal table the entries subscribe to. The lighting task publishes the
+built-in signals (key presses and the key rate, the deepest travel, lock states and layer from
+the key notices, brightness steps, the profile slot, count and colour), and `profile::Shared`
+carries the profile's light-bar settings, the keyboard-wide entries and the host signals
+(`lighting::HostExchange`) from the configuration task to it. A board with a special edition
+(the 80HE TenZ) gives a `profile::Edition`; `Edition::unit` picks the product string, the
+factory profiles and the default switch type from the edition code of the serial number.
+
 The configuration descriptor is built once for the face of the board (`FACE`, high speed on the
 Wooting 80HE, full speed on the Wooting 60HE+), and `usb::Negotiated` wraps the chip driver so
 that each `GET_DESCRIPTOR(CONFIGURATION)` answers with the gamepad `bInterval` of the speed the
@@ -93,6 +105,52 @@ scan skips a multiplexer without keys instead of spinning; the parallel scan map
 rank through the board's multiplexer order (both boards use the identity); the noise statistics
 and the plateau mean use a separate multiply and add where GCC fused them (no difference in the
 reference vectors).
+
+## Real time
+
+Priorities: 0 the scan interrupt (never masked), 1 the time driver (TIMER4), 2 USB, 3 the key
+executor (UART4 vector) with the `scanning` task; everything else runs on the thread executor.
+Critical sections raise BASEPRI to `0x10`, so a critical section delays every level but the scan.
+
+The scan interrupt keeps the try-lock on the scanner (a compare-and-swap and a release store, about
+10 instructions per conversion). Ownership alternates between the key task and the interrupt by the
+`running` flag, and the lock is what lets both sides reach the scanner through a shared `static`
+without `unsafe` outside the chip HAL; it also turns a conversion that arrives while the task holds
+the scanner (a late interrupt after a recovery) into a skipped conversion instead of a data race.
+Dropping it needs an `UnsafeCell` whose exclusive access is proven by the flag, which is `unsafe`
+code in `openwoot`, so the lock stays.
+
+A press reaches the keyboard report at the end of the scan cycle that samples it: in the same
+cycle when it lands before its key's conversion, at the end of the next cycle when it lands after
+it (`keys::latency` tests). A single-input cycle of the 80HE map converts 85 times and waits
+481 µs between conversions (513 µs with 375 ns per conversion); the key step that follows takes
+about 150 µs, so a press is reported 0.15 to 1.5 ms after it happens, before the USB poll.
+
+`xtask check` reads every board image with its relocations (the boards link with
+`--emit-relocs`) and builds a call graph: an edge for every branch and every address a function
+or a table takes, through data such as vtables. Two checks run on it:
+
+- No panic is reachable from an interrupt vector or from the poll function of the key task
+  (`scanning`, run by the key executor), except the `async fn` resumed-after-completion panics no
+  executor triggers and the sites in `xtask/src/check/panic_paths/reviewed.rs`: asserts of pinned
+  dependencies on facts the hardware or the dependency itself guarantees (OTG endpoint numbers,
+  SETUP packet length, the `AtomicWaker` protocol, the channel's own lock, executor wakers), each
+  with its reason. A reviewed site that no image reaches any more is reported for removal.
+- RAM and flash budget: statics plus a stack bound must fit the RAM of `memory.x` with 2048
+  bytes to spare, and the image must leave 32 KiB of its area free. The stack bound is the
+  deepest path over the call graph with each function's frame decoded from its stack-pointer
+  adjustments: thread mode (the start-up path, or the thread executor plus its deepest task),
+  plus every interrupt handler once with its 108-byte exception frame, plus the key task.
+  Indirect calls through function pointers stored at run time are not followed; the stack
+  paint covers them on hardware.
+
+Start-up keeps large values out of frames that live forever: `main` only calls
+`hal::executor::run(start)`, and `start`, `open_model`, `install_scanner` and `open_storage`
+are separate functions whose frames are gone before the executor polls the first task.
+
+The chip HALs paint the stack at reset (`cortex-m-rt` `paint-stack`); `GetDiagnostics`
+(`openwoot/diagnostics/2`) reports the stack size and the deepest use since reset, and
+`openwoot status` prints it as `stack peak`.
 
 ## Image descriptor
 

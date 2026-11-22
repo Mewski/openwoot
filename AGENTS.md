@@ -2,7 +2,7 @@
 
 Keyboard firmware for Wooting hall-effect keyboards, written in Rust, with its own configuration protocol shared with a Rust host application. This branch (`rust`) is a new firmware; the branch `main` holds the earlier C firmware, which is the reference for features and hardware behaviour. Read code there; never copy it.
 
-**State: working keyboard on the Wooting 80HE.** On the owner's keyboard: enumerates at 480 Mbit/s; types with stock-like actuation in single scan mode; the LEDs show the factory profiles' effects and react to presses; the Mode key switches between the factory profiles (stored on the NOR flash); `openwoot version`, `openwoot status` (diagnostics) and `openwoot flash` work over the configuration channel; the official Wootility returns it to stock. Host-tested against the C firmware's recorded behaviour: scanning and the analog model, keys (actuation, rapid trigger, dynamic keystroke, mod-tap, toggle, two-key resolvers, Fn layer, 6KRO/NKRO, gamepad, XInput), storage, lighting, profiles, the configuration model. Not yet: light bar, host signals, editions (P13), real-time measurements on hardware (P16), the advanced keys, gamepad and XInput checked on hardware. The 60HE+ has never run on hardware. Update this file whenever the layout, commands or rules change.
+**State: working keyboard on the Wooting 80HE.** On the owner's keyboard: enumerates at 480 Mbit/s; types with stock-like actuation in single scan mode; the LEDs show the factory profiles' effects and react to presses; the Mode key switches between the factory profiles (stored on the NOR flash); `openwoot version`, `openwoot status` (diagnostics) and `openwoot flash` work over the configuration channel; the official Wootility returns it to stock. Host-tested against the C firmware's recorded behaviour: scanning and the analog model, keys (actuation, rapid trigger, dynamic keystroke, mod-tap, toggle, two-key resolvers, Fn layer, 6KRO/NKRO, gamepad, XInput), storage, lighting, the light bar and its signals, profiles (with the 80HE TenZ edition), the configuration model. Not yet: the light bar on hardware, real-time measurements on hardware (P16), the advanced keys, gamepad and XInput checked on hardware. The 60HE+ has never run on hardware. Update this file whenever the layout, commands or rules change.
 
 ## Layout
 
@@ -31,6 +31,9 @@ Optional features (light bar, host signals, editions, ...) and alternative behav
 - Interrupt priorities: 0 the hall-sensor scan only (never masked), 1 the time driver, 2 USB, 3 the key executor (on the UART4 vector). Critical sections raise BASEPRI to `0x10` and never mask the scan interrupt.
 - TIMER4 belongs to the time driver, UART4's vector to the key executor.
 - `memory.x` aligns `_stext` to 8 bytes behind the descriptor.
+- The key executor runs the board's task named `scanning` and nothing else; `xtask check` finds its poll function by that name and treats it like an interrupt handler.
+- No panic is reachable from an interrupt vector or the key task (`xtask check`, call graph from the image's relocations; boards link with `--emit-relocs`). A panic site of a pinned dependency that cannot fire goes into `xtask/src/check/panic_paths/reviewed.rs` with crate, function and reason; panics in our code are fixed, never listed.
+- Statics plus the stack bound of the call graph fit each board's RAM with 2048 bytes to spare (`xtask check` prints the budget per board). Start-up work with large values runs in its own `#[inline(never)]` function so its frame is gone before the tasks run; `main` only starts the executor.
 
 ## Commands
 
@@ -40,7 +43,7 @@ Optional features (light bar, host signals, editions, ...) and alternative behav
 | `cargo xtask boards [--json]` | lists the boards |
 | `cargo xtask build <board>` / `--all` | `build/<board>/openwoot-<board>.{elf,hex,bin}` |
 | `cargo xtask flash <board> --dry-run` | builds and checks the image with `openwoot flash --dry-run`; without `--dry-run` it would flash, which needs the owner's go-ahead |
-| `cargo xtask check` | file types, dependency direction, file-set symmetry (boards: every file; chip HALs: top-level `src/*.rs`, since a peripheral module's children are chip-specific), names in shared code, comment, `unsafe` and module-name rules, formatting, clippy (host and every board target), every board image |
+| `cargo xtask check` | file types, dependency direction, file-set symmetry (boards: every file; chip HALs: top-level `src/*.rs`, since a peripheral module's children are chip-specific), names in shared code, comment, `unsafe` and module-name rules, formatting, clippy (host and every board target), every board image, no panic reachable from interrupts and the key task, RAM and flash budget per board |
 | `cargo xtask pac` | regenerates the PAC crates |
 | `openwoot version` | firmware and protocol version over the configuration channel |
 | `openwoot status` | diagnostic counters and states of every subsystem (`GetDiagnostics`) as `label: value` lines |
