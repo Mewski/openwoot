@@ -218,6 +218,7 @@ fn file_set_symmetry(
             let set = files
                 .iter()
                 .filter_map(|file| file.strip_prefix(&member.directory).ok())
+                .filter(|file| is_symmetric(kind, file))
                 .map(Path::to_path_buf)
                 .collect();
             (member.package.name.as_str(), set)
@@ -234,6 +235,11 @@ fn file_set_symmetry(
             ));
         }
     }
+}
+
+fn is_symmetric(kind: Kind, file: &Path) -> bool {
+    let in_module_directory = file.starts_with("src") && file.components().count() > 2;
+    !(kind == Kind::ChipHal && in_module_directory)
 }
 
 fn shared_code_names(
@@ -499,4 +505,20 @@ fn relative(root: &Path, file: &Path) -> String {
         .unwrap_or(file)
         .display()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chip_hals_compare_top_level_files_and_boards_compare_every_file() {
+        assert!(is_symmetric(Kind::ChipHal, Path::new("src/usb.rs")));
+        assert!(is_symmetric(Kind::ChipHal, Path::new("Cargo.toml")));
+        assert!(!is_symmetric(
+            Kind::ChipHal,
+            Path::new("src/usb/endpoint.rs")
+        ));
+        assert!(is_symmetric(Kind::Board, Path::new("src/usb/endpoint.rs")));
+    }
 }
