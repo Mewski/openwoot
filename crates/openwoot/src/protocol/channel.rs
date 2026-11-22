@@ -4,7 +4,7 @@ use embassy_futures::select::{Either, select};
 use embassy_usb::driver::{EndpointError, EndpointIn, EndpointOut};
 use openwoot_protocol::report;
 
-use super::{Answer, Configuration, Handler, UpdateMode};
+use super::{Answer, Configuration, Handler, Handover, Restart, UpdateMode};
 use crate::usb::FeatureRequests;
 
 pub struct Channel<Output, Input> {
@@ -28,12 +28,11 @@ impl<Output: EndpointOut, Input: EndpointIn> Channel<Output, Input> {
         &mut self,
         handler: &mut Handler<C>,
         requests: &FeatureRequests,
-        update_mode: &mut impl UpdateMode,
+        bootloader: &mut (impl UpdateMode + Restart),
     ) -> ! {
         loop {
             self.output.wait_enabled().await;
-            while self.serve(handler, requests, update_mode).await != Err(EndpointError::Disabled) {
-            }
+            while self.serve(handler, requests, bootloader).await != Err(EndpointError::Disabled) {}
         }
     }
 
@@ -41,7 +40,7 @@ impl<Output: EndpointOut, Input: EndpointIn> Channel<Output, Input> {
         &mut self,
         handler: &mut Handler<C>,
         requests: &FeatureRequests,
-        update_mode: &mut impl UpdateMode,
+        bootloader: &mut (impl UpdateMode + Restart),
     ) -> Result<(), EndpointError> {
         let Self {
             output,
@@ -55,29 +54,31 @@ impl<Output: EndpointOut, Input: EndpointIn> Channel<Output, Input> {
                 match select(read.as_mut(), requests.receive()).await {
                     Either::First(length) => break length?,
                     Either::Second(feature_request) => {
-                        let answer = handler.answer_stock(feature_request, response);
-                        deliver(input, answer, update_mode).await?;
+                        let answer = handler.answer_stock(feature_request, response).await;
+                        deliver(input, answer, bootloader).await?;
                     }
                 }
             }
         };
         let request = request.get(..length).unwrap_or_default();
         let answer = handler.respond(request, response).await;
-        deliver(input, answer, update_mode).await
+        deliver(input, answer, bootloader).await
     }
 }
 
 async fn deliver(
     input: &mut impl EndpointIn,
     answer: Answer<'_>,
-    update_mode: &mut impl UpdateMode,
+    bootloader: &mut (impl UpdateMode + Restart),
 ) -> Result<(), EndpointError> {
     let written = match answer.reply {
         Some(reply) => input.write_transfer(reply, false).await,
         None => Ok(()),
     };
-    if let Some(option) = answer.update_mode {
-        update_mode.enter_update_mode(option);
+    match answer.handover {
+        Some(Handover::UpdateMode(option)) => bootloader.enter_update_mode(option),
+        Some(Handover::Restart(option)) => bootloader.restart(option),
+        None => {}
     }
     written
 }

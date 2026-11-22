@@ -101,7 +101,7 @@ macro_rules! ask {
         let request = encode_request::<$endpoint>(SEQUENCE, &$request, &mut request).unwrap();
         let mut response = [0; report::MAX_LEN];
         let answer = block_on($handler.respond(request, &mut response));
-        assert_eq!(answer.update_mode, None);
+        assert_eq!(answer.handover, None);
         decode_response::<$endpoint>(SEQUENCE, answer.reply.unwrap())
     }};
 }
@@ -169,7 +169,9 @@ fn invalid_values_are_rejected_before_the_configuration_sees_them() {
     let mut handler = configured();
     assert_eq!(
         ask!(handler, SetKeymap, layer_change(1, Action::Keyboard(0xE9))),
-        Ok(Some(Err(Rejection::Invalid(Invalid::KeyboardUsage(0xE9)))))
+        Ok(Some(Err(Rejection::Invalid(
+            Invalid::KeyboardUsageOutsideReport(0xE9)
+        ))))
     );
     assert_eq!(
         ask!(handler, SetKeymap, layer_change(4, Action::None)),
@@ -183,10 +185,12 @@ fn invalid_values_are_rejected_before_the_configuration_sees_them() {
     };
     assert_eq!(
         ask!(handler, SetKeymap, short),
-        Ok(Some(Err(Rejection::Invalid(Invalid::KeyCount {
-            expected: 6,
-            found: 5
-        }))))
+        Ok(Some(Err(Rejection::Invalid(
+            Invalid::KeyCountDiffersFromMatrix {
+                expected: 6,
+                found: 5
+            }
+        ))))
     );
     assert_eq!(handler.configuration().changes, 0);
 }

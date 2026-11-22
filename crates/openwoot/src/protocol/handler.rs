@@ -12,24 +12,31 @@ use openwoot_protocol::{
         GetAdvancedKeys, GetCapabilities, GetDeviceSettings, GetDiagnostics, GetGamepadMapping,
         GetGamepadSettings, GetGlobalLightbar, GetGlobalSettings, GetHostSignals, GetKeyColors,
         GetKeyOverrides, GetKeySettings, GetKeymap, GetLayout, GetLightbar, GetLighting,
-        GetProfileInfo, GetProfileRevision, GetProfiles, GetSwitchModels, GetSwitches, GetVersion,
+        GetProfileInfo, GetProfileRevision, GetProfiles, GetSensorValues, GetSwitchModels,
+        GetSwitches, GetVersion, LeaveHostControl, ResetHostColors, ResetHostKeyColor, Restart,
         Revert, Save, SetAdvancedKeys, SetDeviceSettings, SetGamepadDetection, SetGamepadMapping,
-        SetGamepadSettings, SetGlobalLightbar, SetGlobalSettings, SetHostSignals, SetKeyColors,
-        SetKeyOverrides, SetKeyReports, SetKeySettings, SetKeymap, SetLayout, SetLightbar,
-        SetLighting, SetProfileInfo, SetSwitches,
+        SetGamepadSettings, SetGlobalLightbar, SetGlobalSettings, SetHostColors, SetHostKeyColor,
+        SetHostSignals, SetKeyColors, SetKeyOverrides, SetKeyReports, SetKeySettings, SetKeymap,
+        SetLayout, SetLightbar, SetLighting, SetProfileInfo, SetRawScanning, SetSwitches,
     },
-    gamepad, lightbar,
+    gamepad, keys, lightbar,
     profile::{LayerRef, Slot},
 };
 use serde::{Serialize, de::DeserializeOwned};
 
-use super::{Configuration, StockIdentity, stock::Responder};
+use super::{
+    Configuration, StockIdentity,
+    stock::{self, Responder},
+    stock_control::{KeyMatrix, StockControl},
+};
 use crate::{
     diagnostics::Readout,
+    lighting::HostControl,
+    scan::SensorReadout,
     usb::{FeatureRequest, HostState},
 };
 
-const UPDATE_MODE_OPTION: u8 = 0;
+const HANDOVER_OPTION: u8 = 0;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Handler<C = ()> {
@@ -38,12 +45,20 @@ pub struct Handler<C = ()> {
     configuration: C,
     diagnostics: Option<Readout<'static>>,
     host: Option<&'static HostState>,
+    host_control: Option<&'static HostControl>,
+    sensors: Option<&'static SensorReadout>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Answer<'a> {
     pub reply: Option<&'a [u8]>,
-    pub update_mode: Option<u8>,
+    pub handover: Option<Handover>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Handover {
+    UpdateMode(u8),
+    Restart(u8),
 }
 
 impl Handler {
@@ -62,6 +77,8 @@ impl<C: Configuration> Handler<C> {
             configuration,
             diagnostics: None,
             host: None,
+            host_control: None,
+            sensors: None,
         }
     }
 
@@ -77,19 +94,36 @@ impl<C: Configuration> Handler<C> {
         self
     }
 
+    #[must_use]
+    pub const fn with_host_control(mut self, host_control: &'static HostControl) -> Self {
+        self.host_control = Some(host_control);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_sensors(mut self, sensors: &'static SensorReadout) -> Self {
+        self.sensors = Some(sensors);
+        self
+    }
+
     pub fn configuration(&mut self) -> &mut C {
         &mut self.configuration
     }
 
     pub async fn respond<'a>(&mut self, request: &[u8], response: &'a mut [u8]) -> Answer<'a> {
-        let Ok(Some(message)) = decode_message(request) else {
-            return Answer::NONE;
+        let message = match decode_message(request) {
+            Ok(Some(message)) => message,
+            Ok(None) => {
+                self.stock_control().apply_output(request).await;
+                return Answer::NONE;
+            }
+            Err(_) => return Answer::NONE,
         };
         let VarKey::Key8(key) = message.header.key else {
             let length = fail(&message, &WireError::UnknownKey, response);
             return Answer {
                 reply: reply(response, length),
-                update_mode: None,
+                handover: None,
             };
         };
         let configuration = &mut self.configuration;
@@ -101,31 +135,66 @@ impl<C: Configuration> Handler<C> {
         if length.is_none() {
             length = host_endpoints(key, self.host, configuration, &message, response).await;
         }
+        if length.is_none() {
+            length =
+                host_control_endpoints(key, self.host_control, configuration, &message, response)
+                    .await;
+        }
+        if length.is_none() {
+            length = sensor_endpoints(key, self.sensors, configuration, &message, response).await;
+        }
         if length.is_none()
             && let Some(readout) = self.diagnostics
         {
             length = diagnostics_endpoint(key, readout, configuration, &message, response).await;
         }
         let length = length.unwrap_or_else(|| fail(&message, &WireError::UnknownKey, response));
+        let handover = if key == EnterUpdateMode::REQ_KEY {
+            Some(Handover::UpdateMode(HANDOVER_OPTION))
+        } else if key == Restart::REQ_KEY {
+            Some(Handover::Restart(HANDOVER_OPTION))
+        } else {
+            None
+        };
         Answer {
             reply: reply(response, length),
-            update_mode: (key == EnterUpdateMode::REQ_KEY).then_some(UPDATE_MODE_OPTION),
+            handover,
         }
     }
 
-    pub(super) fn answer_stock<'a>(
+    pub(super) async fn answer_stock<'a>(
         &self,
         request: FeatureRequest,
         response: &'a mut [u8],
     ) -> Answer<'a> {
+        if let FeatureRequest::Command(command) = request
+            && let Some(status) = self.stock_control().answer(command).await
+        {
+            return stock::reply(command.command, status, &[], response);
+        }
         self.stock.answer(request, response)
+    }
+
+    fn stock_control(&self) -> StockControl<'static> {
+        StockControl {
+            host: self.host,
+            lighting: self.host_control,
+            key_matrix: self
+                .configuration
+                .capabilities()
+                .ok()
+                .map(|capabilities| KeyMatrix {
+                    rows: capabilities.key_rows,
+                    columns: capabilities.key_columns,
+                }),
+        }
     }
 }
 
 impl Answer<'_> {
     pub const NONE: Self = Self {
         reply: None,
-        update_mode: None,
+        handover: None,
     };
 }
 
@@ -167,6 +236,7 @@ async fn keyboard_endpoints<C: Configuration>(
     dispatch!(key, configuration, message, response;
         plain GetVersion => async |_, ()| version,
         plain EnterUpdateMode => async |_, ()| (),
+        plain Restart => async |_, ()| (),
         plain GetCapabilities => async |configuration, ()| configuration.capabilities(),
         plain GetDeviceSettings => async |configuration, ()| configuration.device_settings().await,
         checked SetDeviceSettings => async |configuration, settings| {
@@ -305,6 +375,59 @@ async fn host_endpoints<C: Configuration>(
     )
 }
 
+async fn host_control_endpoints<C: Configuration>(
+    key: Key,
+    host_control: Option<&HostControl>,
+    configuration: &mut C,
+    message: &Message<'_>,
+    response: &mut [u8],
+) -> Option<Option<usize>> {
+    let host_control = host_control.ok_or(Rejection::Unsupported);
+    dispatch!(key, configuration, message, response;
+        checked SetHostKeyColor => async |_, request| {
+            host_control?
+                .set_key_color(key_at(request.key), request.color)
+                .await;
+            Ok(())
+        },
+        checked SetHostColors => async |_, colors| {
+            host_control?.set_colors(|keys| keys.clone_from(&colors)).await;
+            Ok(())
+        },
+        checked ResetHostKeyColor => async |_, position| {
+            host_control?.reset_key_color(key_at(position)).await;
+            Ok(())
+        },
+        plain ResetHostColors => async |_, ()| {
+            host_control?.reset_colors().await;
+            Ok(())
+        },
+        plain LeaveHostControl => async |_, ()| {
+            host_control?.leave().await;
+            Ok(())
+        },
+    )
+}
+
+async fn sensor_endpoints<C: Configuration>(
+    key: Key,
+    sensors: Option<&SensorReadout>,
+    configuration: &mut C,
+    message: &Message<'_>,
+    response: &mut [u8],
+) -> Option<Option<usize>> {
+    let sensors = sensors.ok_or(Rejection::Unsupported);
+    dispatch!(key, configuration, message, response;
+        filled GetSensorValues => async |_, reading, values| {
+            sensors?.read(reading, values).await;
+            Ok(())
+        },
+        plain SetRawScanning => async |_, enabled| {
+            sensors.map(|sensors| sensors.set_raw_scanning(enabled))
+        },
+    )
+}
+
 async fn diagnostics_endpoint<C: Configuration>(
     key: Key,
     readout: Readout<'_>,
@@ -434,4 +557,8 @@ fn fail(message: &Message<'_>, error: &WireError, response: &mut [u8]) -> Option
 
 fn reply(response: &[u8], length: Option<usize>) -> Option<&[u8]> {
     response.get(..length?)
+}
+
+const fn key_at(position: keys::Position) -> crate::keys::Key {
+    crate::keys::Key::new(position.row, position.column)
 }

@@ -7,7 +7,7 @@ use openwoot::{
 use openwoot_protocol::{
     Error, FirmwareVersion, Key, PROTOCOL_VERSION, VarHeader, VarKey, VarSeq, Version, WireError,
     decode_response, encode_message, encode_request,
-    endpoints::{EnterUpdateMode, GetVersion},
+    endpoints::{EnterUpdateMode, GetVersion, Restart},
     report,
 };
 
@@ -69,6 +69,17 @@ fn enter_update_mode_answers_then_hands_over_to_the_bootloader_once() {
         Ok(Some(()))
     );
     assert_eq!(keyboard.update_mode_options, [0]);
+    assert_eq!(keyboard.restart_options, []);
+}
+
+#[test]
+fn restart_answers_then_hands_over_to_the_bootloader_once() {
+    let mut request = [0; report::MAX_LEN];
+    let request = encode_request::<Restart>(6, &(), &mut request).unwrap();
+    let (response, keyboard) = exchange(request);
+    assert_eq!(decode_response::<Restart>(6, &response), Ok(Some(())));
+    assert_eq!(keyboard.restart_options, [0]);
+    assert_eq!(keyboard.update_mode_options, []);
 }
 
 #[test]

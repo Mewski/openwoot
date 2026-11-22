@@ -1,15 +1,21 @@
 use std::pin::pin;
 
+use embassy_futures::block_on;
 use openwoot::{
-    protocol::{Channel, Handler, StockIdentity},
+    keys::Key,
+    lighting::{HostControl, from_rgb565, rgb},
+    protocol::{Channel, Configuration, Handler, StockIdentity},
     storage::NorIdentity,
     usb::{Face, HostState, Resources, build},
 };
 use openwoot_drivers::spi_nor::Identification;
-use openwoot_protocol::{FirmwareVersion, PROTOCOL_VERSION, Version};
+use openwoot_protocol::{FirmwareVersion, PROTOCOL_VERSION, Version, lighting::Effects, report};
 
-use crate::support::{
-    EXAMPLE_SERIAL, Host, IDENTITY, Outcome, Recorder, poll, setup, stock_identity,
+use crate::{
+    lighting::{COLUMNS, ROWS, base_color, lighting},
+    support::{
+        EXAMPLE_SERIAL, Host, IDENTITY, KeyMatrix, Outcome, Recorder, poll, setup, stock_identity,
+    },
 };
 
 const CHANNEL_IN: u8 = 0x83;
@@ -50,20 +56,30 @@ fn input_report(frame: &[u8]) -> Vec<u8> {
 }
 
 fn set_reports(identity: StockIdentity, reports: &[(u16, Vec<u8>)]) -> Exchange {
+    exchange(
+        &mut Handler::new(VERSION, identity),
+        &HostState::new(),
+        reports,
+    )
+}
+
+fn exchange<C: Configuration>(
+    handler: &mut Handler<C>,
+    state: &HostState,
+    reports: &[(u16, Vec<u8>)],
+) -> Exchange {
     let host = Host::default();
-    let state = HostState::new();
     let mut resources = Resources::new();
     let mut device = build(
         host.driver(),
         Face::default(),
         IDENTITY,
         &mut resources,
-        &state,
+        state,
     );
     let mut run = pin!(device.usb.run());
     host.attach(run.as_mut());
     let mut channel = Channel::new(device.channel.output, device.channel.input);
-    let mut handler = Handler::new(VERSION, identity);
     let mut keyboard = Recorder::default();
     let mut outcomes = Vec::new();
     let mut replies = Vec::new();
@@ -81,7 +97,7 @@ fn set_reports(identity: StockIdentity, reports: &[(u16, Vec<u8>)]) -> Exchange 
             report,
         ));
         let _ = poll(pin!(channel.serve(
-            &mut handler,
+            handler,
             state.feature_requests(),
             &mut keyboard
         )));
@@ -215,9 +231,12 @@ fn other_commands_get_the_stock_unknown_or_unsupported_status() {
     for (command, status) in [
         (4, 0x66),
         (7, 0x66),
+        (21, 0x66),
         (25, 0x66),
+        (33, 0x66),
         (37, 0x66),
         (38, 0xAA),
+        (46, 0xAA),
         (60, 0xAA),
         (81, 0xAA),
         (88, 0xAA),
@@ -345,4 +364,151 @@ fn get_report_answers_the_report_id_byte_only_as_stock() {
         ),
         Err(Outcome::Rejected)
     );
+}
+
+fn empty_reply(command: u8, status: u8) -> Vec<u8> {
+    input_report(&[0xD1, 0xDA, command, status, 0x00, 0x00])
+}
+
+fn led_owner(host_control: &'static HostControl) -> Handler<KeyMatrix> {
+    Handler::with_configuration(VERSION, stock_identity(None), KeyMatrix)
+        .with_host_control(host_control)
+}
+
+#[test]
+fn keys_off_and_on_switch_the_key_reports_as_protocol_cmd_keys_off_and_on() {
+    static STATE: HostState = HostState::new();
+    let mut handler = Handler::new(VERSION, stock_identity(None)).with_host(&STATE);
+    let off = exchange(&mut handler, &STATE, &[(FEATURE_REPORT_1, feature(21, 0))]);
+    assert_eq!(off.replies.concat(), empty_reply(0x15, 0x88));
+    assert!(!STATE.key_reports());
+    let on = exchange(&mut handler, &STATE, &[(FEATURE_REPORT_1, feature(22, 0))]);
+    assert_eq!(on.replies.concat(), empty_reply(0x16, 0x88));
+    assert!(STATE.key_reports());
+}
+
+#[test]
+fn xinput_detection_start_and_stop_switch_the_gamepad_detection_pattern() {
+    static STATE: HostState = HostState::new();
+    let mut handler = Handler::new(VERSION, stock_identity(None)).with_host(&STATE);
+    let start = exchange(&mut handler, &STATE, &[(FEATURE_REPORT_1, feature(45, 0))]);
+    assert_eq!(start.replies.concat(), empty_reply(0x2D, 0x88));
+    assert!(STATE.gamepad_detection());
+    let stop = exchange(&mut handler, &STATE, &[(FEATURE_REPORT_1, feature(46, 0))]);
+    assert_eq!(stop.replies.concat(), empty_reply(0x2E, 0x88));
+    assert!(!STATE.gamepad_detection());
+}
+
+#[test]
+fn sdk_set_key_color_takes_the_leds_and_paints_one_key_as_protocol_cmd_sdk_set_key_color() {
+    static HOST_CONTROL: HostControl = HostControl::new();
+    let mut handler = led_owner(&HOST_CONTROL);
+    let exchange = exchange(
+        &mut handler,
+        &HostState::new(),
+        &[
+            (FEATURE_REPORT_1, feature(30, 0x43FF_8000)),
+            (FEATURE_REPORT_1, feature(30, 0xFF12_3456)),
+            (FEATURE_REPORT_1, feature(30, 0x1100_0000)),
+        ],
+    );
+    assert_eq!(
+        exchange.replies,
+        [
+            empty_reply(0x1E, 0x88),
+            empty_reply(0x1E, 0xFF),
+            empty_reply(0x1E, 0xFF)
+        ]
+    );
+    let mut lighting = lighting(255, Effects::new());
+    HOST_CONTROL.apply(&mut lighting, 0);
+    assert!(lighting.host_control());
+    assert_eq!(lighting.key_color(Key::new(2, 3)), Some(rgb(255, 128, 0)));
+}
+
+#[test]
+fn sdk_reset_key_and_reset_colors_give_the_leds_back_as_protocol_rgb_sdk() {
+    static HOST_CONTROL: HostControl = HostControl::new();
+    let mut handler = led_owner(&HOST_CONTROL);
+    let key = Key::new(2, 3);
+    let exchange = exchange(
+        &mut handler,
+        &HostState::new(),
+        &[
+            (FEATURE_REPORT_1, feature(33, 0)),
+            (FEATURE_REPORT_1, feature(30, 0x43FF_8000)),
+            (FEATURE_REPORT_1, feature(31, 0x43)),
+            (FEATURE_REPORT_1, feature(31, 0xFF)),
+        ],
+    );
+    assert_eq!(
+        exchange.replies,
+        [
+            empty_reply(0x21, 0x88),
+            empty_reply(0x1E, 0x88),
+            empty_reply(0x1F, 0x88),
+            empty_reply(0x1F, 0xFF)
+        ]
+    );
+    let mut lighting = lighting(255, Effects::new());
+    HOST_CONTROL.apply(&mut lighting, 0);
+    assert!(lighting.host_control());
+    assert_eq!(lighting.key_color(key), Some(from_rgb565(base_color(2, 3))));
+    let leave = self::exchange(
+        &mut handler,
+        &HostState::new(),
+        &[(FEATURE_REPORT_1, feature(32, 0))],
+    );
+    assert_eq!(leave.replies.concat(), empty_reply(0x20, 0x88));
+    HOST_CONTROL.apply(&mut lighting, 0);
+    assert!(!lighting.host_control());
+}
+
+#[test]
+fn sdk_set_all_colors_output_report_paints_every_key_from_the_21_column_map() {
+    static HOST_CONTROL: HostControl = HostControl::new();
+    let mut handler = led_owner(&HOST_CONTROL);
+    let mut request = vec![4, 0xD1, 0xDA, 0x0B];
+    for row in 0..6 {
+        for column in 0..21 {
+            let color = if column < COLUMNS {
+                base_color(5 - row, COLUMNS - 1 - column)
+            } else {
+                0xFFFF
+            };
+            request.extend(color.to_le_bytes());
+        }
+    }
+    request.resize(511, 0);
+    let mut response = [0; report::MAX_LEN];
+    let answer = block_on(handler.respond(&request, &mut response));
+    assert_eq!((answer.reply, answer.handover), (None, None));
+    let mut lighting = lighting(255, Effects::new());
+    HOST_CONTROL.apply(&mut lighting, 0);
+    assert!(lighting.host_control());
+    let mut painted = 0;
+    for row in 0..ROWS {
+        for column in 0..COLUMNS {
+            let key = Key::new(u8::try_from(row).unwrap(), u8::try_from(column).unwrap());
+            if let Some(color) = lighting.key_color(key) {
+                let expected = from_rgb565(base_color(5 - row, COLUMNS - 1 - column));
+                assert_eq!(color, expected, "row {row} column {column}");
+                painted += 1;
+            }
+        }
+    }
+    assert!(painted > 80, "{painted} keys");
+}
+
+#[test]
+fn a_short_sdk_set_all_colors_report_is_ignored() {
+    static HOST_CONTROL: HostControl = HostControl::new();
+    let mut handler = led_owner(&HOST_CONTROL);
+    let mut request = vec![1, 0xD1, 0xDA, 0x0B];
+    request.resize(33, 0);
+    let mut response = [0; report::MAX_LEN];
+    let _ = block_on(handler.respond(&request, &mut response));
+    let mut lighting = lighting(255, Effects::new());
+    HOST_CONTROL.apply(&mut lighting, 0);
+    assert!(!lighting.host_control());
 }

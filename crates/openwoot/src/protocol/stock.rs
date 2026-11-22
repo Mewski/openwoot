@@ -3,7 +3,7 @@ use openwoot_protocol::stock::{
     COMMAND_COUNT, Command, FIRST_CURRENT_COMMAND, Request, Status, encode_reply,
 };
 
-use super::Answer;
+use super::{Answer, Handover};
 use crate::{
     storage::{LEGACY_SERIAL_LEN, NorIdentity, SerialNumber},
     usb::{Face, FeatureRequest, KeyboardFormat, PollingRate, Speed},
@@ -71,16 +71,16 @@ impl Responder {
             Some(Command::Version) => reply(command, Status::Success, &VERSION, report),
             Some(Command::EnterUpdateMode) => Answer {
                 reply: None,
-                update_mode: Some(low),
+                handover: Some(Handover::UpdateMode(low)),
             },
             Some(Command::Serial) => self.serial(request, report),
             Some(Command::DeviceSettings) => {
                 reply(command, Status::Success, &self.device_settings, report)
             }
-            None if (FIRST_CURRENT_COMMAND..COMMAND_COUNT).contains(&command) => {
+            _ if (FIRST_CURRENT_COMMAND..COMMAND_COUNT).contains(&command) => {
                 reply(command, Status::Unsupported, &[], report)
             }
-            None => reply(command, Status::Unknown, &[], report),
+            _ => reply(command, Status::Unknown, &[], report),
         }
     }
 
@@ -116,10 +116,15 @@ impl Responder {
     }
 }
 
-fn reply<'a>(command: u8, status: Status, payload: &[u8], report: &'a mut [u8]) -> Answer<'a> {
+pub(super) fn reply<'a>(
+    command: u8,
+    status: Status,
+    payload: &[u8],
+    report: &'a mut [u8],
+) -> Answer<'a> {
     Answer {
         reply: encode_reply(command, status, payload, report).ok(),
-        update_mode: None,
+        handover: None,
     }
 }
 
