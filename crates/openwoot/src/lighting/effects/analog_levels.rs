@@ -1,15 +1,18 @@
 use super::{cells::Cells, travel::travel_level_8};
-use crate::lighting::{config::AnalogLevel, input::KeyTravel, leds::Key};
+use crate::{
+    keys::Key,
+    lighting::{config::AnalogLevel, input::KeyTravel},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Levels<const ROWS: usize, const COLUMNS: usize> {
+pub(super) struct Levels<const ROWS: usize, const COLUMNS: usize> {
     config: AnalogLevel,
     cells: Cells<ROWS, COLUMNS>,
     dirty: bool,
 }
 
 impl<const ROWS: usize, const COLUMNS: usize> Levels<ROWS, COLUMNS> {
-    pub(crate) const fn new(config: AnalogLevel) -> Self {
+    pub(super) const fn new(config: AnalogLevel) -> Self {
         Self {
             config,
             cells: [[0; COLUMNS]; ROWS],
@@ -17,15 +20,15 @@ impl<const ROWS: usize, const COLUMNS: usize> Levels<ROWS, COLUMNS> {
         }
     }
 
-    pub(crate) const fn update(&mut self, config: AnalogLevel) {
+    pub(super) const fn update(&mut self, config: AnalogLevel) {
         *self = Self::new(config);
     }
 
-    pub(crate) const fn needs_render(&self) -> bool {
+    pub(super) const fn needs_render(&self) -> bool {
         self.dirty
     }
 
-    pub(crate) fn feed(&mut self, key: Key, travel: u16, input: &impl KeyTravel) {
+    pub(super) fn feed(&mut self, key: Key, travel: u16, input: &impl KeyTravel) {
         let level = travel_level_8(self.config.gamepad_curve, travel, input);
         if let Some(cell) = self
             .cells
@@ -38,7 +41,7 @@ impl<const ROWS: usize, const COLUMNS: usize> Levels<ROWS, COLUMNS> {
         }
     }
 
-    pub(crate) fn release_all(&mut self, always_dirty: bool) {
+    pub(super) fn release_all(&mut self, always_dirty: bool) {
         let pressed = self.cells.iter().flatten().any(|&level| level != 0);
         self.cells = [[0; COLUMNS]; ROWS];
         if pressed || always_dirty {

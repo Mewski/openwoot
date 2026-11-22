@@ -30,21 +30,21 @@ const PERMUTATION: [u8; 256] = [
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct State {
+pub(super) struct State {
     config: SimplexNoise,
     time: u32,
 }
 
 impl State {
-    pub(crate) const fn new(config: SimplexNoise) -> Self {
+    pub(super) const fn new(config: SimplexNoise) -> Self {
         Self { config, time: 0 }
     }
 
-    pub(crate) const fn update(&mut self, config: SimplexNoise) {
+    pub(super) const fn update(&mut self, config: SimplexNoise) {
         *self = Self::new(config);
     }
 
-    pub(crate) fn render<const ROWS: usize, const COLUMNS: usize>(
+    pub(super) fn render<const ROWS: usize, const COLUMNS: usize>(
         &mut self,
         canvas: &mut impl Canvas,
         elapsed_ms: u32,
@@ -69,7 +69,7 @@ impl State {
     }
 }
 
-pub(crate) fn noise(px: u32, py: u32, pz: u32) -> u8 {
+pub(super) fn noise(px: u32, py: u32, pz: u32) -> u8 {
     let skew = ((u64::from(px) + u64::from(py) + u64::from(pz)) * SKEW) >> 32;
     let half_skew = low_32(skew) >> 1;
     let cell = |coordinate: u32| ((coordinate >> 1).wrapping_add(half_skew)) >> 11;

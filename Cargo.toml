@@ -65,6 +65,7 @@ svd-encoder = "=0.14.8"
 svd-parser = "=0.14.10"
 svd-rs = "=0.14.13"
 thiserror = { version = "=2.0.21", default-features = false }
+toml = { version = "=1.2.2", default-features = false, features = ["parse", "serde", "std"] }
 vcell = "=0.1.3"
 
 [workspace.lints.rust]

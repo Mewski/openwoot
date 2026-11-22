@@ -3,7 +3,7 @@ use hal::{
     scan::{AnalogInput, Oversampling, SampleTime, Wiring},
 };
 use openwoot::{
-    analog::StdDev,
+    analog::StandardDeviation,
     scan::{Map, MeasuredReference, Shared},
 };
 
@@ -97,7 +97,7 @@ pub struct Sensing;
 
 impl openwoot::scan::Sensing for Sensing {
     type Converter = Converter;
-    type Noise = StdDev;
+    type Noise = StandardDeviation;
     type Recheck = ();
     type Reference = MeasuredReference<2482>;
 }
@@ -119,7 +119,7 @@ pub fn select_layout(variant: u8) {
 
 #[cfg(test)]
 mod tests {
-    use openwoot::scan::{MatrixKey, Position};
+    use openwoot::{keys::Key, scan::Position};
 
     use super::*;
     use crate::{KEY_COLUMNS, KEY_ROWS};
@@ -148,7 +148,7 @@ mod tests {
     fn the_layouts_differ_where_the_c_tables_differ() {
         assert_eq!(
             ANSI.key(Position::new(0, 0)),
-            Some(MatrixKey { row: 4, column: 2 })
+            Some(Key { row: 4, column: 2 })
         );
         assert_eq!(ANSI.key(Position::new(0, 9)), None);
         let addresses = u8::try_from(ADDRESSES).unwrap();

@@ -1,17 +1,19 @@
 use super::travel::travel_level_12;
-use crate::lighting::{
-    canvas::Canvas,
-    config::LevelMeter,
-    input::{KeyTravel, TRAVEL_FULL},
-    leds::Key,
-    truncate::low_8,
+use crate::{
+    keys::Key,
+    lighting::{
+        canvas::Canvas,
+        config::LevelMeter,
+        input::{KeyTravel, TRAVEL_FULL},
+        truncate::low_8,
+    },
 };
 
 const ROW: usize = 1;
 const FIRST_COLUMN: usize = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct State {
+pub(super) struct State {
     config: LevelMeter,
     level: u16,
     key: Option<Key>,
@@ -19,7 +21,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(crate) const fn new(config: LevelMeter) -> Self {
+    pub(super) const fn new(config: LevelMeter) -> Self {
         Self {
             config,
             level: 0,
@@ -28,20 +30,20 @@ impl State {
         }
     }
 
-    pub(crate) const fn update(&mut self, config: LevelMeter) {
+    pub(super) const fn update(&mut self, config: LevelMeter) {
         *self = Self::new(config);
     }
 
-    pub(crate) const fn needs_render(&self) -> bool {
+    pub(super) const fn needs_render(&self) -> bool {
         self.dirty
     }
 
-    pub(crate) const fn release_all(&mut self) {
+    pub(super) const fn release_all(&mut self) {
         self.level = 0;
         self.dirty = true;
     }
 
-    pub(crate) fn feed(&mut self, key: Key, travel: u16, input: &impl KeyTravel) {
+    pub(super) fn feed(&mut self, key: Key, travel: u16, input: &impl KeyTravel) {
         let level = travel_level_12(self.config.gamepad_curve, travel, input);
         if self.level < level {
             self.key = Some(key);
@@ -53,7 +55,7 @@ impl State {
         }
     }
 
-    pub(crate) fn render(&mut self, canvas: &mut impl Canvas, segments: u8) {
+    pub(super) fn render(&mut self, canvas: &mut impl Canvas, segments: u8) {
         let segments = u32::from(segments);
         let base = u32::from(self.config.base_level);
         let level = u32::from(self.level);

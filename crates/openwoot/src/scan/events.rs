@@ -1,11 +1,12 @@
-use super::{MatrixKey, Position};
+use super::Position;
+use crate::keys::Key;
 
 pub const EVENT_CAPACITY: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Event {
     pub position: Position,
-    pub key: MatrixKey,
+    pub key: Key,
     pub travel: u16,
 }
 
@@ -26,7 +27,7 @@ impl Events {
     pub const fn new() -> Self {
         const EMPTY: Event = Event {
             position: Position::new(0, 0),
-            key: MatrixKey { row: 0, column: 0 },
+            key: Key::new(0, 0),
             travel: 0,
         };
         Self {

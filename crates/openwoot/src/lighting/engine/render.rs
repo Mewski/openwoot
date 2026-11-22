@@ -1,14 +1,16 @@
 use super::{FRAME_PERIOD_MS, Lighting};
-use crate::lighting::{
-    canvas::{Canvas, Painter},
-    frame::Frame,
-    hooks::{Lightbar, Signals},
-    input::KeyTravel,
-    key_colors::{Shown, paint},
-    leds::Key,
-    output::{PageWrite, output_scale},
-    overlay::{CLASS_ALL, CLASS_GLOBAL, OverlayId, Overlays, Pass},
-    truncate::low_16,
+use crate::{
+    keys::Key,
+    lighting::{
+        canvas::{Canvas, Painter},
+        frame::Frame,
+        hooks::{Lightbar, Signals},
+        input::KeyTravel,
+        key_colors::{Shown, paint},
+        output::{PageWrite, output_scale},
+        overlay::{CLASS_ALL, CLASS_GLOBAL, OverlayId, Overlays, Pass},
+        truncate::low_16,
+    },
 };
 
 impl<H, const ROWS: usize, const COLUMNS: usize, const PAGES: usize, const LENGTH: usize>

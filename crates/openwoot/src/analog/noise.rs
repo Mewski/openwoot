@@ -3,7 +3,7 @@ mod standard_deviation;
 mod welford;
 
 pub use min_max::MinMax;
-pub use standard_deviation::StdDev;
+pub use standard_deviation::StandardDeviation;
 use welford::Welford;
 
 const SAMPLES_DONE: u16 = 1000;

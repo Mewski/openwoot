@@ -1,33 +1,5 @@
 use super::{ADDRESSES_PER_INPUT, Grid, Position};
-
-const NO_KEY: u8 = 0xFF;
-const COLUMN_BITS: u8 = 5;
-const COLUMN_MASK: u8 = (1 << COLUMN_BITS) - 1;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct MatrixKey {
-    pub row: u8,
-    pub column: u8,
-}
-
-impl MatrixKey {
-    #[must_use]
-    pub const fn from_code(code: u8) -> Option<Self> {
-        if code == NO_KEY {
-            None
-        } else {
-            Some(Self {
-                row: code >> COLUMN_BITS,
-                column: code & COLUMN_MASK,
-            })
-        }
-    }
-
-    #[must_use]
-    pub const fn code(self) -> u8 {
-        self.row << COLUMN_BITS | self.column
-    }
-}
+use crate::keys::Key;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Map<const INPUTS: usize, const ADDRESSES: usize> {
@@ -47,7 +19,7 @@ impl<const INPUTS: usize, const ADDRESSES: usize> Map<INPUTS, ADDRESSES> {
             let mut address = ADDRESSES;
             while address < ADDRESSES_PER_INPUT {
                 assert!(
-                    codes[input][address] == NO_KEY,
+                    Key::from_code(codes[input][address]).is_none(),
                     "a key behind an address the scan never selects"
                 );
                 address += 1;
@@ -61,19 +33,19 @@ impl<const INPUTS: usize, const ADDRESSES: usize> Map<INPUTS, ADDRESSES> {
 
     #[must_use]
     #[inline]
-    pub fn key(&self, position: Position) -> Option<MatrixKey> {
+    pub fn key(&self, position: Position) -> Option<Key> {
         self.codes
             .get(position)
-            .and_then(|&code| MatrixKey::from_code(code))
+            .and_then(|&code| Key::from_code(code))
     }
 
     #[must_use]
-    pub fn position(&self, key: MatrixKey) -> Option<Position> {
+    pub fn position(&self, key: Key) -> Option<Position> {
         self.iter()
             .find_map(|(position, found)| (found == key).then_some(position))
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (Position, MatrixKey)> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = (Position, Key)> + '_ {
         (0..ADDRESSES as u8).flat_map(move |address| {
             (0..INPUTS as u8).filter_map(move |input| {
                 let position = Position::new(input, address);
@@ -118,26 +90,10 @@ mod tests {
     ]);
 
     #[test]
-    fn key_codes_carry_the_row_above_five_column_bits() {
-        assert_eq!(
-            MatrixKey::from_code(0xA2),
-            Some(MatrixKey { row: 5, column: 2 })
-        );
-        assert_eq!(MatrixKey::from_code(0xFF), None);
-        assert_eq!(MatrixKey { row: 2, column: 4 }.code(), 0x44);
-    }
-
-    #[test]
     fn the_map_finds_keys_by_position_and_positions_by_key() {
-        assert_eq!(
-            MAP.key(Position::new(1, 2)),
-            Some(MatrixKey { row: 5, column: 2 })
-        );
+        assert_eq!(MAP.key(Position::new(1, 2)), Some(Key::new(5, 2)));
         assert_eq!(MAP.key(Position::new(1, 0)), None);
-        assert_eq!(
-            MAP.position(MatrixKey { row: 0, column: 1 }),
-            Some(Position::new(1, 1))
-        );
+        assert_eq!(MAP.position(Key::new(0, 1)), Some(Position::new(1, 1)));
         assert_eq!(MAP.len(), 4);
         assert!(MAP.input_has_keys(1));
     }

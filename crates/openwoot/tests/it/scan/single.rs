@@ -1,7 +1,4 @@
-use openwoot::{
-    analog::ReboundState,
-    scan::{MatrixKey, Travel},
-};
+use openwoot::{analog::ReboundState, keys::Key, scan::Travel};
 
 use super::{Bench80, KEYS, Operation, PRESSED, cycle, event_travels, scanner, settled};
 
@@ -29,7 +26,7 @@ fn a_pressed_key_reports_its_travel_once_per_cycle_and_its_release_once() {
     let mut scanner = scanner();
     let travel = Travel::new();
     let mut now_ms = settled(&mut scanner, &travel);
-    let key = MatrixKey { row: 3, column: 4 };
+    let key = Key { row: 3, column: 4 };
 
     scanner
         .converter_mut()
@@ -86,10 +83,7 @@ fn a_key_that_holds_its_events_reports_at_rest_every_cycle() {
     scanner.sensor_mut(PRESSED).unwrap().hold_events(true);
     for offset in 0..3 {
         cycle(&mut scanner, &travel, now_ms + offset);
-        assert_eq!(
-            event_travels(&scanner),
-            [(MatrixKey { row: 3, column: 4 }, 0)]
-        );
+        assert_eq!(event_travels(&scanner), [(Key { row: 3, column: 4 }, 0)]);
     }
 }
 

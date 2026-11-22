@@ -1,9 +1,9 @@
 use super::{
     color::opaque,
     config::{Color, Indicators},
-    leds::Key,
     overlay::{Overlay, OverlayId},
 };
+use crate::keys::Key;
 
 const WHITE: Color = Color {
     red: 255,

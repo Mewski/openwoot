@@ -86,9 +86,12 @@ impl<const PAGES: usize, const LENGTH: usize> Frame<PAGES, LENGTH> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lighting::{
-        canvas::{Canvas, Painter},
-        leds::{Gains, Key, Led, LedMap, Variant},
+    use crate::{
+        keys::Key,
+        lighting::{
+            canvas::{Canvas, Painter},
+            leds::{Gains, Led, LedMap, Variant},
+        },
     };
 
     const POSITIONS: [Option<LedPosition>; 4] = [

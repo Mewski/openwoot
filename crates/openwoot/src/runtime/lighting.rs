@@ -1,13 +1,11 @@
 use embassy_futures::select::select;
 use embassy_sync::{blocking_mutex::raw::RawMutex, mutex::Mutex};
-use embassy_time::{Instant, Timer};
+use embassy_time::{Duration, Instant, Timer};
 
 use crate::{
     lighting::{self, KeyEvent, KeyEvents, KeyTravel, LedMatrix, Lightbar, OutputChange, Signals},
     usb::HostState,
 };
-
-pub const LIGHTING_POLL_MS: u64 = 4;
 
 pub struct Lighting<
     'd,
@@ -29,6 +27,8 @@ where
     M: RawMutex,
     H: Lightbar + Signals,
 {
+    const POLL_INTERVAL: Duration = Duration::from_millis(4);
+
     pub async fn run(&self, matrix: &mut impl LedMatrix, input: &impl KeyTravel) -> ! {
         let mut initialized = matrix.initialize().await.is_ok();
         loop {
@@ -39,7 +39,7 @@ where
                 .await;
             select(
                 self.events.ready_to_receive(),
-                Timer::after_millis(LIGHTING_POLL_MS),
+                Timer::after(Self::POLL_INTERVAL),
             )
             .await;
         }

@@ -1,6 +1,6 @@
 use std::pin::pin;
 
-use openwoot::usb::{Face, HostState, Protocol, Resources, build};
+use openwoot::usb::{Face, HidProtocol, HostState, Resources, build};
 
 use crate::support::{Host, IDENTITY, Outcome, setup};
 
@@ -27,7 +27,7 @@ fn hid_class_requests_reach_the_host_state() {
     let mut run = pin!(device.usb.run());
     host.attach(run.as_mut());
 
-    assert_eq!(state.keyboard_protocol(), Protocol::Report);
+    assert_eq!(state.keyboard_protocol(), HidProtocol::Report);
     assert_eq!(
         host.control_out(
             run.as_mut(),
@@ -36,7 +36,7 @@ fn hid_class_requests_reach_the_host_state() {
         ),
         Some(Outcome::Accepted)
     );
-    assert_eq!(state.keyboard_protocol(), Protocol::Boot);
+    assert_eq!(state.keyboard_protocol(), HidProtocol::Boot);
     assert_eq!(
         host.control_in(
             run.as_mut(),

@@ -1,10 +1,11 @@
 use super::travel::travel_level_8;
-use crate::lighting::{
-    canvas::Canvas, color::rgb, config::AnalogRgbFill, input::KeyTravel, leds::Key,
+use crate::{
+    keys::Key,
+    lighting::{canvas::Canvas, color::rgb, config::AnalogRgbFill, input::KeyTravel},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct State {
+pub(super) struct State {
     config: AnalogRgbFill,
     red: u8,
     green: u8,
@@ -12,7 +13,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(crate) const fn new(config: AnalogRgbFill) -> Self {
+    pub(super) const fn new(config: AnalogRgbFill) -> Self {
         Self {
             config,
             red: 0,
@@ -21,17 +22,17 @@ impl State {
         }
     }
 
-    pub(crate) const fn update(&mut self, config: AnalogRgbFill) {
+    pub(super) const fn update(&mut self, config: AnalogRgbFill) {
         *self = Self::new(config);
     }
 
-    pub(crate) const fn release_all(&mut self) {
+    pub(super) const fn release_all(&mut self) {
         self.red = 0;
         self.green = 0;
         self.blue = 0;
     }
 
-    pub(crate) fn feed<const ROWS: usize, const COLUMNS: usize>(
+    pub(super) fn feed<const ROWS: usize, const COLUMNS: usize>(
         &mut self,
         key: Key,
         travel: u16,
@@ -49,7 +50,7 @@ impl State {
         }
     }
 
-    pub(crate) fn render<const ROWS: usize, const COLUMNS: usize>(&self, canvas: &mut impl Canvas) {
+    pub(super) fn render<const ROWS: usize, const COLUMNS: usize>(&self, canvas: &mut impl Canvas) {
         let color = rgb(self.red, self.green, self.blue);
         for row in 0..ROWS {
             for column in 0..COLUMNS {

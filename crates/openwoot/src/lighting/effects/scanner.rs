@@ -7,7 +7,7 @@ use crate::lighting::{
 const STEPS_PER_SECOND_MAX: u8 = 60;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct State {
+pub(super) struct State {
     config: Scanner,
     window_end: i8,
     window_start: i8,
@@ -16,7 +16,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(crate) const fn new(config: Scanner) -> Self {
+    pub(super) const fn new(config: Scanner) -> Self {
         Self {
             config,
             window_end: config.width.cast_signed(),
@@ -26,7 +26,7 @@ impl State {
         }
     }
 
-    pub(crate) fn update<const ROWS: usize, const COLUMNS: usize>(&mut self, config: Scanner) {
+    pub(super) fn update<const ROWS: usize, const COLUMNS: usize>(&mut self, config: Scanner) {
         if config.direction != self.config.direction {
             self.direction = config.direction;
             self.window_end = self.config.width.cast_signed();
@@ -45,7 +45,7 @@ impl State {
         self.config = config;
     }
 
-    pub(crate) fn render<const ROWS: usize, const COLUMNS: usize>(
+    pub(super) fn render<const ROWS: usize, const COLUMNS: usize>(
         &mut self,
         canvas: &mut impl Canvas,
         first_key_row: usize,

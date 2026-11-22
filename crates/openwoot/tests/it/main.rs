@@ -3,7 +3,6 @@ mod channel;
 mod configuration;
 mod control;
 mod descriptors;
-mod keys;
 mod lighting;
 mod reports;
 mod runtime;

@@ -5,15 +5,8 @@ use core::{
 
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
 
-use super::FeatureRequests;
+use super::{FeatureRequests, HidProtocol};
 use crate::hid::Leds;
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Protocol {
-    Boot,
-    #[default]
-    Report,
-}
 
 pub struct HostState {
     keyboard_leds: AtomicU8,
@@ -41,11 +34,11 @@ impl HostState {
         Leds::from_bits(self.keyboard_leds.load(Ordering::Relaxed))
     }
 
-    pub fn keyboard_protocol(&self) -> Protocol {
+    pub fn keyboard_protocol(&self) -> HidProtocol {
         if self.keyboard_boot_protocol.load(Ordering::Relaxed) {
-            Protocol::Boot
+            HidProtocol::Boot
         } else {
-            Protocol::Report
+            HidProtocol::Report
         }
     }
 
@@ -65,9 +58,9 @@ impl HostState {
         self.keyboard_leds.store(leds, Ordering::Relaxed);
     }
 
-    pub(super) fn set_keyboard_protocol(&self, protocol: Protocol) {
+    pub(super) fn set_keyboard_protocol(&self, protocol: HidProtocol) {
         self.keyboard_boot_protocol
-            .store(protocol == Protocol::Boot, Ordering::Relaxed);
+            .store(protocol == HidProtocol::Boot, Ordering::Relaxed);
     }
 
     pub(super) fn set_configured(&self, configured: bool) {

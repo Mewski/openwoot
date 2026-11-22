@@ -1,7 +1,8 @@
 use embassy_futures::block_on;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use openwoot::{
-    lighting::{Key, KeyActivity, KeyEvent, KeyEvents, LedMatrix, Lighting},
+    keys::Key,
+    lighting::{KeyActivity, KeyEvent, KeyEvents, LedMatrix, Lighting},
     runtime,
     usb::HostState,
 };

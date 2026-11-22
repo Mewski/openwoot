@@ -12,7 +12,10 @@ mod idle;
 mod indicators;
 mod task;
 
-use openwoot::lighting::{FramePage, Gains, Geometry, Key, Led, LedMap, LedPosition, Variant};
+use openwoot::{
+    keys::Key,
+    lighting::{FramePage, Gains, Geometry, Led, LedMap, LedPosition, Variant},
+};
 
 const ROWS: usize = 6;
 const COLUMNS: usize = 17;

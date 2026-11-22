@@ -1,12 +1,17 @@
+use openwoot_drivers::spi_nor::UNIQUE_ID_LEN;
 use openwoot_protocol::stock::{
     COMMAND_COUNT, Command, FIRST_CURRENT_COMMAND, Request, Status, encode_reply,
 };
 
 use super::Answer;
 use crate::{
-    storage::{FLASH_IDS_LEN, LEGACY_SERIAL_LEN, MCU_ID_LEN, SerialNumber},
+    storage::{LEGACY_SERIAL_LEN, NorIdentity, SerialNumber},
     usb::{Face, FeatureRequest, KeyboardFormat, PollingRate, Speed},
 };
+
+pub const MCU_ID_LEN: usize = 12;
+
+const FLASH_IDS_LEN: usize = 2 + UNIQUE_ID_LEN;
 
 const VERSION: [u8; 3] = [2, 1, 2];
 const DEVICE_SETTINGS_LEN: usize = 7;
@@ -23,7 +28,7 @@ pub struct StockIdentity {
     pub face: Face,
     pub layout: u8,
     pub mcu_id: [u8; MCU_ID_LEN],
-    pub flash_ids: [u8; FLASH_IDS_LEN],
+    pub nor_identity: Option<NorIdentity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,7 +53,7 @@ impl Responder {
             serial: identity.serial.and_then(SerialNumber::parse),
             device_settings: device_settings(identity.face, identity.layout),
             mcu_id: identity.mcu_id,
-            flash_ids: identity.flash_ids,
+            flash_ids: flash_ids(identity.nor_identity),
         }
     }
 
@@ -116,6 +121,19 @@ fn reply<'a>(command: u8, status: Status, payload: &[u8], report: &'a mut [u8]) 
         reply: encode_reply(command, status, payload, report).ok(),
         update_mode: None,
     }
+}
+
+fn flash_ids(nor_identity: Option<NorIdentity>) -> [u8; FLASH_IDS_LEN] {
+    let mut bytes = [0; FLASH_IDS_LEN];
+    if let Some(nor_identity) = nor_identity {
+        let (ids, unique_id) = bytes.split_at_mut(2);
+        ids.copy_from_slice(&[
+            nor_identity.identification.manufacturer,
+            nor_identity.identification.device,
+        ]);
+        unique_id.copy_from_slice(&nor_identity.unique_id);
+    }
+    bytes
 }
 
 fn device_settings(face: Face, layout: u8) -> [u8; DEVICE_SETTINGS_LEN] {

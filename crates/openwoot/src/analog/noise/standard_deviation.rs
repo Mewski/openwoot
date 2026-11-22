@@ -9,13 +9,13 @@ const NEW_WEIGHT: f64 = 0.9;
 const REST_OFFSET: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct StdDev {
+pub struct StandardDeviation {
     welford: Welford,
     average: f32,
     state: NoiseState,
 }
 
-impl NoiseStatistics for StdDev {
+impl NoiseStatistics for StandardDeviation {
     fn restart(&mut self) {
         *self = Self {
             state: NoiseState::Sampling,
@@ -74,8 +74,8 @@ impl NoiseStatistics for StdDev {
 mod tests {
     use super::*;
 
-    fn window(samples: impl IntoIterator<Item = u16>) -> (StdDev, NoiseState) {
-        let mut statistics = StdDev::default();
+    fn window(samples: impl IntoIterator<Item = u16>) -> (StandardDeviation, NoiseState) {
+        let mut statistics = StandardDeviation::default();
         statistics.restart();
         let mut state = NoiseState::Sampling;
         for sample in samples {

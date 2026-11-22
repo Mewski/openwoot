@@ -1,6 +1,7 @@
 use heapless::Vec;
 
-use super::{canvas::Canvas, config::Rgb, hooks::Lightbar, leds::Key, truncate::low_16};
+use super::{canvas::Canvas, config::Rgb, hooks::Lightbar, truncate::low_16};
+use crate::keys::Key;
 
 pub const OVERLAY_SLOTS: usize = 5;
 pub const MAX_LIGHTBAR_LEDS: usize = 16;

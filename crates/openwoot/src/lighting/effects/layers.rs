@@ -5,11 +5,14 @@ use super::{
     key_ripple, key_test, level_meter, polar_gradient, rainbow_wave, reactive_fade, scanner,
     simplex_noise,
 };
-use crate::lighting::{
-    canvas::Canvas,
-    config::{Effect, MAX_EFFECTS},
-    input::{KeyEvent, KeyTravel},
-    leds::{Geometry, Key, Variant},
+use crate::{
+    keys::Key,
+    lighting::{
+        canvas::Canvas,
+        config::{Effect, MAX_EFFECTS},
+        input::{KeyEvent, KeyTravel},
+        leds::{Geometry, Variant},
+    },
 };
 
 #[derive(Clone, Debug, PartialEq, Default)]

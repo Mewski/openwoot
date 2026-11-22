@@ -1,4 +1,7 @@
-use openwoot::lighting::{Indicator, Key, LockState, OverlayId, from_rgb565, rgb};
+use openwoot::{
+    keys::Key,
+    lighting::{Indicator, LockState, OverlayId, from_rgb565, rgb},
+};
 use openwoot_protocol::lighting::Effects;
 
 use super::{

@@ -5,7 +5,7 @@ use embassy_usb::{
 };
 
 use super::{
-    HostState, Protocol, hid_class,
+    HidProtocol, HostState, hid_class,
     interfaces::{CHANNEL_INTERFACE, INTERFACE_COUNT, KEYBOARD_INTERFACE},
 };
 use crate::xinput;
@@ -29,7 +29,7 @@ pub(super) struct Control<'d> {
 struct HidInterface {
     report_descriptor: &'static [u8],
     idle: u8,
-    protocol: Protocol,
+    protocol: HidProtocol,
 }
 
 impl<'d> Control<'d> {
@@ -46,7 +46,7 @@ impl<'d> Control<'d> {
             *interface = Some(HidInterface {
                 report_descriptor,
                 idle: 0,
-                protocol: Protocol::Report,
+                protocol: HidProtocol::Report,
             });
         }
     }
@@ -91,9 +91,9 @@ impl Handler for Control<'_> {
     fn reset(&mut self) {
         for interface in self.interfaces.iter_mut().flatten() {
             interface.idle = 0;
-            interface.protocol = Protocol::Report;
+            interface.protocol = HidProtocol::Report;
         }
-        self.host.set_keyboard_protocol(Protocol::Report);
+        self.host.set_keyboard_protocol(HidProtocol::Report);
         self.host.set_configured(false);
     }
 
@@ -125,9 +125,9 @@ impl Handler for Control<'_> {
             }
             SET_PROTOCOL => {
                 let protocol = if low == 0 {
-                    Protocol::Boot
+                    HidProtocol::Boot
                 } else {
-                    Protocol::Report
+                    HidProtocol::Report
                 };
                 interface.protocol = protocol;
                 if number == KEYBOARD_INTERFACE {
@@ -170,7 +170,7 @@ impl Handler for Control<'_> {
             }
             (RequestType::Class, GET_IDLE) => copy_into(buf, &[interface.idle]),
             (RequestType::Class, GET_PROTOCOL) => {
-                copy_into(buf, &[u8::from(interface.protocol == Protocol::Report)])
+                copy_into(buf, &[u8::from(interface.protocol == HidProtocol::Report)])
             }
             _ => InResponse::Rejected,
         };

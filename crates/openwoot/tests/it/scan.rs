@@ -6,7 +6,10 @@ mod simulated;
 mod single;
 mod sweep;
 
-use openwoot::scan::{Map, MatrixKey, Outcome, Position, Scanner, Sensing, Travel};
+use openwoot::{
+    keys::Key,
+    scan::{Map, Outcome, Position, Scanner, Sensing, Travel},
+};
 use simulated::{Bench, Operation, ReferenceBench, Simulated};
 
 const MAP: Map<6, 15> = Map::from_codes([
@@ -87,7 +90,7 @@ fn settled(scanner: &mut Bench80, travel: &Travel<6, 15>) -> u32 {
     SETTLING_CYCLES + 1
 }
 
-fn event_travels(scanner: &Bench80) -> Vec<(MatrixKey, u16)> {
+fn event_travels(scanner: &Bench80) -> Vec<(Key, u16)> {
     scanner
         .events()
         .iter()

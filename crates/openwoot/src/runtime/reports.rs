@@ -9,7 +9,7 @@ use crate::{
         BootReport, ConsumerReport, GamepadReport, KeyStateReport, MouseReport, NkroReport,
         PLACEHOLDER_LEN, SystemReport,
     },
-    usb::{Face, Gamepad, HostState, KeyboardFormat, Protocol, write_report},
+    usb::{Face, Gamepad, HidProtocol, HostState, KeyboardFormat, write_report},
     xinput,
 };
 
@@ -40,8 +40,8 @@ impl<'d, D: Driver<'d>> Reports<'d, D> {
 
     async fn send_idle(&mut self) {
         let keyboard_format = match self.host.keyboard_protocol() {
-            Protocol::Boot => KeyboardFormat::Boot,
-            Protocol::Report => self.face.keyboard,
+            HidProtocol::Boot => KeyboardFormat::Boot,
+            HidProtocol::Report => self.face.keyboard,
         };
         let keyboard = async {
             let _ = match keyboard_format {

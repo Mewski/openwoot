@@ -1,4 +1,7 @@
-use openwoot::scan::{Map, MatrixKey, Position, Scanner, Travel};
+use openwoot::{
+    keys::Key,
+    scan::{Map, Position, Scanner, Travel},
+};
 
 use super::{ReferenceBench, Simulated, calibrate};
 
@@ -6,7 +9,7 @@ fn reference_scanner(reference: u16, reading: u16) -> Scanner<ReferenceBench, 4,
     let mut codes = [[0xFF; 16]; 4];
     for (row, keys) in (1..).zip(codes.iter_mut()) {
         for (column, code) in (0..).zip(keys.iter_mut()) {
-            *code = MatrixKey { row, column }.code();
+            *code = Key { row, column }.code();
         }
     }
     let mut scanner: Scanner<ReferenceBench, 4, 16> =

@@ -167,7 +167,7 @@ pub fn select_layout(variant: u8) {
 
 #[cfg(test)]
 mod tests {
-    use openwoot::scan::{MatrixKey, Position};
+    use openwoot::{keys::Key, scan::Position};
 
     use super::*;
     use crate::{KEY_COLUMNS, KEY_ROWS};
@@ -196,16 +196,16 @@ mod tests {
     fn the_layouts_differ_where_the_c_tables_differ() {
         assert_eq!(
             ANSI.key(Position::new(0, 0)),
-            Some(MatrixKey { row: 2, column: 4 })
+            Some(Key { row: 2, column: 4 })
         );
         assert_eq!(ANSI.key(Position::new(1, 13)), None);
         assert_eq!(
             ISO.key(Position::new(1, 13)),
-            Some(MatrixKey { row: 4, column: 1 })
+            Some(Key { row: 4, column: 1 })
         );
         assert_eq!(
             JIS.key(Position::new(4, 14)),
-            Some(MatrixKey { row: 1, column: 14 })
+            Some(Key { row: 1, column: 14 })
         );
     }
 }

@@ -9,9 +9,9 @@ pub trait LayoutVariantSource {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InDeviceInfo;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug)]
 pub struct OptionBit {
-    pub user_option: u8,
+    pub user_option: fn() -> u8,
 }
 
 impl LayoutVariantSource for InDeviceInfo {
@@ -24,7 +24,7 @@ impl LayoutVariantSource for InDeviceInfo {
 
 impl LayoutVariantSource for OptionBit {
     fn variant(&self, _device_info: Option<&DeviceInfo>) -> u8 {
-        self.user_option & OPTION_LAYOUT_BIT
+        (self.user_option)() & OPTION_LAYOUT_BIT
     }
 }
 
@@ -48,7 +48,19 @@ mod tests {
             ..info
         };
         assert_eq!(InDeviceInfo.variant(Some(&without_layout)), 0);
-        assert_eq!(OptionBit { user_option: 0xFF }.variant(Some(&info)), 1);
-        assert_eq!(OptionBit { user_option: 0xFE }.variant(None), 0);
+        assert_eq!(
+            OptionBit {
+                user_option: || 0xFF
+            }
+            .variant(Some(&info)),
+            1
+        );
+        assert_eq!(
+            OptionBit {
+                user_option: || 0xFE
+            }
+            .variant(None),
+            0
+        );
     }
 }

@@ -1,4 +1,7 @@
-use openwoot::lighting::{FADE_DIMMED, FADE_FULL, Key, KeyEvent};
+use openwoot::{
+    keys::Key,
+    lighting::{FADE_DIMMED, FADE_FULL, KeyEvent},
+};
 use openwoot_protocol::lighting::{Effects, Idle, Rgb};
 
 use super::engine::{Chip, START_MS, lighting, settle};

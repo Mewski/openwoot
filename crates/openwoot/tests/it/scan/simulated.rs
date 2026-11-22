@@ -1,5 +1,5 @@
 use openwoot::{
-    analog::{MinMax, StdDev},
+    analog::{MinMax, StandardDeviation},
     scan::{
         ADDRESSES_PER_INPUT, Converter, MeasuredReference, RecheckFrom, Sample, Sensing, ZeroLevel,
     },
@@ -169,7 +169,7 @@ pub(super) struct ReferenceBench;
 
 impl Sensing for ReferenceBench {
     type Converter = Simulated<4>;
-    type Noise = StdDev;
+    type Noise = StandardDeviation;
     type Recheck = ();
     type Reference = MeasuredReference<2482>;
 }

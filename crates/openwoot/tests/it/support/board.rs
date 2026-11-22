@@ -23,6 +23,6 @@ pub(crate) fn stock_identity(serial: Option<&'static str>) -> StockIdentity {
         face: Face::default(),
         layout: 0,
         mcu_id: [0; 12],
-        flash_ids: [0; 10],
+        nor_identity: None,
     }
 }

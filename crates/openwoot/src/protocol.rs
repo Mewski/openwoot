@@ -8,6 +8,6 @@ mod version;
 pub use channel::Channel;
 pub use configuration::Configuration;
 pub use handler::{Answer, Handler};
-pub use stock::StockIdentity;
+pub use stock::{MCU_ID_LEN, StockIdentity};
 pub use update_mode::UpdateMode;
 pub use version::version;

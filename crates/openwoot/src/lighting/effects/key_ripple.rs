@@ -1,10 +1,12 @@
 use super::{cells::Cells, press_color::pick_press_color};
-use crate::lighting::{
-    canvas::Canvas,
-    color::{palette_color, rgb, scale_channel},
-    config::KeyRipple,
-    leds::Key,
-    truncate::{low_8, low_16},
+use crate::{
+    keys::Key,
+    lighting::{
+        canvas::Canvas,
+        color::{palette_color, rgb, scale_channel},
+        config::KeyRipple,
+        truncate::{low_8, low_16},
+    },
 };
 
 const COLOR_MASK: u8 = 0x07;
@@ -24,7 +26,7 @@ const DOWN_LEFT: u8 = 4;
 const DOWN_RIGHT: u8 = 5;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct State<const ROWS: usize, const COLUMNS: usize> {
+pub(super) struct State<const ROWS: usize, const COLUMNS: usize> {
     config: KeyRipple,
     cells: Cells<ROWS, COLUMNS>,
     last_color: u8,
@@ -34,7 +36,7 @@ pub(crate) struct State<const ROWS: usize, const COLUMNS: usize> {
 }
 
 impl<const ROWS: usize, const COLUMNS: usize> State<ROWS, COLUMNS> {
-    pub(crate) const fn new(config: KeyRipple) -> Self {
+    pub(super) const fn new(config: KeyRipple) -> Self {
         Self {
             config,
             cells: [[0; COLUMNS]; ROWS],
@@ -45,7 +47,7 @@ impl<const ROWS: usize, const COLUMNS: usize> State<ROWS, COLUMNS> {
         }
     }
 
-    pub(crate) const fn update(&mut self, config: KeyRipple) {
+    pub(super) const fn update(&mut self, config: KeyRipple) {
         self.config = config;
         self.cells = [[0; COLUMNS]; ROWS];
         self.active = true;
@@ -53,11 +55,11 @@ impl<const ROWS: usize, const COLUMNS: usize> State<ROWS, COLUMNS> {
         self.decay_timer_ms = 0;
     }
 
-    pub(crate) const fn needs_render(&self) -> bool {
+    pub(super) const fn needs_render(&self) -> bool {
         self.active
     }
 
-    pub(crate) fn press(&mut self, key: Key, now_ms: u32) {
+    pub(super) fn press(&mut self, key: Key, now_ms: u32) {
         let color = if self.config.palette {
             pick_press_color(&mut self.last_color, now_ms)
         } else {
@@ -69,7 +71,7 @@ impl<const ROWS: usize, const COLUMNS: usize> State<ROWS, COLUMNS> {
         }
     }
 
-    pub(crate) fn render(&mut self, canvas: &mut impl Canvas, elapsed_ms: u32) {
+    pub(super) fn render(&mut self, canvas: &mut impl Canvas, elapsed_ms: u32) {
         let steps_per_second =
             u32::from(self.config.steps_per_second.clamp(1, STEPS_PER_SECOND_MAX));
         let decay_ms = u32::from(self.config.decay_step_ms.max(1));

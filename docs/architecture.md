@@ -15,7 +15,7 @@ xtask (host)         ── openwoot-image
 
 | Crate | Holds today |
 | --- | --- |
-| `crates/openwoot` | `keys::Index` (a key index checked against the key count), `hid` (report descriptors and typed reports), `xinput` (the XInput report, LED command and interface descriptors), `usb` (the stock-like USB face, `Negotiated`: descriptors of the negotiated speed, `HostState`: what the host set), `protocol` (configuration channel on interface 2, the stock identification responder, `UpdateMode`: what the channel needs to hand over to the bootloader), `runtime` (the USB device, configuration channel and HID report tasks' logic) |
+| `crates/openwoot` | `keys::Key` (a key by row and column of the key matrix, with the C firmware's key code), `hid` (report descriptors and typed reports), `xinput` (the XInput report, LED command and interface descriptors), `usb` (the stock-like USB face, `Negotiated`: descriptors of the negotiated speed, `HostState`: what the host set), `protocol` (configuration channel on interface 2, the stock identification responder, `UpdateMode`: what the channel needs to hand over to the bootloader), `runtime` (the USB device, configuration channel, HID report and lighting tasks' logic, `Firmware::new` that builds them at start-up) |
 | `crates/openwoot-protocol` | the configuration protocol: postcard-rpc endpoints (`GetVersion`), HID report framing, the frame magic and the largest frame |
 | `crates/openwoot-drivers` | `Is31fl3741` over `embedded_hal_async::i2c::I2c`, `SpiNor` over `embedded_hal_async::spi::SpiDevice` |
 | `crates/openwoot-image` | `Descriptor` (the image descriptor), `Image` (checks of an image), `MemoryLayout` (reads `memory.x`) |
@@ -33,18 +33,19 @@ Dependencies point down the tree only; `cargo xtask check` verifies the directio
 
 Embassy tasks cannot be generic, so each board's `src/main.rs` declares the tasks with concrete
 types and `openwoot::runtime` holds their logic, generic over `embassy_usb::driver::Driver` and
-`protocol::UpdateMode`. `runtime::Usb::new` builds the USB face once at start-up and splits it into three
-parts, each run by one task on the thread executor:
+`protocol::UpdateMode`. `runtime::Firmware::new` builds the USB face once at start-up (`runtime::Usb`) and splits it, with the
+lighting engine, into parts, each run by one task on the thread executor:
 
 | Task | Runs |
 | --- | --- |
 | `device` | `UsbDevice::run`: enumeration, control requests, suspend and resume |
 | `channel` | the configuration channel on interface 2 (`runtime::Channel`): requests through the interrupt endpoints and stock feature reports, answered by `protocol::Handler`; owns the chip HAL's `Bootloader` (`protocol::UpdateMode`) for update mode |
 | `reports` | one idle report on every HID input endpoint each time the host configures the device; the XInput output endpoint is drained (no scanning yet) |
+| `lights` | the lighting engine on the LED driver (`runtime::Lighting`), woken by key events and every 4 ms |
 
 The key interrupt executor (UART4 vector, priority 3) is started but stays empty until scanning
-lands. Long-lived USB state (`usb::Resources`, `usb::HostState`) lives in statics of the board
-binary (`static_cell::ConstStaticCell`).
+lands. Long-lived state (`usb::Resources`, `usb::HostState`, the key events, the lighting engine)
+lives in one `runtime::State` static of the board binary, handed out once by `runtime::Firmware::new`.
 
 The configuration descriptor is built once for the face of the board (`FACE`, high speed on the
 Wooting 80HE, full speed on the Wooting 60HE+), and `usb::Negotiated` wraps the chip driver so
@@ -71,7 +72,7 @@ strategies are types the board binds through `scan::Sensing`:
 
 | Slot | Wooting 80HE | Wooting 60HE+ |
 | --- | --- | --- |
-| `Noise` (idle recalibration) | `analog::MinMax` | `analog::StdDev` |
+| `Noise` (idle recalibration) | `analog::MinMax` | `analog::StandardDeviation` |
 | `Recheck` (second conversion of changed readings) | `scan::RecheckFrom<3>` | `()` |
 | `Reference` (zero-field level) | `scan::ZeroLevel<2048>` | `scan::MeasuredReference<2482>` |
 

@@ -1,10 +1,13 @@
 use super::{cells::Cells, press_color::pick_press_color};
-use crate::lighting::{
-    canvas::Canvas,
-    color::{mix_level, opaque, palette_color, rgb, scale},
-    config::{ReactiveColoring, ReactiveFade, Rgb},
-    leds::{Key, Variant},
-    truncate::{low_8, low_16},
+use crate::{
+    keys::Key,
+    lighting::{
+        canvas::Canvas,
+        color::{mix_level, opaque, palette_color, rgb, scale},
+        config::{ReactiveColoring, ReactiveFade, Rgb},
+        leds::Variant,
+        truncate::{low_8, low_16},
+    },
 };
 
 const STEP_MS_MAX: u8 = 40;
@@ -19,7 +22,7 @@ const PALETTE_LEVEL_MAX: u32 = 30;
 const PALETTE_PRESSED: u8 = 0xF8;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct State<const ROWS: usize, const COLUMNS: usize> {
+pub(super) struct State<const ROWS: usize, const COLUMNS: usize> {
     config: ReactiveFade,
     cells: Cells<ROWS, COLUMNS>,
     last_color: u8,
@@ -28,7 +31,7 @@ pub(crate) struct State<const ROWS: usize, const COLUMNS: usize> {
 }
 
 impl<const ROWS: usize, const COLUMNS: usize> State<ROWS, COLUMNS> {
-    pub(crate) const fn new(config: ReactiveFade) -> Self {
+    pub(super) const fn new(config: ReactiveFade) -> Self {
         Self {
             config,
             cells: [[0; COLUMNS]; ROWS],
@@ -38,17 +41,17 @@ impl<const ROWS: usize, const COLUMNS: usize> State<ROWS, COLUMNS> {
         }
     }
 
-    pub(crate) const fn update(&mut self, config: ReactiveFade) {
+    pub(super) const fn update(&mut self, config: ReactiveFade) {
         self.config = config;
         self.cells = [[0; COLUMNS]; ROWS];
         self.active = true;
     }
 
-    pub(crate) const fn needs_render(&self) -> bool {
+    pub(super) const fn needs_render(&self) -> bool {
         self.active
     }
 
-    pub(crate) fn press(&mut self, key: Key, now_ms: u32, variant: &Variant<ROWS, COLUMNS>) {
+    pub(super) fn press(&mut self, key: Key, now_ms: u32, variant: &Variant<ROWS, COLUMNS>) {
         let value = if matches!(self.config.coloring, ReactiveColoring::Palette) {
             pick_press_color(&mut self.last_color, now_ms) | PALETTE_PRESSED
         } else {
@@ -74,7 +77,7 @@ impl<const ROWS: usize, const COLUMNS: usize> State<ROWS, COLUMNS> {
         self.active = true;
     }
 
-    pub(crate) fn render(&mut self, canvas: &mut impl Canvas, elapsed_ms: u32) {
+    pub(super) fn render(&mut self, canvas: &mut impl Canvas, elapsed_ms: u32) {
         let palette = matches!(self.config.coloring, ReactiveColoring::Palette);
         let mut step_ms = u32::from(self.config.step_ms.clamp(1, STEP_MS_MAX));
         if palette {

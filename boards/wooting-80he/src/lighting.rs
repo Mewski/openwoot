@@ -1,10 +1,11 @@
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use hal::{
     gpio::{Output, Pin},
     i2c::I2c,
 };
 use openwoot::{
-    lighting::{FramePage, Gains, Geometry, Key, Led, LedMap, LedPosition, Matrix, Variant},
+    keys::Key,
+    lighting::{FramePage, Gains, Geometry, Led, LedMap, LedPosition, Matrix, Variant},
     runtime,
 };
 use openwoot_drivers::is31fl3741::Configuration;
@@ -37,7 +38,6 @@ pub const LIGHTBAR_LEDS: [Led; 10] = [
 pub const SPACEBAR: Key = Key::new(5, 6);
 
 pub type Lighting = openwoot::lighting::Lighting<(), ROWS, COLUMNS, PAGES, PAGE_LENGTH>;
-pub type SharedLighting = Mutex<CriticalSectionRawMutex, Lighting>;
 pub type Task =
     runtime::Lighting<'static, CriticalSectionRawMutex, (), ROWS, COLUMNS, PAGES, PAGE_LENGTH>;
 pub type LedDriver = Matrix<I2c, Pin<'B', 8, Output>>;

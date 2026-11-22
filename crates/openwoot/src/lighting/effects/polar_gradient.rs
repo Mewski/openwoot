@@ -11,7 +11,7 @@ const PHASE_MODULUS: i64 = 65_535;
 const TWO_PI: f32 = 6.283_185_5;
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct State<const ROWS: usize, const COLUMNS: usize> {
+pub(super) struct State<const ROWS: usize, const COLUMNS: usize> {
     config: PolarGradient,
     phase: u16,
     distances: Cells<ROWS, COLUMNS>,
@@ -19,7 +19,7 @@ pub(crate) struct State<const ROWS: usize, const COLUMNS: usize> {
 }
 
 impl<const ROWS: usize, const COLUMNS: usize> State<ROWS, COLUMNS> {
-    pub(crate) fn new(config: PolarGradient) -> Self {
+    pub(super) fn new(config: PolarGradient) -> Self {
         let mut distances = [[0; COLUMNS]; ROWS];
         let mut angles = [[0; COLUMNS]; ROWS];
         let center_row = count(ROWS) / 2.0;
@@ -40,12 +40,12 @@ impl<const ROWS: usize, const COLUMNS: usize> State<ROWS, COLUMNS> {
         }
     }
 
-    pub(crate) const fn update(&mut self, config: PolarGradient) {
+    pub(super) const fn update(&mut self, config: PolarGradient) {
         self.config = config;
         self.phase = 0;
     }
 
-    pub(crate) fn render(&mut self, canvas: &mut impl Canvas, elapsed_ms: u32) {
+    pub(super) fn render(&mut self, canvas: &mut impl Canvas, elapsed_ms: u32) {
         let advance = i64::from(elapsed_ms) * i64::from(self.config.speed);
         let phase = (i64::from(self.phase) + advance).rem_euclid(PHASE_MODULUS);
         self.phase = u16::try_from(phase).unwrap_or_default();

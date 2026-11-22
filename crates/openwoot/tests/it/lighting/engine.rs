@@ -1,5 +1,8 @@
-use openwoot::lighting::{
-    Indicator, Key, KeyEvent, Lighting, LockState, Overlay, OverlayId, Span, from_rgb565, rgb,
+use openwoot::{
+    keys::Key,
+    lighting::{
+        Indicator, KeyEvent, Lighting, LockState, Overlay, OverlayId, Span, from_rgb565, rgb,
+    },
 };
 use openwoot_protocol::lighting::{Color, Effects, Indicators, KeyColors, Rgb, Settings};
 

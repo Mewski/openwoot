@@ -7,10 +7,10 @@ use single::successors;
 use sweep::Sweep;
 
 use super::{
-    Context, Converter, Decision, Event, Events, Grid, Map, MatrixKey, Mode, Position,
-    Recalibration, Reference, Sensing, Sensor, Travel, Update,
+    Context, Converter, Decision, Event, Events, Grid, Map, Mode, Position, Recalibration,
+    Reference, Sensing, Sensor, Travel, Update,
 };
-use crate::analog::Switch;
+use crate::{analog::Switch, keys::Key};
 
 const SETTLE_CYCLES: u8 = 3;
 const DELAY_INPUT_US: u16 = 54;
@@ -176,7 +176,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
         self.rebound_filter = enabled;
     }
 
-    pub fn apply_switches(&mut self, mut switch_for: impl FnMut(MatrixKey) -> Switch) {
+    pub fn apply_switches(&mut self, mut switch_for: impl FnMut(Key) -> Switch) {
         for (position, key) in self.map.iter() {
             if let Some(sensor) = self.sensors.get_mut(position) {
                 sensor.set_switch(switch_for(key));

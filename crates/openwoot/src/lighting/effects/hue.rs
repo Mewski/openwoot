@@ -6,13 +6,13 @@ use crate::lighting::{
 const SECTOR_WIDTH: u8 = 43;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Hues {
-    pub(crate) first: u8,
-    pub(crate) last: u8,
+pub(super) struct Hues {
+    pub(super) first: u8,
+    pub(super) last: u8,
 }
 
 impl Hues {
-    pub(crate) const fn of(range: HueRange) -> Self {
+    pub(super) const fn of(range: HueRange) -> Self {
         let (first, last) = match range {
             HueRange::FullCircle => (0, 255),
             HueRange::From110To184 => (110, 184),
@@ -25,7 +25,7 @@ impl Hues {
     }
 }
 
-pub(crate) const fn hue_to_rgb(hue: u8) -> Rgb {
+pub(super) const fn hue_to_rgb(hue: u8) -> Rgb {
     let remainder = (hue % SECTOR_WIDTH) as i32 * 6;
     let falling = ((255 * (255 - ((255 * remainder) >> 8))) >> 8).to_le_bytes()[0];
     let rising = ((255 * (255 - ((255 * (255 - remainder)) >> 8))) >> 8).to_le_bytes()[0];
@@ -39,7 +39,7 @@ pub(crate) const fn hue_to_rgb(hue: u8) -> Rgb {
     }
 }
 
-pub(crate) const fn phase_step(period: u8, elapsed_ms: u32) -> u16 {
+pub(super) const fn phase_step(period: u8, elapsed_ms: u32) -> u16 {
     let per_millisecond = match 0x1_0000_u32.checked_div(250 * period as u32) {
         Some(step) => step,
         None => 0,

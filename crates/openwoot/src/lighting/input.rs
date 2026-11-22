@@ -1,6 +1,6 @@
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
 
-use super::leds::Key;
+use crate::keys::Key;
 
 pub const TRAVEL_FULL: u16 = 4095;
 pub const KEY_EVENT_CAPACITY: usize = 32;

@@ -114,7 +114,10 @@ const fn gain(value: u8, gain: u8) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lighting::leds::{FramePage, Key, LedPosition};
+    use crate::{
+        keys::Key,
+        lighting::leds::{FramePage, LedPosition},
+    };
 
     const POSITIONS: [Option<LedPosition>; 4] = [
         None,

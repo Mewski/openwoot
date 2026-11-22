@@ -24,6 +24,7 @@ postcard = { workspace = true }
 sequential-storage = { workspace = true }
 serde = { workspace = true }
 spin = { workspace = true }
+static_cell = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

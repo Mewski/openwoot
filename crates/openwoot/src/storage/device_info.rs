@@ -1,10 +1,12 @@
 mod aux_record;
+mod location;
 mod protobuf;
 mod serial;
 mod serial_text;
 
 pub use aux_record::{AUX_CAPACITY, AuxRecord};
-use embedded_storage_async::nor_flash::{NorFlashError, NorFlashErrorKind, ReadNorFlash};
+use embedded_storage_async::nor_flash::NorFlashErrorKind;
+pub use location::{DeviceInfoSource, McuPage, NorSector};
 use protobuf::{Fields, Malformed, Wire, narrow};
 pub use serial::{LEGACY_SERIAL_LEN, SERIAL_MESSAGE_CAPACITY, SerialMessage, SerialNumber};
 pub use serial_text::{SERIAL_TEXT_CAPACITY, SerialText};
@@ -38,14 +40,6 @@ pub enum Unmarked {
     RawRecord,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct NorSector {
-    pub offset: u32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct McuPage;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum DeviceInfoError {
     #[error("the device information is blank")]
@@ -54,6 +48,8 @@ pub enum DeviceInfoError {
     Decode,
     #[error("could not read the device information: {0:?}")]
     Read(NorFlashErrorKind),
+    #[error("the device information lies outside the readable flash")]
+    OutsideFlash,
 }
 
 impl DeviceInfo {
@@ -153,26 +149,6 @@ impl DeviceInfo {
         }
         info.serial = serial.ok_or(DeviceInfoError::Decode)?;
         Ok(info)
-    }
-}
-
-impl NorSector {
-    pub async fn read<F: ReadNorFlash>(
-        &self,
-        flash: &mut F,
-    ) -> Result<DeviceInfo, DeviceInfoError> {
-        let mut sector = [0; DEVICE_INFO_LEN];
-        flash
-            .read(self.offset, &mut sector)
-            .await
-            .map_err(|error| DeviceInfoError::Read(error.kind()))?;
-        DeviceInfo::from_sector(&sector, Unmarked::ShortFormat)
-    }
-}
-
-impl McuPage {
-    pub fn read(self, page: &[u8]) -> Result<DeviceInfo, DeviceInfoError> {
-        DeviceInfo::from_sector(page, Unmarked::RawRecord)
     }
 }
 

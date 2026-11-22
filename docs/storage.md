@@ -55,7 +55,7 @@ Switching from stock or C openwoot to this firmware therefore replaces the stock
 
 ## Device information
 
-The factory record is read once at start-up (`storage::NorSector` on the 80HE, `storage::McuPage` on the 60HE+) into `storage::DeviceInfo`: the serial number (`SerialNumber`, printed by `SerialNumber::text` as `A<supplier>B<year><week>W<product>[T<pcb design>]<revision>[<minor revision>][S<edition>]<stage letter><product id>`, as `storage_format_serial_string` in C), the auxiliary record (`AuxRecord`, at most 58 bytes, kept as bytes), the physical layout and the lock mode (`DeviceInfo::is_locked`: values 1 and 3).
+The factory record is read once at start-up through a `storage::DeviceInfoSource` (`storage::NorSector` on the 80HE, `storage::McuPage` on the 60HE+) into `storage::DeviceInfo`: the serial number (`SerialNumber`, printed by `SerialNumber::text` as `A<supplier>B<year><week>W<product>[T<pcb design>]<revision>[<minor revision>][S<edition>]<stage letter><product id>`, as `storage_format_serial_string` in C), the auxiliary record (`AuxRecord`, at most 58 bytes, kept as bytes), the physical layout and the lock mode (`DeviceInfo::is_locked`: values 1 and 3).
 
 | Marker at `+0xffc` | Length prefix | Largest payload |
 | --- | --- | --- |
@@ -72,7 +72,7 @@ The physical layout is a `storage::LayoutVariantSource`: `InDeviceInfo` (80HE: t
 
 ## Identification
 
-Start-up (`boards/<board>/src/storage.rs`, `start`) also reads the flash ids (`SpiNor::identification`, `SpiNor::unique_id`, `storage::FlashIds`, zero when the chip does not answer) and the 96-bit unique id of the microcontroller (`hal::flash::unique_id`: `0x1fff_7a10` on the GD32F425, `0x1fff_f7e8` on the GD32F303). The stock identification responder answers them for feature command 3 selectors 1 and 3, and the physical layout as byte 5 of the device settings (command 19).
+Start-up (`storage::Storage::open` with the board's `SETTINGS`, `DEVICE_INFO` and `LAYOUT_VARIANT` from `boards/<board>/src/storage.rs`) also reads the flash ids (`SpiNor::identification`, `SpiNor::unique_id`, into `storage::NorIdentity`, absent when the chip does not answer), and the board reads the 96-bit unique id of the microcontroller (`hal::flash::unique_id`: `0x1fff_7a10` on the GD32F425, `0x1fff_f7e8` on the GD32F303). The stock identification responder (`protocol::StockIdentity`) answers them for feature command 3 selectors 1 and 3 (the flash ids as manufacturer, device and unique id, zero when absent), and the physical layout as byte 5 of the device settings (command 19).
 
 ## Power loss
 

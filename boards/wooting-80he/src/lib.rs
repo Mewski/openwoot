@@ -130,7 +130,13 @@ impl Board {
             Device::new(flash_bus, chip_select, clocks.system),
             storage::NOR_CAPACITY,
         );
-        let storage = block_on(storage::start(nor, bootloader.take_format_request()));
+        let storage = block_on(storage::Storage::open(
+            nor,
+            storage::SETTINGS,
+            storage::DEVICE_INFO,
+            storage::LAYOUT_VARIANT,
+            bootloader.take_format_request(),
+        ));
         let usb = usb::Driver::new(
             usb::Core {
                 global: peripherals.hs_global,
@@ -197,8 +203,8 @@ impl Board {
             serial: self.serial_number,
             face: FACE,
             layout: self.storage.layout_variant,
-            mcu_id: self.storage.mcu_id,
-            flash_ids: self.storage.flash_ids.to_bytes(),
+            mcu_id: hal::flash::unique_id(),
+            nor_identity: self.storage.nor_identity,
         }
     }
 }

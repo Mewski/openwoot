@@ -5,14 +5,14 @@ use crate::lighting::{
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct State {
+pub(super) struct State {
     config: HueCycle,
     hues: Hues,
     phase: u16,
 }
 
 impl State {
-    pub(crate) const fn new(config: HueCycle) -> Self {
+    pub(super) const fn new(config: HueCycle) -> Self {
         Self {
             config,
             hues: Hues::of(config.hues),
@@ -20,11 +20,11 @@ impl State {
         }
     }
 
-    pub(crate) fn update(&mut self, config: HueCycle) {
+    pub(super) fn update(&mut self, config: HueCycle) {
         *self = Self::new(config);
     }
 
-    pub(crate) fn render<const ROWS: usize, const COLUMNS: usize>(
+    pub(super) fn render<const ROWS: usize, const COLUMNS: usize>(
         &mut self,
         canvas: &mut impl Canvas,
         elapsed_ms: u32,

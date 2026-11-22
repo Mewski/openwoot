@@ -1,12 +1,8 @@
 use hal::{
-    flash,
     gpio::{Output, Pin},
     spi::Device,
 };
-use openwoot::storage::{
-    self, DeviceInfo, FlashIds, InDeviceInfo, LayoutVariantSource, MCU_ID_LEN, NorLayout,
-    NorSector, Opened, Partition, SettingsRegion,
-};
+use openwoot::storage::{self, InDeviceInfo, NorLayout, NorSector, SettingsRegion};
 use openwoot_drivers::spi_nor::SpiNor;
 use openwoot_image::Region;
 
@@ -33,43 +29,7 @@ pub const LAYOUT_VARIANT: InDeviceInfo = InDeviceInfo;
 
 pub type ChipSelect = Pin<'D', 2, Output>;
 pub type Nor = SpiNor<Device<ChipSelect>>;
-pub type Settings = storage::Settings<Nor>;
-
-#[derive(Debug)]
-pub struct Storage {
-    pub settings: Option<Settings>,
-    pub opened: Result<Opened, storage::Error>,
-    pub device_info: Option<DeviceInfo>,
-    pub layout_variant: u8,
-    pub flash_ids: FlashIds,
-    pub mcu_id: [u8; MCU_ID_LEN],
-}
-
-pub async fn start(mut nor: Nor, format_requested: bool) -> Storage {
-    let flash_ids = match (nor.identification().await, nor.unique_id().await) {
-        (Ok(identification), Ok(unique_id)) => FlashIds {
-            manufacturer: identification.manufacturer,
-            device: identification.device,
-            unique_id,
-        },
-        _ => FlashIds::default(),
-    };
-    let device_info = DEVICE_INFO.read(&mut nor).await.ok();
-    let layout_variant = LAYOUT_VARIANT.variant(device_info.as_ref());
-    let (settings, opened) =
-        match storage::Settings::open(Partition::new(nor, SETTINGS), format_requested).await {
-            Ok((settings, opened)) => (Some(settings), Ok(opened)),
-            Err(error) => (None, Err(error)),
-        };
-    Storage {
-        settings,
-        opened,
-        device_info,
-        layout_variant,
-        flash_ids,
-        mcu_id: flash::unique_id(),
-    }
-}
+pub type Storage = storage::Storage<Nor>;
 
 #[cfg(test)]
 mod tests {

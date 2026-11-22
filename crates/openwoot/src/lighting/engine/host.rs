@@ -1,10 +1,12 @@
 use super::Lighting;
-use crate::lighting::{
-    canvas::Canvas,
-    config::{KeyColors, Rgb},
-    hooks::{Lightbar, Signals},
-    key_colors::{color_map, paint},
-    leds::Key,
+use crate::{
+    keys::Key,
+    lighting::{
+        canvas::Canvas,
+        config::{KeyColors, Rgb},
+        hooks::{Lightbar, Signals},
+        key_colors::{color_map, paint},
+    },
 };
 
 impl<H, const ROWS: usize, const COLUMNS: usize, const PAGES: usize, const LENGTH: usize>

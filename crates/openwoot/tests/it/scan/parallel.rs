@@ -1,4 +1,7 @@
-use openwoot::scan::{MatrixKey, Mode, Travel};
+use openwoot::{
+    keys::Key,
+    scan::{Mode, Travel},
+};
 
 use super::{Operation, SETTLING_CYCLES, cycle, event_travels, scanner, settled};
 
@@ -26,6 +29,6 @@ fn the_parallel_scan_converts_every_address_once_and_rechecks_changed_inputs() {
     assert_eq!(cycle(&mut scanner, &travel, now_ms), 1 + 15 + 1);
     assert_eq!(
         event_travels(&scanner),
-        [(MatrixKey { row: 1, column: 12 }, 3718)]
+        [(Key { row: 1, column: 12 }, 3718)]
     );
 }

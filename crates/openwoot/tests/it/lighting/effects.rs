@@ -1,6 +1,9 @@
 use std::{collections::HashMap, fmt::Write};
 
-use openwoot::lighting::{Canvas, Frame, Key, KeyEvent, Layers, Painter, from_rgb565};
+use openwoot::{
+    keys::Key,
+    lighting::{Canvas, Frame, KeyEvent, Layers, Painter, from_rgb565},
+};
 use openwoot_protocol::lighting::{
     AnalogLevel, AnalogRgbFill, Breathing, Color, Effect, HueCycle, HueRange, KeyRipple, KeyTest,
     LevelMeter, PolarGradient, RainbowWave, ReactiveColoring, ReactiveFade, Scanner,

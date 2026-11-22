@@ -2,8 +2,10 @@ use std::pin::pin;
 
 use openwoot::{
     protocol::{Channel, Handler, StockIdentity},
+    storage::NorIdentity,
     usb::{Face, HostState, Resources, build},
 };
+use openwoot_drivers::spi_nor::Identification;
 use openwoot_protocol::{FirmwareVersion, PROTOCOL_VERSION, Version};
 
 use crate::support::{
@@ -185,7 +187,13 @@ fn the_layout_and_the_hardware_ids_come_from_the_identity() {
     let identity = StockIdentity {
         layout: 2,
         mcu_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-        flash_ids: [0xEF, 0x16, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28],
+        nor_identity: Some(NorIdentity {
+            identification: Identification {
+                manufacturer: 0xEF,
+                device: 0x16,
+            },
+            unique_id: [0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28],
+        }),
         ..stock_identity(None)
     };
     assert_eq!(
@@ -198,7 +206,7 @@ fn the_layout_and_the_hardware_ids_come_from_the_identity() {
     mcu_id.extend(identity.mcu_id);
     assert_eq!(answer(identity, 3, 1), input_report(&mcu_id));
     let mut flash_ids = vec![0xD1, 0xDA, 0x03, 0x88, 0x0A, 0x00];
-    flash_ids.extend(identity.flash_ids);
+    flash_ids.extend([0xEF, 0x16, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28]);
     assert_eq!(answer(identity, 3, 3), input_report(&flash_ids));
 }
 

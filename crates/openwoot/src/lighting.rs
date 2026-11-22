@@ -30,7 +30,7 @@ pub use idle::FADE_DIMMED;
 pub use indicators::{Indicator, LockState};
 pub use input::{KEY_EVENT_CAPACITY, KeyActivity, KeyEvent, KeyEvents, KeyTravel, TRAVEL_FULL};
 pub use key_colors::{KeyColorMap, LAYER_COLOR_MAPS};
-pub use leds::{FramePage, Gains, Geometry, Key, Led, LedMap, LedPosition, Variant};
+pub use leds::{FramePage, Gains, Geometry, Led, LedMap, LedPosition, Variant};
 pub use matrix::{LedMatrix, Matrix};
 use openwoot_protocol::lighting as config;
 pub use output::{GAMMA, PageWrite, gamma, output_scale, output_value};

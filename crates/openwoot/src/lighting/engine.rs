@@ -13,9 +13,10 @@ use super::{
     indicators::{Indicator, LockIndicators, LockState},
     input::KeyEvent,
     key_colors::{LayerColors, paint},
-    leds::{Geometry, Key, Led, LedMap, Variant},
+    leds::{Geometry, Led, LedMap, Variant},
     overlay::{CLASS_GLOBAL, FADE_FULL, Overlay, OverlayId, Overlays, Span},
 };
+use crate::keys::Key;
 
 pub const FRAME_PERIOD_MS: u32 = 16;
 

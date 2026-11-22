@@ -1,3 +1,5 @@
+use crate::keys::Key;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Led(pub u8);
 
@@ -5,29 +7,6 @@ impl Led {
     #[must_use]
     pub const fn index(self) -> usize {
         self.0 as usize
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Key {
-    pub row: u8,
-    pub column: u8,
-}
-
-impl Key {
-    #[must_use]
-    pub const fn new(row: u8, column: u8) -> Self {
-        Self { row, column }
-    }
-
-    #[must_use]
-    pub const fn row(self) -> usize {
-        self.row as usize
-    }
-
-    #[must_use]
-    pub const fn column(self) -> usize {
-        self.column as usize
     }
 }
 
