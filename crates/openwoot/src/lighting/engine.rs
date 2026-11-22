@@ -1,11 +1,12 @@
 mod host;
 mod render;
 
+use openwoot_protocol::lighting::{Idle, KeyColors, Rgb, Settings};
+
 use super::{
     brightness::Brightness,
     canvas::Painter,
     color::opaque,
-    config::{Idle, KeyColors, Rgb, Settings},
     dirty_pages::DirtyPages,
     effects::EffectStack,
     frame::Frame,
@@ -177,6 +178,7 @@ where
     pub fn set_fast_scan(&mut self, fast_scan: bool) {
         if self.fast_scan != fast_scan {
             self.fast_scan = fast_scan;
+            self.effects.release_keys();
             self.redraw_requested = true;
             self.force_render = true;
             self.paint_base_colors(false);

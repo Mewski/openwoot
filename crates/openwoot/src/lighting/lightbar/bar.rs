@@ -1,5 +1,8 @@
 use heapless::Vec;
-use openwoot_protocol::lightbar::{Entries, Settings, Signal};
+use openwoot_protocol::{
+    lightbar::{Entries, Settings, Signal},
+    lighting::Rgb,
+};
 
 use super::{
     paint::Strip,
@@ -7,7 +10,6 @@ use super::{
 };
 use crate::lighting::{
     canvas::Canvas,
-    config::Rgb,
     hooks::Lightbar,
     leds::{Led, LedMap, LedPosition},
     output::{output_scale, output_value},

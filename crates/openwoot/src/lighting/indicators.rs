@@ -1,6 +1,7 @@
+use openwoot_protocol::lighting::{Color, Indicators};
+
 use super::{
     color::opaque,
-    config::{Color, Indicators},
     overlay::{Overlay, OverlayId},
 };
 use crate::keys::Key;

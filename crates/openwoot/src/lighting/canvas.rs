@@ -1,6 +1,7 @@
+use openwoot_protocol::lighting::Rgb;
+
 use super::{
     color::{rgb, scale},
-    config::Rgb,
     dirty_pages::DirtyPages,
     frame::Frame,
     leds::{Gains, Led, LedMap, Variant},

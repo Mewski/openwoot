@@ -1,7 +1,6 @@
-use super::{
-    config::Idle,
-    overlay::{FADE_FULL, Overlay, Span},
-};
+use openwoot_protocol::lighting::Idle;
+
+use super::overlay::{FADE_FULL, Overlay, Span};
 
 pub const FADE_DIMMED: u8 = 127;
 

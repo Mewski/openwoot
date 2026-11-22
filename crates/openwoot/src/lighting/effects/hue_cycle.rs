@@ -1,8 +1,7 @@
+use openwoot_protocol::lighting::{HueCycle, HueRange};
+
 use super::hue::{Hues, hue_to_rgb, phase_step};
-use crate::lighting::{
-    canvas::Canvas,
-    config::{HueCycle, HueRange},
-};
+use crate::lighting::canvas::Canvas;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct State {

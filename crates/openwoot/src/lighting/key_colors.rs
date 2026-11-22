@@ -1,8 +1,6 @@
-use super::{
-    canvas::Canvas,
-    color::BLACK,
-    config::{KeyColors, Rgb},
-};
+use openwoot_protocol::lighting::{KeyColors, Rgb};
+
+use super::{canvas::Canvas, color::BLACK};
 
 pub(super) type KeyColorMap<const ROWS: usize, const COLUMNS: usize> = [[Rgb; COLUMNS]; ROWS];
 
@@ -102,7 +100,7 @@ pub(super) fn paint<const ROWS: usize, const COLUMNS: usize>(
     }
 }
 
-fn color_map<const ROWS: usize, const COLUMNS: usize>(
+pub(super) fn color_map<const ROWS: usize, const COLUMNS: usize>(
     colors: &KeyColors,
 ) -> KeyColorMap<ROWS, COLUMNS> {
     let mut map = [[BLACK; COLUMNS]; ROWS];

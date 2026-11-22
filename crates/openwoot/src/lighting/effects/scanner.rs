@@ -1,8 +1,6 @@
-use crate::lighting::{
-    canvas::Canvas,
-    config::{Scanner, ScannerDirection},
-    truncate::low_16,
-};
+use openwoot_protocol::lighting::{Scanner, ScannerDirection};
+
+use crate::lighting::{canvas::Canvas, truncate::low_16};
 
 const STEPS_PER_SECOND_MAX: u8 = 60;
 

@@ -1,8 +1,9 @@
-use openwoot_protocol::lightbar::{self, HostSignal, HostSignalIds};
-
-use super::{
-    canvas::Canvas, config::Rgb, indicators::LockState, input::KeyEvent, signals::ProfileState,
+use openwoot_protocol::{
+    lightbar::{self, HostSignal, HostSignalIds},
+    lighting::Rgb,
 };
+
+use super::{canvas::Canvas, indicators::LockState, input::KeyEvent, signals::ProfileState};
 use crate::keys::Key;
 
 pub trait Lightbar {

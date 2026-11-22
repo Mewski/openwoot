@@ -3,7 +3,7 @@ use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use openwoot::{
     diagnostics::{Diagnostics, Hardware},
     keys::Key,
-    lighting::{KeyActivity, KeyEvent, KeyEvents, LedMatrix, Lighting},
+    lighting::{HostControl, KeyActivity, KeyEvent, KeyEvents, LedMatrix, Lighting},
     profile, runtime,
     usb::HostState,
 };
@@ -95,6 +95,7 @@ fn the_leds_wake_with_usb_and_every_page_is_sent_once() {
         events: &events,
         notices: &runtime::KeyNotices::new(),
         host: &host,
+        host_control: &HostControl::new(),
         diagnostics: &diagnostics,
         profile: &profile::Shared::new(),
     };
@@ -130,6 +131,7 @@ fn key_presses_reach_the_effects_through_the_event_channel() {
         events: &events,
         notices: &runtime::KeyNotices::new(),
         host: &host,
+        host_control: &HostControl::new(),
         diagnostics: &Diagnostics::new(),
         profile: &profile::Shared::new(),
     };
@@ -162,6 +164,7 @@ fn a_failed_write_sends_every_page_again() {
         events: &events,
         notices: &runtime::KeyNotices::new(),
         host: &host,
+        host_control: &HostControl::new(),
         diagnostics: &diagnostics,
         profile: &profile::Shared::new(),
     };

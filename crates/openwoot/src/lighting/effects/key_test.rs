@@ -1,7 +1,9 @@
+use openwoot_protocol::lighting::KeyTest;
+
 use super::cells::Cells;
 use crate::{
     keys::Key,
-    lighting::{canvas::Canvas, color::rgb, config::KeyTest, input::KeyEvent},
+    lighting::{canvas::Canvas, color::rgb, input::KeyEvent},
 };
 
 const IDLE: u8 = 0;

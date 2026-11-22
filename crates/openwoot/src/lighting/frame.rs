@@ -1,6 +1,7 @@
+use openwoot_protocol::lighting::Rgb;
+
 use super::{
     color::rgb,
-    config::Rgb,
     dirty_pages::DirtyPages,
     leds::{FramePage, LedPosition},
 };

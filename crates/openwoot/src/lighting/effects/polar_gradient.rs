@@ -1,10 +1,10 @@
 use libm::{atan2f, floorf, fmaf, sqrtf};
+use openwoot_protocol::lighting::PolarGradient;
 
 use super::cells::Cells;
 use crate::lighting::{
     canvas::Canvas,
     color::{blend, opaque},
-    config::PolarGradient,
 };
 
 const PHASE_MODULUS: i64 = 65_535;

@@ -1,10 +1,11 @@
+use openwoot_protocol::lighting::{ReactiveColoring, ReactiveFade, Rgb};
+
 use super::{cells::Cells, press_color::pick_press_color};
 use crate::{
     keys::Key,
     lighting::{
         canvas::Canvas,
         color::{mix_level, opaque, palette_color, rgb, scale},
-        config::{ReactiveColoring, ReactiveFade, Rgb},
         leds::Variant,
         truncate::{low_8, low_16},
     },

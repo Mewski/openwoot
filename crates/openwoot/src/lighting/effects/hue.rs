@@ -1,7 +1,6 @@
-use crate::lighting::{
-    color::rgb,
-    config::{HueRange, Rgb},
-};
+use openwoot_protocol::lighting::{HueRange, Rgb};
+
+use crate::lighting::color::rgb;
 
 const SECTOR_WIDTH: u8 = 43;
 

@@ -1,9 +1,10 @@
+use openwoot_protocol::lighting::LevelMeter;
+
 use super::travel::travel_level_12;
 use crate::{
     keys::Key,
     lighting::{
         canvas::Canvas,
-        config::LevelMeter,
         input::{KeyTravel, TRAVEL_FULL},
         truncate::low_8,
     },
@@ -36,6 +37,11 @@ impl State {
 
     pub(super) const fn needs_render(&self) -> bool {
         self.dirty
+    }
+
+    pub(super) const fn release_keys(&mut self) {
+        self.level = 0;
+        self.dirty = true;
     }
 
     pub(super) fn feed(&mut self, key: Key, travel: u16, input: &impl KeyTravel) {

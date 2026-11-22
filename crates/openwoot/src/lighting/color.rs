@@ -1,4 +1,4 @@
-use super::config::{Color, Rgb};
+use openwoot_protocol::lighting::{Color, Rgb};
 
 pub const BLACK: Rgb = Rgb {
     red: 0,

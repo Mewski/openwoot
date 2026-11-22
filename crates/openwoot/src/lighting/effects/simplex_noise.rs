@@ -1,7 +1,8 @@
+use openwoot_protocol::lighting::SimplexNoise;
+
 use crate::lighting::{
     canvas::Canvas,
     color::{blend, opaque},
-    config::SimplexNoise,
 };
 
 const SKEW: u64 = 1_431_655_764;

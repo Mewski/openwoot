@@ -1,7 +1,9 @@
+use openwoot_protocol::lighting::AnalogRgbFill;
+
 use super::travel::travel_level_8;
 use crate::{
     keys::Key,
-    lighting::{canvas::Canvas, color::rgb, config::AnalogRgbFill, input::KeyTravel},
+    lighting::{canvas::Canvas, color::rgb, input::KeyTravel},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,6 +26,12 @@ impl State {
 
     pub(super) const fn update(&mut self, config: AnalogRgbFill) {
         *self = Self::new(config);
+    }
+
+    pub(super) const fn release_keys(&mut self) {
+        self.red = 0;
+        self.green = 0;
+        self.blue = 0;
     }
 
     pub(super) fn feed<const ROWS: usize, const COLUMNS: usize>(

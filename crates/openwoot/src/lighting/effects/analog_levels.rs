@@ -1,8 +1,7 @@
+use openwoot_protocol::lighting::AnalogLevel;
+
 use super::{cells::Cells, travel::travel_level_8};
-use crate::{
-    keys::Key,
-    lighting::{config::AnalogLevel, input::KeyTravel},
-};
+use crate::{keys::Key, lighting::input::KeyTravel};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Levels<const ROWS: usize, const COLUMNS: usize> {
@@ -37,6 +36,14 @@ impl<const ROWS: usize, const COLUMNS: usize> Levels<ROWS, COLUMNS> {
             && *cell != level
         {
             *cell = level;
+            self.dirty = true;
+        }
+    }
+
+    pub(super) fn release_keys(&mut self, always_dirty: bool) {
+        let pressed = self.cells.iter().flatten().any(|&level| level != 0);
+        self.cells = [[0; COLUMNS]; ROWS];
+        if pressed || always_dirty {
             self.dirty = true;
         }
     }

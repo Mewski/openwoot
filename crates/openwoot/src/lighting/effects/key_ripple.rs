@@ -1,10 +1,11 @@
+use openwoot_protocol::lighting::KeyRipple;
+
 use super::{cells::Cells, press_color::pick_press_color};
 use crate::{
     keys::Key,
     lighting::{
         canvas::Canvas,
         color::{palette_color, rgb, scale_channel},
-        config::KeyRipple,
         truncate::{low_8, low_16},
     },
 };

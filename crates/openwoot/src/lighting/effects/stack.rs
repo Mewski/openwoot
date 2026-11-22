@@ -1,4 +1,5 @@
 use heapless::Vec;
+use openwoot_protocol::lighting::{Effect, MAX_EFFECTS};
 
 use super::{
     analog_glow, analog_levels::Levels, analog_rgb_fill, analog_spotlight, breathing, hue_cycle,
@@ -9,7 +10,6 @@ use crate::{
     keys::Key,
     lighting::{
         canvas::Canvas,
-        config::{Effect, MAX_EFFECTS},
         input::{KeyEvent, KeyTravel},
         leds::{Geometry, Variant},
     },
@@ -109,6 +109,18 @@ impl<const ROWS: usize, const COLUMNS: usize> EffectStack<ROWS, COLUMNS> {
                     state.feed(key, travel, input);
                 }
                 Layer::AnalogRgbFill(state) => state.feed::<ROWS, COLUMNS>(key, travel, input),
+                _ => {}
+            }
+        }
+    }
+
+    pub fn release_keys(&mut self) {
+        for layer in &mut self.layers {
+            match layer {
+                Layer::LevelMeter(state) => state.release_keys(),
+                Layer::AnalogSpotlight(state) => state.release_keys(false),
+                Layer::AnalogGlow(state) => state.release_keys(true),
+                Layer::AnalogRgbFill(state) => state.release_keys(),
                 _ => {}
             }
         }

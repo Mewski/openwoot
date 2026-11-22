@@ -1,6 +1,7 @@
 use heapless::Vec;
+use openwoot_protocol::lighting::Rgb;
 
-use super::{canvas::Canvas, config::Rgb, hooks::Lightbar, truncate::low_16};
+use super::{canvas::Canvas, hooks::Lightbar, truncate::low_16};
 use crate::keys::Key;
 
 pub const FADE_FULL: u8 = u8::MAX;

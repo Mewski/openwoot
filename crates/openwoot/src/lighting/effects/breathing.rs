@@ -1,6 +1,7 @@
+use openwoot_protocol::lighting::Breathing;
+
 use crate::lighting::{
     canvas::Canvas,
-    config::Breathing,
     truncate::{low_8, low_16},
 };
 

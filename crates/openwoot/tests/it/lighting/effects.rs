@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt::Write};
 
 use openwoot::{
     keys::Key,
-    lighting::{Canvas, EffectStack, Frame, KeyEvent, Painter, from_rgb565},
+    lighting::{Canvas, EffectStack, Frame, KeyEvent, Painter, TRAVEL_FULL, from_rgb565},
 };
 use openwoot_protocol::lighting::Effect;
 
@@ -207,4 +207,37 @@ fn scenarios_cover_every_effect_kind() {
     kinds.sort_by_key(|kind| format!("{kind:?}"));
     kinds.dedup();
     assert_eq!(kinds.len(), 13);
+}
+
+fn rendered(effects: &mut EffectStack<ROWS, COLUMNS>) -> Vec<u8> {
+    let mut frame = Frame::new();
+    {
+        let mut canvas = Painter::new(&mut frame, &MAP, &VARIANT, None);
+        for row in 0..ROWS {
+            for column in 0..COLUMNS {
+                canvas.set_key(row, column, from_rgb565(base_color(row, column)));
+            }
+        }
+        effects.render(&mut canvas, GEOMETRY, 16);
+    }
+    key_colors(&mut frame)
+}
+
+#[test]
+fn releasing_the_keys_returns_the_analog_effects_to_their_released_frame() {
+    for kind in [7, 8, 9, 10] {
+        let layers = [effect(kind, [40, 0, 0, 0])];
+        let mut untouched = EffectStack::<ROWS, COLUMNS>::new();
+        untouched.apply(&layers);
+        let released = rendered(&mut untouched);
+        let mut effects = EffectStack::<ROWS, COLUMNS>::new();
+        effects.apply(&layers);
+        for column in COLUMNS - 3..COLUMNS {
+            effects.feed(Key::new(5, column as u8), TRAVEL_FULL, &());
+        }
+        assert_ne!(rendered(&mut effects), released, "kind {kind}");
+        effects.release_keys();
+        assert!(effects.needs_render(), "kind {kind}");
+        assert_eq!(rendered(&mut effects), released, "kind {kind}");
+    }
 }
