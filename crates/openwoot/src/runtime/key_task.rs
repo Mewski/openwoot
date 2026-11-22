@@ -8,6 +8,7 @@ use openwoot_protocol::keys::ScanMode;
 
 use super::{KeyNotices, KeyReports};
 use crate::{
+    diagnostics::Diagnostics,
     keys::{Functions, Keys, Notice, Parts, Shared, Switch},
     lighting::{KeyActivity, KeyEvents, LockState},
     scan::{self, Sensing},
@@ -24,12 +25,14 @@ pub struct KeyTask<'d, M: RawMutex> {
     pub notices: &'d KeyNotices,
     pub host: &'d HostState,
     pub face: Face,
+    pub diagnostics: &'d Diagnostics,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Progress {
     last_ms: Option<u32>,
     locks: Option<LockState>,
+    rebound_filter: Option<bool>,
 }
 
 impl<M: RawMutex> KeyTask<'_, M> {
@@ -56,6 +59,7 @@ impl<M: RawMutex> KeyTask<'_, M> {
                 Either::First(false) => yield_now().await,
                 Either::Second(()) => {
                     scan.recover();
+                    self.diagnostics.scan_recovered();
                 }
             }
         }
@@ -63,10 +67,14 @@ impl<M: RawMutex> KeyTask<'_, M> {
         loop {
             let now_ms = now_ms();
             match select(scan.cycle(now_ms), Timer::after(CYCLE_TIMEOUT)).await {
-                Either::First(true) => self.step(scan, keys, &mut progress, now_ms),
+                Either::First(true) => {
+                    self.diagnostics.scan_cycle_completed();
+                    self.step(scan, keys, &mut progress, now_ms);
+                }
                 Either::First(false) => yield_now().await,
                 Either::Second(()) => {
                     scan.recover();
+                    self.diagnostics.scan_recovered();
                 }
             }
         }
@@ -120,15 +128,23 @@ impl<M: RawMutex> KeyTask<'_, M> {
                         ScanMode::Parallel => scan::Mode::Parallel,
                     });
                 }
-                if parts.contains(Parts::ACTIVATED) {
+                if parts.contains(Parts::ACTIVATED) || parts.contains(Parts::PROFILES) {
                     let (count, active) = self.shared.profiles();
                     keys.set_profiles(count, active);
+                    if parts.contains(Parts::ACTIVATED) {
+                        self.diagnostics.profile_applied(active);
+                    }
                 }
                 if parts.contains(Parts::KEYMAPS) || parts.contains(Parts::ADVANCED) {
                     for (indicator, key) in keys.indicator_keys() {
                         self.notices.send(Notice::IndicatorKey { indicator, key });
                     }
                 }
+            }
+            let rebound_filter = self.shared.rebound_filter();
+            if progress.rebound_filter != Some(rebound_filter) {
+                scanner.set_rebound_filter(rebound_filter);
+                progress.rebound_filter = Some(rebound_filter);
             }
             keys.pass(
                 scanner
@@ -148,7 +164,10 @@ impl<M: RawMutex> KeyTask<'_, M> {
         if processed.is_none() {
             return;
         }
-        self.reports.publish(keys.output());
+        self.diagnostics.keys_passed();
+        if self.reports.publish(keys.output()) {
+            self.diagnostics.key_report_published();
+        }
         for notice in keys.take_notices() {
             match notice {
                 Notice::Key { key, event } => {
@@ -174,6 +193,7 @@ impl<M: RawMutex> KeyTask<'_, M> {
             progress.locks = Some(locks);
         }
         if let Some(profile) = keys.take_profile_request() {
+            self.diagnostics.profile_requested();
             self.shared.request_profile(profile);
         }
     }

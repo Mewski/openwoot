@@ -4,11 +4,11 @@ use openwoot_protocol::{
     decode_message, encode_message,
     endpoints::{
         ActivateProfile, CreateProfile, DeleteProfile, EnterUpdateMode, FactoryReset,
-        GetAdvancedKeys, GetCapabilities, GetDeviceSettings, GetGamepadMapping, GetGamepadSettings,
-        GetGlobalLightbar, GetGlobalSettings, GetHostSignals, GetKeyColors, GetKeyOverrides,
-        GetKeySettings, GetKeymap, GetLayout, GetLightbar, GetLighting, GetProfileInfo,
-        GetProfileRevision, GetProfiles, GetSwitchModels, GetSwitches, GetVersion, Revert, Save,
-        SetAdvancedKeys, SetDeviceSettings, SetGamepadMapping, SetGamepadSettings,
+        GetAdvancedKeys, GetCapabilities, GetDeviceSettings, GetDiagnostics, GetGamepadMapping,
+        GetGamepadSettings, GetGlobalLightbar, GetGlobalSettings, GetHostSignals, GetKeyColors,
+        GetKeyOverrides, GetKeySettings, GetKeymap, GetLayout, GetLightbar, GetLighting,
+        GetProfileInfo, GetProfileRevision, GetProfiles, GetSwitchModels, GetSwitches, GetVersion,
+        Revert, Save, SetAdvancedKeys, SetDeviceSettings, SetGamepadMapping, SetGamepadSettings,
         SetGlobalLightbar, SetGlobalSettings, SetHostSignals, SetKeyColors, SetKeyOverrides,
         SetKeySettings, SetKeymap, SetLayout, SetLightbar, SetLighting, SetProfileInfo,
         SetSwitches,
@@ -17,15 +17,16 @@ use openwoot_protocol::{
 use serde::{Serialize, de::DeserializeOwned};
 
 use super::{Configuration, StockIdentity, stock::Responder};
-use crate::usb::FeatureRequest;
+use crate::{diagnostics::Readout, usb::FeatureRequest};
 
 const UPDATE_MODE_OPTION: u8 = 0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct Handler<C = ()> {
     version: Version,
     stock: Responder,
     configuration: C,
+    diagnostics: Option<Readout<'static>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,7 +49,14 @@ impl<C: Configuration> Handler<C> {
             version,
             stock: Responder::new(identity),
             configuration,
+            diagnostics: None,
         }
+    }
+
+    #[must_use]
+    pub const fn with_diagnostics(mut self, readout: Readout<'static>) -> Self {
+        self.diagnostics = Some(readout);
+        self
     }
 
     pub fn configuration(&mut self) -> &mut C {
@@ -71,6 +79,11 @@ impl<C: Configuration> Handler<C> {
             keyboard_endpoints(key, self.version, configuration, &message, response).await;
         if len.is_none() {
             len = profile_endpoints(key, configuration, &message, response).await;
+        }
+        if len.is_none()
+            && let Some(readout) = self.diagnostics
+        {
+            len = diagnostics_endpoint(key, readout, configuration, &message, response).await;
         }
         let len = len.unwrap_or_else(|| fail(&message, &WireError::UnknownKey, response));
         Answer {
@@ -232,6 +245,18 @@ async fn profile_endpoints<C: Configuration>(
         checked SetLightbar => async |configuration, change| {
             configuration.set_lightbar(change.profile, change.value).await
         },
+    )
+}
+
+async fn diagnostics_endpoint<C: Configuration>(
+    key: Key,
+    readout: Readout<'_>,
+    configuration: &mut C,
+    message: &Message<'_>,
+    response: &mut [u8],
+) -> Option<Option<usize>> {
+    dispatch!(key, configuration, message, response;
+        plain GetDiagnostics => async |_, ()| readout.report(),
     )
 }
 

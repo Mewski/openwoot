@@ -109,6 +109,30 @@ impl From<device::Settings> for Face {
     }
 }
 
+impl From<Face> for device::Settings {
+    fn from(face: Face) -> Self {
+        Self {
+            mode: match face.mode {
+                Mode::Xinput => device::Mode::Xinput,
+                Mode::Gamepad => device::Mode::Gamepad,
+                Mode::NoGamepad => device::Mode::NoGamepad,
+            },
+            keyboard: match face.keyboard {
+                KeyboardFormat::NKeyRollover => device::KeyboardFormat::NKeyRollover,
+                KeyboardFormat::Boot => device::KeyboardFormat::Boot,
+            },
+            speed: match face.speed {
+                Speed::Full => device::Speed::Full,
+                Speed::High => device::Speed::High,
+            },
+            gamepad_polling: match face.gamepad_polling {
+                PollingRate::Every4Milliseconds => device::PollingRate::Every4Milliseconds,
+                PollingRate::Every1Millisecond => device::PollingRate::Every1Millisecond,
+                PollingRate::Every125Microseconds => device::PollingRate::Every125Microseconds,
+            },
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +159,16 @@ mod tests {
                 gamepad_polling: PollingRate::Every125Microseconds,
             }
         );
+    }
+
+    #[test]
+    fn a_face_converts_back_to_the_same_device_settings() {
+        let settings = device::Settings {
+            mode: device::Mode::Gamepad,
+            keyboard: device::KeyboardFormat::Boot,
+            speed: device::Speed::Full,
+            gamepad_polling: device::PollingRate::Every4Milliseconds,
+        };
+        assert_eq!(device::Settings::from(Face::from(settings)), settings);
     }
 }

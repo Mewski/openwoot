@@ -37,6 +37,13 @@ impl Profiles {
         self.count = count;
         self.active = active;
         self.requested = None;
+        if active != 0 {
+            self.remembered = Some(active);
+        } else if let Some(remembered) = self.remembered
+            && remembered >= count
+        {
+            self.remembered = Some(if count < 2 { 1 } else { count - 1 });
+        }
     }
 
     pub const fn select(&mut self, profile: u8) -> bool {
@@ -89,6 +96,18 @@ mod tests {
         let mut fresh = Profiles::new(4, 0);
         assert!(fresh.toggle_mode());
         assert_eq!(fresh.take_request(), Some(1));
+    }
+
+    #[test]
+    fn any_activation_of_another_profile_becomes_the_toggle_target() {
+        let mut profiles = Profiles::new(4, 0);
+        profiles.set(4, 3);
+        profiles.set(4, 0);
+        assert!(profiles.toggle_mode());
+        assert_eq!(profiles.take_request(), Some(3));
+        profiles.set(2, 0);
+        assert!(profiles.toggle_mode());
+        assert_eq!(profiles.take_request(), Some(1));
     }
 
     #[test]

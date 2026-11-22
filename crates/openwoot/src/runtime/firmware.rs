@@ -66,12 +66,15 @@ where
                 notices: &state.key_notices,
                 host: &state.host,
                 face,
+                diagnostics: &state.diagnostics,
             },
             lighting: Lighting {
                 lighting: state.lighting.init(Mutex::new(lighting)),
                 events: &state.key_events,
                 notices: &state.key_notices,
                 host: &state.host,
+                diagnostics: &state.diagnostics,
+                profile: &state.profile,
             },
         }
     }

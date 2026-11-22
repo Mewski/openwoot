@@ -17,10 +17,10 @@ use openwoot::{
     lighting::{FramePage, Gains, Geometry, Led, LedMap, LedPosition, Variant},
 };
 
-const ROWS: usize = 6;
-const COLUMNS: usize = 17;
-const PAGES: usize = 9;
-const LENGTH: usize = 36;
+pub(crate) const ROWS: usize = 6;
+pub(crate) const COLUMNS: usize = 17;
+pub(crate) const PAGES: usize = 9;
+pub(crate) const LENGTH: usize = 36;
 const LEDS_PER_PAGE: usize = LENGTH / 3;
 const LED_COUNT: usize = ROWS * COLUMNS + 1;
 const HOLES: [(usize, usize); 14] = [
@@ -40,19 +40,19 @@ const HOLES: [(usize, usize); 14] = [
     (5, 13),
 ];
 
-static MAP: LedMap<PAGES> = LedMap {
+pub(crate) static MAP: LedMap<PAGES> = LedMap {
     positions: &POSITIONS,
     pages: pages(),
     gains: Gains::FULL,
 };
 
-static VARIANT: Variant<ROWS, COLUMNS> = Variant {
+pub(crate) static VARIANT: Variant<ROWS, COLUMNS> = Variant {
     leds: leds(),
     spacebar: Key::new(5, 6),
     spacebar_fill: &[4, 5, 7, 8],
 };
 
-const GEOMETRY: Geometry = Geometry {
+pub(crate) const GEOMETRY: Geometry = Geometry {
     first_key_row: 0,
     level_meter_segments: 10,
 };

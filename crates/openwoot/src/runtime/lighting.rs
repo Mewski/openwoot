@@ -4,7 +4,9 @@ use embassy_time::{Duration, Instant, Timer};
 
 use super::KeyNotices;
 use crate::{
+    diagnostics::Diagnostics,
     lighting::{self, KeyEvent, KeyEvents, KeyTravel, LedMatrix, Lightbar, OutputChange, Signals},
+    profile,
     usb::HostState,
 };
 
@@ -21,6 +23,8 @@ pub struct Lighting<
     pub events: &'d KeyEvents,
     pub notices: &'d KeyNotices,
     pub host: &'d HostState,
+    pub diagnostics: &'d Diagnostics,
+    pub profile: &'d profile::Shared<M>,
 }
 
 impl<M, H, const ROWS: usize, const COLUMNS: usize, const PAGES: usize, const LENGTH: usize>
@@ -37,6 +41,7 @@ where
             if !initialized {
                 initialized = matrix.initialize().await.is_ok();
             }
+            self.diagnostics.set_lighting_initialized(initialized);
             self.step(matrix, input, now_ms(), self.host.is_active())
                 .await;
             select3(
@@ -56,6 +61,7 @@ where
         usb_active: bool,
     ) {
         let mut lighting = self.lighting.lock().await;
+        self.profile.apply(&mut lighting, now_ms);
         while let Ok(activity) = self.events.try_receive() {
             lighting.key_event(activity.key, activity.event, activity.at_ms);
             if activity.event == KeyEvent::Pressed {
@@ -63,6 +69,9 @@ where
             }
         }
         self.notices.apply(&mut lighting, now_ms);
+        if let Some(level) = lighting.take_brightness_save(now_ms) {
+            self.profile.save_brightness(level);
+        }
         match lighting.set_output(usb_active) {
             Some(OutputChange::Wake) => {
                 if matrix.set_running(true).await.is_ok() {
@@ -77,16 +86,19 @@ where
             }
             None => {}
         }
+        self.diagnostics
+            .set_lighting_active(lighting.output_enabled());
         if !lighting.output_enabled() {
             return;
         }
         lighting.update(now_ms, input);
+        self.diagnostics.frame_rendered();
         while let Some(write) = lighting.next_write() {
-            if matrix
+            let written = matrix
                 .write(write.bank, write.first_register, write.values())
-                .await
-                .is_err()
-            {
+                .await;
+            self.diagnostics.page_written(&written);
+            if written.is_err() {
                 lighting.invalidate();
                 break;
             }

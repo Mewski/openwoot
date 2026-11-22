@@ -1,5 +1,9 @@
 use embassy_futures::block_on;
-use openwoot::storage::{Key, Record, Scope};
+use openwoot::{
+    diagnostics::{Diagnostics, Hardware},
+    storage::{Key, Record, Scope},
+};
+use openwoot_protocol::diagnostics::{Storage, Usb};
 use serde::{Deserialize, Serialize};
 
 use super::{Blob, Brightness, PROFILES, SETTINGS_SECTORS, chip, filled, open};
@@ -84,5 +88,26 @@ fn older_records_migrate_and_newer_records_count_as_absent() {
     assert_eq!(
         block_on(settings.load::<Lighting>(Scope::Global)).unwrap(),
         None
+    );
+}
+
+#[test]
+fn settings_count_their_loads_and_stores_into_the_diagnostics() {
+    static DIAGNOSTICS: Diagnostics = Diagnostics::new();
+    let (nor, layout) = chip(SETTINGS_SECTORS);
+    let (settings, _) = open(nor, layout, false).unwrap();
+    let mut settings = settings.with_diagnostics(&DIAGNOSTICS);
+    block_on(settings.store(Scope::Global, &Brightness(40))).unwrap();
+    block_on(settings.load::<Brightness>(Scope::Global)).unwrap();
+    block_on(settings.remove(Key::of::<Brightness>(Scope::Global))).unwrap();
+    assert_eq!(
+        DIAGNOSTICS
+            .report(Usb::default(), Hardware::default())
+            .storage,
+        Storage {
+            loads: 1,
+            stores: 2,
+            failures: 0,
+        }
     );
 }

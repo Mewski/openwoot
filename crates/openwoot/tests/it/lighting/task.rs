@@ -1,12 +1,16 @@
 use embassy_futures::block_on;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use openwoot::{
+    diagnostics::{Diagnostics, Hardware},
     keys::Key,
     lighting::{KeyActivity, KeyEvent, KeyEvents, LedMatrix, Lighting},
-    runtime,
+    profile, runtime,
     usb::HostState,
 };
-use openwoot_protocol::lighting::{Effects, Indicators, Settings};
+use openwoot_protocol::{
+    diagnostics::Usb,
+    lighting::{Effects, Indicators, Settings},
+};
 
 use super::{COLUMNS, GEOMETRY, LENGTH, MAP, PAGES, ROWS, VARIANT, effects::effect};
 
@@ -85,11 +89,20 @@ fn the_leds_wake_with_usb_and_every_page_is_sent_once() {
     let lighting = shared(Effects::new());
     let events = KeyEvents::new();
     let host = HostState::new();
+    let diagnostics = Diagnostics::new();
     let task = runtime::Lighting {
         lighting: &lighting,
         events: &events,
         notices: &runtime::KeyNotices::new(),
         host: &host,
+        diagnostics: &diagnostics,
+        profile: &profile::Shared::new(),
+    };
+    let active = || {
+        diagnostics
+            .report(Usb::default(), Hardware::default())
+            .lighting
+            .active
     };
     let mut matrix = Recorder::default();
     block_on(task.step(&mut matrix, &(), 0, false));
@@ -97,10 +110,12 @@ fn the_leds_wake_with_usb_and_every_page_is_sent_once() {
     block_on(task.step(&mut matrix, &(), 1, true));
     assert_eq!(matrix.calls.first(), Some(&Call::Running(true)));
     assert_eq!(writes(&matrix.calls), PAGES);
+    assert!(active());
     assert!(matrix.calls.contains(&Call::Write(1, 0, LENGTH)));
     matrix.calls.clear();
     block_on(task.step(&mut matrix, &(), 2, false));
     assert_eq!(matrix.calls, [Call::Running(false)]);
+    assert!(!active());
 }
 
 #[test]
@@ -115,6 +130,8 @@ fn key_presses_reach_the_effects_through_the_event_channel() {
         events: &events,
         notices: &runtime::KeyNotices::new(),
         host: &host,
+        diagnostics: &Diagnostics::new(),
+        profile: &profile::Shared::new(),
     };
     let mut matrix = Recorder::default();
     for now_ms in 0..40 {
@@ -139,11 +156,14 @@ fn a_failed_write_sends_every_page_again() {
     let lighting = shared(Effects::new());
     let events = KeyEvents::new();
     let host = HostState::new();
+    let diagnostics = Diagnostics::new();
     let task = runtime::Lighting {
         lighting: &lighting,
         events: &events,
         notices: &runtime::KeyNotices::new(),
         host: &host,
+        diagnostics: &diagnostics,
+        profile: &profile::Shared::new(),
     };
     let mut matrix = Recorder {
         failing_writes: true,
@@ -155,4 +175,11 @@ fn a_failed_write_sends_every_page_again() {
     matrix.calls.clear();
     block_on(task.step(&mut matrix, &(), 2, true));
     assert_eq!(writes(&matrix.calls), PAGES);
+    let report = diagnostics
+        .report(Usb::default(), Hardware::default())
+        .lighting;
+    assert_eq!(
+        (report.frames, report.page_writes, report.failed_page_writes),
+        (2, u32::try_from(PAGES).unwrap(), 1)
+    );
 }

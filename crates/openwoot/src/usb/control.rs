@@ -89,6 +89,7 @@ impl<'d> Control<'d> {
 
 impl Handler for Control<'_> {
     fn reset(&mut self) {
+        self.host.count_reset();
         for interface in self.interfaces.iter_mut().flatten() {
             interface.idle = 0;
             interface.protocol = HidProtocol::Report;

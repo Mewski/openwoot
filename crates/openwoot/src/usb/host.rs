@@ -6,7 +6,7 @@ use core::{
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, signal::Signal};
 
 use super::{FeatureRequests, HidProtocol};
-use crate::hid::Leds;
+use crate::{diagnostics::Counter, hid::Leds};
 
 pub struct HostState {
     keyboard_leds: AtomicU8,
@@ -15,6 +15,7 @@ pub struct HostState {
     configured: AtomicBool,
     configuration_changes: Signal<CriticalSectionRawMutex, bool>,
     suspended: AtomicBool,
+    resets: Counter,
 }
 
 impl HostState {
@@ -27,6 +28,7 @@ impl HostState {
             configured: AtomicBool::new(false),
             configuration_changes: Signal::new(),
             suspended: AtomicBool::new(false),
+            resets: Counter::new(),
         }
     }
 
@@ -50,8 +52,24 @@ impl HostState {
         self.configured.load(Ordering::Relaxed) && !self.suspended.load(Ordering::Relaxed)
     }
 
+    pub fn is_configured(&self) -> bool {
+        self.configured.load(Ordering::Relaxed)
+    }
+
+    pub fn is_suspended(&self) -> bool {
+        self.suspended.load(Ordering::Relaxed)
+    }
+
+    pub fn resets(&self) -> u32 {
+        self.resets.value()
+    }
+
     pub(crate) async fn configuration_change(&self) -> bool {
         self.configuration_changes.wait().await
+    }
+
+    pub(super) fn count_reset(&self) {
+        self.resets.increment();
     }
 
     pub(super) fn set_keyboard_leds(&self, leds: u8) {
