@@ -11,6 +11,7 @@ pub mod rcu;
 mod register;
 pub mod system;
 pub mod time;
+pub mod usb;
 
 pub use gd32f303_pac as pac;
 #[doc(hidden)]
