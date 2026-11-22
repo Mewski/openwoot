@@ -5,13 +5,18 @@ use core::{
 };
 
 use embassy_usb_driver::{
-    Bus as BusTrait, Driver as DriverTrait, EndpointAddress, EndpointAllocError, EndpointType,
-    Event, Speed, Unsupported,
+    Bus as BusTrait, ControlPipe as ControlPipeTrait, Driver as DriverTrait,
+    Endpoint as EndpointTrait, EndpointAddress, EndpointAllocError, EndpointError, EndpointInfo,
+    EndpointOut, EndpointType, Event, Speed, Unsupported,
 };
 use embassy_usb_synopsys_otg::{
-    Bus as OtgBus, Config, ControlPipe, Driver as OtgDriver, Endpoint, In, OtgInstance, Out,
-    PhyType, StateStorage, on_interrupt,
-    otg_v1::{Otg, regs::Pcgcctl, vals::Dspd},
+    Bus as OtgBus, Config, ControlPipe as OtgControlPipe, Driver as OtgDriver, Endpoint, In,
+    OtgInstance, Out, PhyType, StateStorage, on_interrupt,
+    otg_v1::{
+        Otg,
+        regs::{Doeptsiz, Pcgcctl},
+        vals::Dspd,
+    },
 };
 
 use crate::{
@@ -28,6 +33,9 @@ const OUT_BUFFER_LEN: usize = 512;
 const ULPI_TURNAROUND: u8 = 9;
 const TIMEOUT_CALIBRATION: u8 = 7;
 const ULPI_FUNCTION: u8 = 10;
+const ALL_TRANSMIT_FIFOS: u8 = 0x10;
+const CONTROL: usize = 0;
+const SETUP_PACKETS: u8 = 3;
 const AHB1EN_USBHSEN: u32 = 1 << 29;
 const AHB1EN_USBHSULPIEN: u32 = 1 << 30;
 const APB2EN_SYSCFGEN: u32 = 1 << 14;
@@ -78,6 +86,14 @@ pub struct Driver {
 pub struct Bus<'d> {
     inner: OtgBus<'d>,
     initialised: bool,
+}
+
+pub struct ControlPipe<'d> {
+    inner: OtgControlPipe<'d>,
+}
+
+pub struct OutEndpoint<'d> {
+    inner: Endpoint<'d, Out>,
 }
 
 #[must_use]
@@ -140,7 +156,7 @@ impl<'d> DriverTrait<'d> for Driver {
     type Bus = Bus<'d>;
     type ControlPipe = ControlPipe<'d>;
     type EndpointIn = Endpoint<'d, In>;
-    type EndpointOut = Endpoint<'d, Out>;
+    type EndpointOut = OutEndpoint<'d>;
 
     fn alloc_endpoint_out(
         &mut self,
@@ -149,8 +165,10 @@ impl<'d> DriverTrait<'d> for Driver {
         max_packet_size: u16,
         interval_ms: u8,
     ) -> Result<Self::EndpointOut, EndpointAllocError> {
-        self.inner
-            .alloc_endpoint_out(ep_type, ep_addr, max_packet_size, interval_ms)
+        let inner =
+            self.inner
+                .alloc_endpoint_out(ep_type, ep_addr, max_packet_size, interval_ms)?;
+        Ok(OutEndpoint { inner })
     }
 
     fn alloc_endpoint_in(
@@ -171,7 +189,9 @@ impl<'d> DriverTrait<'d> for Driver {
                 inner,
                 initialised: false,
             },
-            control_pipe,
+            ControlPipe {
+                inner: control_pipe,
+            },
         )
     }
 }
@@ -188,6 +208,7 @@ impl Bus<'_> {
             .gccfg_v1()
             .modify(|configuration| configuration.set_novbussens(false));
         self.inner.core_soft_reset();
+        flush_fifos();
         self.inner.configure_as_device();
         registers.pcgcctl().write_value(Pcgcctl::default());
         registers.gusbcfg().modify(|configuration| {
@@ -250,6 +271,87 @@ impl BusTrait for Bus<'_> {
     }
 }
 
+impl ControlPipeTrait for ControlPipe<'_> {
+    fn max_packet_size(&self) -> usize {
+        self.inner.max_packet_size()
+    }
+
+    async fn setup(&mut self) -> [u8; 8] {
+        self.inner.setup().await
+    }
+
+    async fn data_out(
+        &mut self,
+        buf: &mut [u8],
+        first: bool,
+        last: bool,
+    ) -> Result<usize, EndpointError> {
+        arm_out(CONTROL, self.control_packet_size());
+        self.inner.data_out(buf, first, last).await
+    }
+
+    async fn data_in(&mut self, data: &[u8], first: bool, last: bool) -> Result<(), EndpointError> {
+        if last {
+            arm_out(CONTROL, self.control_packet_size());
+        }
+        self.inner.data_in(data, first, last).await
+    }
+
+    async fn accept(&mut self) {
+        self.inner.accept().await;
+    }
+
+    async fn reject(&mut self) {
+        self.inner.reject().await;
+    }
+
+    async fn accept_set_address(&mut self, addr: u8) {
+        self.inner.accept_set_address(addr).await;
+    }
+}
+
+impl ControlPipe<'_> {
+    fn control_packet_size(&self) -> u16 {
+        u16::try_from(self.inner.max_packet_size()).unwrap_or(u16::MAX)
+    }
+}
+
+impl fmt::Debug for ControlPipe<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ControlPipe")
+            .finish_non_exhaustive()
+    }
+}
+
+impl EndpointTrait for OutEndpoint<'_> {
+    fn info(&self) -> &EndpointInfo {
+        self.inner.info()
+    }
+
+    async fn wait_enabled(&mut self) {
+        self.inner.wait_enabled().await;
+    }
+}
+
+impl EndpointOut for OutEndpoint<'_> {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, EndpointError> {
+        let len = self.inner.read(buf).await?;
+        let info = self.inner.info();
+        arm_out(info.addr.index(), info.max_packet_size);
+        Ok(len)
+    }
+}
+
+impl fmt::Debug for OutEndpoint<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OutEndpoint")
+            .field("info", self.inner.info())
+            .finish()
+    }
+}
+
 impl UlpiPins {
     fn configure(self) {
         let _ = (
@@ -287,6 +389,46 @@ fn out_buffer() -> &'static mut [u8] {
     // USBHS peripherals that `pac::Peripherals::take` hands out once; so this is the only reference
     // to `OUT_BUFFER` that ever exists.
     unsafe { &mut *buffer }
+}
+
+fn arm_out(index: usize, max_packet_size: u16) {
+    let registers = registers();
+    critical_section::with(|_| {
+        registers
+            .doeptsiz(index)
+            .write_value(out_transfer_size(index, max_packet_size));
+        registers.doepctl(index).modify(|control| {
+            control.set_cnak(true);
+            control.set_epena(true);
+        });
+    });
+}
+
+fn flush_fifos() {
+    let registers = registers();
+    registers
+        .grstctl()
+        .write(|control| control.set_rxfflsh(true));
+    while registers.grstctl().read().rxfflsh() {
+        spin_loop();
+    }
+    registers.grstctl().write(|control| {
+        control.set_txfnum(ALL_TRANSMIT_FIFOS);
+        control.set_txfflsh(true);
+    });
+    while registers.grstctl().read().txfflsh() {
+        spin_loop();
+    }
+}
+
+fn out_transfer_size(index: usize, max_packet_size: u16) -> Doeptsiz {
+    let mut size = Doeptsiz(0);
+    size.set_xfrsiz(u32::from(max_packet_size));
+    size.set_pktcnt(1);
+    if index == CONTROL {
+        size.set_rxdpid_stupcnt(SETUP_PACKETS);
+    }
+    size
 }
 
 const fn turnaround(_speed: Dspd) -> u8 {
@@ -336,5 +478,13 @@ mod tests {
         for speed in [Speed::Low, Speed::Full, Speed::High] {
             assert_eq!(decode(encode(speed)), Some(speed));
         }
+    }
+
+    #[test]
+    fn an_out_stage_is_armed_for_one_packet_as_the_vendor_library_does() {
+        assert_eq!(out_transfer_size(CONTROL, 64).0, 0x6008_0040);
+        assert_eq!(out_transfer_size(CONTROL, 8).0, 0x6008_0008);
+        assert_eq!(out_transfer_size(3, 64).0, 0x0008_0040);
+        assert_eq!(out_transfer_size(2, 512).0, 0x0008_0200);
     }
 }
