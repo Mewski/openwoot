@@ -88,6 +88,7 @@ fn the_leds_wake_with_usb_and_every_page_is_sent_once() {
     let task = runtime::Lighting {
         lighting: &lighting,
         events: &events,
+        notices: &runtime::KeyNotices::new(),
         host: &host,
     };
     let mut matrix = Recorder::default();
@@ -112,6 +113,7 @@ fn key_presses_reach_the_effects_through_the_event_channel() {
     let task = runtime::Lighting {
         lighting: &lighting,
         events: &events,
+        notices: &runtime::KeyNotices::new(),
         host: &host,
     };
     let mut matrix = Recorder::default();
@@ -140,6 +142,7 @@ fn a_failed_write_sends_every_page_again() {
     let task = runtime::Lighting {
         lighting: &lighting,
         events: &events,
+        notices: &runtime::KeyNotices::new(),
         host: &host,
     };
     let mut matrix = Recorder {

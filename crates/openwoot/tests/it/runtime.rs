@@ -4,6 +4,7 @@ use std::{
 };
 
 use embassy_futures::join::join3;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_usb_driver::Speed as BusSpeed;
 use openwoot::{
     hid::{
@@ -12,7 +13,7 @@ use openwoot::{
         NkroReport, PLACEHOLDER_DESCRIPTOR, PLACEHOLDER_LEN, SystemReport,
     },
     protocol::{self, Handler},
-    runtime::Usb,
+    runtime::{KeyReports, Usb},
     usb::{Face, HostState, KeyboardFormat, Mode, PollingRate, Resources, Speed},
 };
 use openwoot_protocol::{decode_response, encode_request, endpoints::GetVersion, report};
@@ -55,6 +56,7 @@ fn connect(
     let host = Host::default();
     let state = HostState::new();
     let mut resources = Resources::new();
+    let key_reports = KeyReports::<CriticalSectionRawMutex>::new();
     let usb = Usb::new(
         host.driver(),
         negotiated_speed,
@@ -76,7 +78,7 @@ fn connect(
     let mut firmware = pin!(join3(
         device.run(),
         channel.run(handler, &mut update_mode),
-        reports.run(),
+        reports.run(&key_reports),
     ));
     host.attach(firmware.as_mut());
     let get = |firmware: Pin<&mut _>, request_type: u8, value: u16, index: u16| {

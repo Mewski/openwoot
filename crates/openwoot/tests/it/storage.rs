@@ -9,7 +9,7 @@ use openwoot::storage::{self, NorLayout, Opened, Partition, Record, Scope, Setti
 use openwoot_image::Region;
 use serde::{Deserialize, Serialize};
 
-use self::model::{Nor, SECTOR};
+pub(crate) use self::model::{Nor, SECTOR};
 
 const SETTINGS_SECTORS: u32 = 4;
 const PROFILES: u8 = 6;

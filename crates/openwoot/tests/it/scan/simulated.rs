@@ -21,7 +21,7 @@ pub(super) enum Operation {
 }
 
 #[derive(Debug)]
-pub(super) struct Simulated<const INPUTS: usize> {
+pub(crate) struct Simulated<const INPUTS: usize> {
     pub(super) readings: [[u16; ADDRESSES_PER_INPUT]; INPUTS],
     pub(super) reference: u16,
     pub(super) operations: Vec<Operation>,
@@ -54,7 +54,7 @@ impl<const INPUTS: usize> Default for Simulated<INPUTS> {
 }
 
 impl<const INPUTS: usize> Simulated<INPUTS> {
-    pub(super) fn press(&mut self, input: u8, address: u8, magnitude: u16) {
+    pub(crate) fn press(&mut self, input: u8, address: u8, magnitude: u16) {
         if let Some(reading) = self
             .readings
             .get_mut(usize::from(input))
@@ -155,7 +155,7 @@ impl<const INPUTS: usize> Converter for Simulated<INPUTS> {
 }
 
 #[derive(Debug)]
-pub(super) struct Bench;
+pub(crate) struct Bench;
 
 impl Sensing for Bench {
     type Converter = Simulated<6>;

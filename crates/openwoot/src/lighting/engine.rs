@@ -4,6 +4,7 @@ mod render;
 use super::{
     brightness::Brightness,
     canvas::Painter,
+    color::opaque,
     config::{Effect, Idle, KeyColors, Rgb, Settings},
     dirty_pages::DirtyPages,
     effects::Layers,
@@ -197,6 +198,11 @@ where
             self.force_render = true;
             self.paint_base_colors(false);
         }
+    }
+
+    #[must_use]
+    pub const fn layer_lock_color(&self) -> Rgb {
+        opaque(self.indicators.colors().layer_lock)
     }
 
     pub fn set_indicator_key(&mut self, indicator: Indicator, key: Option<Key>, now_ms: u32) {

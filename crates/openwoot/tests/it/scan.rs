@@ -10,7 +10,8 @@ use openwoot::{
     keys::Key,
     scan::{Map, Outcome, Position, Scanner, Sensing, Travel},
 };
-use simulated::{Bench, Operation, ReferenceBench, Simulated};
+pub(crate) use simulated::{Bench, Simulated};
+use simulated::{Operation, ReferenceBench};
 
 const MAP: Map<6, 15> = Map::from_codes([
     [

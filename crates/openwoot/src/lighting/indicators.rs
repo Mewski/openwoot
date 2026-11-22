@@ -87,6 +87,10 @@ impl LockIndicators {
         }
     }
 
+    pub(super) const fn colors(&self) -> Indicators {
+        self.colors
+    }
+
     pub(super) const fn set_colors(&mut self, colors: Indicators) {
         self.colors = colors;
     }
