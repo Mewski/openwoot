@@ -4,7 +4,9 @@ use embassy_usb::driver::Speed;
 use openwoot::{diagnostics::Hardware, protocol::Handler, runtime::State};
 use openwoot_protocol::{
     Error, FirmwareVersion, PROTOCOL_VERSION, Version, WireError, decode_response,
-    diagnostics::{self, Bus, BusError, BusErrors, Keys, Lighting, Profile, Report, Scan, Usb},
+    diagnostics::{
+        self, Bus, BusError, BusErrors, Keys, Lighting, Profile, Report, Scan, Stack, Usb,
+    },
     encode_request,
     endpoints::GetDiagnostics,
     report,
@@ -36,12 +38,17 @@ const LED_BUS: Bus = Bus {
     },
     last_error: Some(BusError::NoAcknowledge),
 };
+const STACK: Stack = Stack {
+    size: 32_768,
+    peak: 9_216,
+};
 
 fn hardware() -> Hardware {
     Hardware {
         scan_overruns: Some(3),
         led_bus: LED_BUS,
         flash_bus: Bus::default(),
+        stack: STACK,
     }
 }
 
@@ -121,6 +128,7 @@ fn the_diagnostics_endpoint_reports_the_counters_of_every_subsystem() {
                 speed: Some(diagnostics::Speed::High),
                 resets: 0,
             },
+            stack: STACK,
         }))
     );
 }

@@ -61,12 +61,14 @@ impl Configuration for Memory {
         &mut self,
         profile: Slot,
         layer: Layer,
-    ) -> impl Future<Output = Result<Keymap, Rejection>> {
+        keymap: &mut Keymap,
+    ) -> impl Future<Output = Result<(), Rejection>> {
         ready(match &self.keymap {
-            Some((stored_profile, stored_layer, keymap))
+            Some((stored_profile, stored_layer, stored))
                 if (*stored_profile, *stored_layer) == (profile, layer) =>
             {
-                Ok(keymap.clone())
+                keymap.clone_from(stored);
+                Ok(())
             }
             _ => Err(Rejection::ProfileMissing(profile.get())),
         })
@@ -76,10 +78,10 @@ impl Configuration for Memory {
         &mut self,
         profile: Slot,
         layer: Layer,
-        keymap: Keymap,
+        keymap: &Keymap,
     ) -> impl Future<Output = Result<(), Rejection>> {
         self.changes += 1;
-        self.keymap = Some((profile, layer, keymap));
+        self.keymap = Some((profile, layer, keymap.clone()));
         ready(Ok(()))
     }
 

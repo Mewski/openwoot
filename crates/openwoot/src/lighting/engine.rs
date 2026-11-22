@@ -197,6 +197,7 @@ where
             self.redraw_requested = true;
             self.force_render = true;
             self.paint_base_colors(false);
+            self.hooks.set_fast_scan(fast_scan);
         }
     }
 

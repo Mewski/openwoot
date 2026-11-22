@@ -95,8 +95,8 @@ fn older_records_migrate_and_newer_records_count_as_absent() {
 fn settings_count_their_loads_and_stores_into_the_diagnostics() {
     static DIAGNOSTICS: Diagnostics = Diagnostics::new();
     let (nor, layout) = chip(SETTINGS_SECTORS);
-    let (settings, _) = open(nor, layout, false).unwrap();
-    let mut settings = settings.with_diagnostics(&DIAGNOSTICS);
+    let (mut opened, _) = open(nor, layout, false).unwrap();
+    let settings = opened.with_diagnostics(&DIAGNOSTICS);
     block_on(settings.store(Scope::Global, &Brightness(40))).unwrap();
     block_on(settings.load::<Brightness>(Scope::Global)).unwrap();
     block_on(settings.remove(Key::of::<Brightness>(Scope::Global))).unwrap();
@@ -109,5 +109,62 @@ fn settings_count_their_loads_and_stores_into_the_diagnostics() {
             stores: 2,
             failures: 0,
         }
+    );
+}
+
+#[test]
+fn records_encoded_and_decoded_in_place_are_ordinary_records() {
+    let (nor, layout) = chip(SETTINGS_SECTORS);
+    let (mut settings, _) = open(nor, layout, false).unwrap();
+    let key = Key::of::<Lighting>(Scope::Profile(1));
+    let lighting = Lighting {
+        brightness: 7,
+        effect: 3,
+    };
+    block_on(settings.store_with(key, Lighting::VERSION, |body| {
+        postcard::to_slice(&lighting, body)
+            .ok()
+            .map(|body| body.len())
+    }))
+    .unwrap();
+    assert_eq!(
+        block_on(settings.load::<Lighting>(Scope::Profile(1))).unwrap(),
+        Some(lighting)
+    );
+    assert_eq!(
+        block_on(settings.load_with(key, |stored| stored.decode::<Lighting>())).unwrap(),
+        Some(Some(lighting))
+    );
+    assert_eq!(
+        block_on(
+            settings.load_with(Key::of::<Lighting>(Scope::Global), |stored| {
+                stored.version
+            })
+        )
+        .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn an_encoding_that_fails_or_overflows_keeps_the_stored_record() {
+    let (nor, layout) = chip(SETTINGS_SECTORS);
+    let (mut settings, _) = open(nor, layout, false).unwrap();
+    let kept = Lighting {
+        brightness: 9,
+        effect: 1,
+    };
+    block_on(settings.store(Scope::Global, &kept)).unwrap();
+    let key = Key::of::<Lighting>(Scope::Global);
+    assert_eq!(
+        block_on(settings.store_with(key, Lighting::VERSION, |_| None)),
+        Err(openwoot::storage::Error::Encoding)
+    );
+    assert!(
+        block_on(settings.store_with(key, Lighting::VERSION, |body| Some(body.len() + 1))).is_err()
+    );
+    assert_eq!(
+        block_on(settings.load::<Lighting>(Scope::Global)).unwrap(),
+        Some(kept)
     );
 }

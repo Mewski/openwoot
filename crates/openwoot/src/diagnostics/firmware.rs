@@ -135,6 +135,7 @@ impl Diagnostics {
             },
             flash_bus: hardware.flash_bus,
             usb,
+            stack: hardware.stack,
         }
     }
 

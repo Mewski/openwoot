@@ -86,7 +86,12 @@ pub trait Configuration {
         Err(Rejection::Unsupported)
     }
 
-    async fn keymap(&mut self, _profile: Slot, _layer: Layer) -> Result<keys::Keymap, Rejection> {
+    async fn keymap(
+        &mut self,
+        _profile: Slot,
+        _layer: Layer,
+        _keymap: &mut keys::Keymap,
+    ) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 
@@ -94,43 +99,55 @@ pub trait Configuration {
         &mut self,
         _profile: Slot,
         _layer: Layer,
-        _keymap: keys::Keymap,
+        _keymap: &keys::Keymap,
     ) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 
-    async fn key_overrides(&mut self, _profile: Slot) -> Result<keys::Overrides, Rejection> {
+    async fn key_overrides(
+        &mut self,
+        _profile: Slot,
+        _overrides: &mut keys::Overrides,
+    ) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 
     async fn set_key_overrides(
         &mut self,
         _profile: Slot,
-        _overrides: keys::Overrides,
+        _overrides: &keys::Overrides,
     ) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 
-    async fn advanced_keys(&mut self, _profile: Slot) -> Result<advanced::Keys, Rejection> {
+    async fn advanced_keys(
+        &mut self,
+        _profile: Slot,
+        _keys: &mut advanced::Keys,
+    ) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 
     async fn set_advanced_keys(
         &mut self,
         _profile: Slot,
-        _keys: advanced::Keys,
+        _keys: &advanced::Keys,
     ) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 
-    async fn gamepad_mapping(&mut self, _profile: Slot) -> Result<gamepad::Mapping, Rejection> {
+    async fn gamepad_mapping(
+        &mut self,
+        _profile: Slot,
+        _mapping: &mut gamepad::Mapping,
+    ) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 
     async fn set_gamepad_mapping(
         &mut self,
         _profile: Slot,
-        _mapping: gamepad::Mapping,
+        _mapping: &gamepad::Mapping,
     ) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
@@ -163,7 +180,8 @@ pub trait Configuration {
         &mut self,
         _profile: Slot,
         _layer: Layer,
-    ) -> Result<Option<lighting::KeyColors>, Rejection> {
+        _colors: &mut Option<lighting::KeyColors>,
+    ) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 
@@ -171,28 +189,32 @@ pub trait Configuration {
         &mut self,
         _profile: Slot,
         _layer: Layer,
-        _colors: Option<lighting::KeyColors>,
+        _colors: Option<&lighting::KeyColors>,
     ) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 
-    async fn lightbar(&mut self, _profile: Slot) -> Result<lightbar::Settings, Rejection> {
+    async fn lightbar(
+        &mut self,
+        _profile: Slot,
+        _settings: &mut lightbar::Settings,
+    ) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 
     async fn set_lightbar(
         &mut self,
         _profile: Slot,
-        _settings: lightbar::Settings,
+        _settings: &lightbar::Settings,
     ) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 
-    async fn global_lightbar(&mut self) -> Result<lightbar::Entries, Rejection> {
+    async fn global_lightbar(&mut self, _entries: &mut lightbar::Entries) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 
-    async fn set_global_lightbar(&mut self, _entries: lightbar::Entries) -> Result<(), Rejection> {
+    async fn set_global_lightbar(&mut self, _entries: &lightbar::Entries) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 

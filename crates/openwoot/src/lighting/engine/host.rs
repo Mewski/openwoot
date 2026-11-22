@@ -19,6 +19,7 @@ where
             return;
         }
         self.host_control = true;
+        self.hooks.set_host_control(true);
         self.refresh_lock_indicators(now_ms);
         self.colors.hide_layers();
         self.paint_base_colors(false);
@@ -30,6 +31,7 @@ where
             return;
         }
         self.host_control = false;
+        self.hooks.set_host_control(false);
         self.paint_base_colors(true);
         self.refresh_lock_indicators(now_ms);
         self.force_render = true;

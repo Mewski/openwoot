@@ -73,10 +73,12 @@ fn open(
     format_requested: bool,
 ) -> Result<(Settings<Nor>, Opened), storage::Error> {
     let partition = Partition::new(nor, layout.settings_region());
-    block_on(Settings::open(partition, format_requested))
+    let mut settings = Settings::new();
+    let opened = block_on(settings.open(partition, format_requested))?;
+    Ok((settings, opened))
 }
 
-fn close(settings: Settings<Nor>) -> Option<Nor> {
+fn close(mut settings: Settings<Nor>) -> Option<Nor> {
     settings.release().map(Partition::release)
 }
 

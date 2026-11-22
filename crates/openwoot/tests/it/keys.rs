@@ -1,5 +1,6 @@
 mod advanced;
 mod gamepad;
+mod latency;
 mod layers;
 mod pipeline;
 mod press;

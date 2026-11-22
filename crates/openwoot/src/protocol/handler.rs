@@ -1,3 +1,8 @@
+use core::{
+    future::Future,
+    pin::{Pin, pin},
+};
+
 use openwoot_protocol::{
     ERROR_KEY, Endpoint, Key, Message, VarKey, Version, WireError,
     config::{Rejection, Validate},
@@ -13,6 +18,8 @@ use openwoot_protocol::{
         SetKeySettings, SetKeymap, SetLayout, SetLightbar, SetLighting, SetProfileInfo,
         SetSwitches,
     },
+    gamepad, lightbar,
+    profile::{LayerRef, Slot},
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -119,12 +126,21 @@ macro_rules! dispatch {
             None
         }
     };
-    (@plain $endpoint:ty, $configuration:ident, $message:ident, $response:ident, $handle:expr) => {
-        serve::<$endpoint, _>($configuration, $message, $response, $handle).await
-    };
-    (@checked $endpoint:ty, $configuration:ident, $message:ident, $response:ident, $handle:expr) => {
-        serve_checked::<$endpoint, _, _>($configuration, $message, $response, $handle).await
-    };
+    (@plain $endpoint:ty, $configuration:ident, $message:ident, $response:ident, $handle:expr) => {{
+        let served: Pin<&mut dyn Future<Output = Option<usize>>> =
+            pin!(serve::<$endpoint, _>($configuration, $message, $response, $handle));
+        served.await
+    }};
+    (@checked $endpoint:ty, $configuration:ident, $message:ident, $response:ident, $handle:expr) => {{
+        let served: Pin<&mut dyn Future<Output = Option<usize>>> =
+            pin!(serve_checked::<$endpoint, _, _>($configuration, $message, $response, $handle));
+        served.await
+    }};
+    (@filled $endpoint:ty, $configuration:ident, $message:ident, $response:ident, $handle:expr) => {{
+        let served: Pin<&mut dyn Future<Output = Option<usize>>> =
+            pin!(serve_filled::<$endpoint, _, _>($configuration, $message, $response, $handle));
+        served.await
+    }};
 }
 
 async fn keyboard_endpoints<C: Configuration>(
@@ -156,9 +172,11 @@ async fn keyboard_endpoints<C: Configuration>(
         checked ActivateProfile => async |configuration, profile| {
             configuration.activate_profile(profile).await
         },
-        plain GetGlobalLightbar => async |configuration, ()| configuration.global_lightbar().await,
+        filled GetGlobalLightbar => async |configuration, (), entries| {
+            configuration.global_lightbar(entries).await
+        },
         checked SetGlobalLightbar => async |configuration, entries| {
-            configuration.set_global_lightbar(entries).await
+            configuration.set_global_lightbar(&entries).await
         },
         plain GetHostSignals => async |configuration, ()| configuration.host_signals().await,
         checked SetHostSignals => async |configuration, signals| {
@@ -197,29 +215,33 @@ async fn profile_endpoints<C: Configuration>(
         checked SetKeySettings => async |configuration, change| {
             configuration.set_key_settings(change.profile, change.value).await
         },
-        checked GetKeymap => async |configuration, layer| {
-            configuration.keymap(layer.profile, layer.layer).await
+        filled GetKeymap => async |configuration, layer: LayerRef, keymap| {
+            check(configuration, &layer)?;
+            configuration.keymap(layer.profile, layer.layer, keymap).await
         },
         checked SetKeymap => async |configuration, change| {
-            configuration.set_keymap(change.profile, change.layer, change.value).await
+            configuration.set_keymap(change.profile, change.layer, &change.value).await
         },
-        checked GetKeyOverrides => async |configuration, profile| {
-            configuration.key_overrides(profile).await
+        filled GetKeyOverrides => async |configuration, profile: Slot, overrides| {
+            check(configuration, &profile)?;
+            configuration.key_overrides(profile, overrides).await
         },
         checked SetKeyOverrides => async |configuration, change| {
-            configuration.set_key_overrides(change.profile, change.value).await
+            configuration.set_key_overrides(change.profile, &change.value).await
         },
-        checked GetAdvancedKeys => async |configuration, profile| {
-            configuration.advanced_keys(profile).await
+        filled GetAdvancedKeys => async |configuration, profile: Slot, keys| {
+            check(configuration, &profile)?;
+            configuration.advanced_keys(profile, keys).await
         },
         checked SetAdvancedKeys => async |configuration, change| {
-            configuration.set_advanced_keys(change.profile, change.value).await
+            configuration.set_advanced_keys(change.profile, &change.value).await
         },
-        checked GetGamepadMapping => async |configuration, profile| {
-            configuration.gamepad_mapping(profile).await
+        filled GetGamepadMapping => async |configuration, profile: Slot, mapping| {
+            check(configuration, &profile)?;
+            configuration.gamepad_mapping(profile, mapping).await
         },
         checked SetGamepadMapping => async |configuration, change| {
-            configuration.set_gamepad_mapping(change.profile, change.value).await
+            configuration.set_gamepad_mapping(change.profile, &change.value).await
         },
         checked GetGamepadSettings => async |configuration, profile| {
             configuration.gamepad_settings(profile).await
@@ -233,17 +255,21 @@ async fn profile_endpoints<C: Configuration>(
         checked SetLighting => async |configuration, change| {
             configuration.set_lighting(change.profile, change.value).await
         },
-        checked GetKeyColors => async |configuration, layer| {
-            configuration.key_colors(layer.profile, layer.layer).await
+        filled GetKeyColors => async |configuration, layer: LayerRef, colors| {
+            check(configuration, &layer)?;
+            configuration.key_colors(layer.profile, layer.layer, colors).await
         },
         checked SetKeyColors => async |configuration, change| {
-            configuration.set_key_colors(change.profile, change.layer, change.value).await
+            configuration
+                .set_key_colors(change.profile, change.layer, change.value.as_ref())
+                .await
         },
-        checked GetLightbar => async |configuration, profile| {
-            configuration.lightbar(profile).await
+        filled GetLightbar => async |configuration, profile: Slot, settings| {
+            check(configuration, &profile)?;
+            configuration.lightbar(profile, settings).await
         },
         checked SetLightbar => async |configuration, change| {
-            configuration.set_lightbar(change.profile, change.value).await
+            configuration.set_lightbar(change.profile, &change.value).await
         },
     )
 }
@@ -304,6 +330,69 @@ where
         },
     )
     .await
+}
+
+async fn serve_filled<E, C, T>(
+    configuration: &mut C,
+    message: &Message<'_>,
+    response: &mut [u8],
+    handle: impl AsyncFnOnce(&mut C, E::Request, &mut T) -> Result<(), Rejection>,
+) -> Option<usize>
+where
+    E: Endpoint<Response = Result<T, Rejection>>,
+    E::Request: DeserializeOwned,
+    T: Empty + Serialize,
+{
+    let Ok(request) = postcard::from_bytes::<E::Request>(message.body) else {
+        return fail(message, &WireError::DeserFailed, response);
+    };
+    let mut value = T::empty();
+    let filled = handle(configuration, request, &mut value).await;
+    let answer = filled.map(|()| &value);
+    match encode_message(&message.reply_header(E::RESP_KEY), &answer, response) {
+        Ok(encoded) => Some(encoded.len()),
+        Err(_) => fail(message, &WireError::SerFailed, response),
+    }
+}
+
+fn check<C: Configuration>(configuration: &C, request: &impl Validate) -> Result<(), Rejection> {
+    Ok(request.validate(&configuration.capabilities()?)?)
+}
+
+trait Empty {
+    fn empty() -> Self;
+}
+
+impl<T, const N: usize> Empty for heapless::Vec<T, N> {
+    fn empty() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> Empty for Option<T> {
+    fn empty() -> Self {
+        None
+    }
+}
+
+impl Empty for gamepad::Mapping {
+    fn empty() -> Self {
+        Self {
+            bindings: heapless::Vec::new(),
+            exclusive: false,
+        }
+    }
+}
+
+impl Empty for lightbar::Settings {
+    fn empty() -> Self {
+        Self {
+            enabled: false,
+            entries: heapless::Vec::new(),
+            use_global: false,
+            brightness: None,
+        }
+    }
 }
 
 fn fail(message: &Message<'_>, error: &WireError, response: &mut [u8]) -> Option<usize> {

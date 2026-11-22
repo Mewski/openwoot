@@ -19,6 +19,9 @@ where
     H: Lightbar + Signals,
 {
     pub fn update(&mut self, now_ms: u32, input: &impl KeyTravel) {
+        if self.hooks.take_brightness_change() && self.fade_level != 0 {
+            self.dirty.push_all();
+        }
         if !self.host_control && self.layers.consumes_travel() {
             for row in 0..ROWS {
                 for column in 0..COLUMNS {

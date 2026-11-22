@@ -10,6 +10,7 @@ mod effects;
 mod engine;
 mod idle;
 mod indicators;
+mod lightbar;
 mod task;
 
 use openwoot::{
