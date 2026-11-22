@@ -7,12 +7,24 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+atomic-waker = { workspace = true }
 embassy-futures = { workspace = true }
 embassy-sync = { workspace = true }
+embassy-time = { workspace = true }
 embassy-usb = { workspace = true }
+embedded-hal = { workspace = true }
+embedded-hal-async = { workspace = true }
+embedded-storage-async = { workspace = true }
+heapless = { workspace = true }
+libm = { workspace = true }
+openwoot-drivers = { workspace = true }
 openwoot-image = { workspace = true }
 openwoot-protocol = { workspace = true }
+postcard = { workspace = true }
+sequential-storage = { workspace = true }
 serde = { workspace = true }
+spin = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 critical-section = { workspace = true, features = ["std"] }

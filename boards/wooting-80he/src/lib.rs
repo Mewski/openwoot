@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub use cortex_m_rt::entry;
+use embassy_futures::block_on;
 use hal::{
     gpio::{Level, OutputType, Port, Speed},
     pac,
@@ -15,6 +16,10 @@ use openwoot::{
 };
 pub use openwoot_gd32f4 as hal;
 use openwoot_image::{Descriptor, Region, UpdateMode, UsbIds};
+
+pub mod lighting;
+pub mod scan;
+pub mod storage;
 
 include!(concat!(env!("OUT_DIR"), "/memory_layout.rs"));
 
@@ -61,6 +66,11 @@ pub const CLOCK_TREE: rcu::Config = rcu::Config {
 
 hal::bind_interrupts!(struct Irqs {
     USBHS => usb::InterruptHandler;
+    DMA1_Channel2 => hal::spi::InterruptHandler;
+    I2C0_EV => hal::i2c::InterruptHandler;
+    I2C0_ER => hal::i2c::InterruptHandler;
+    DMA0_Channel6 => hal::i2c::InterruptHandler;
+    ADC => hal::scan::InterruptHandler<scan::ScanInterrupt>;
 });
 
 pub type UsbDriver = usb::Driver;
@@ -69,6 +79,8 @@ pub type UsbDriver = usb::Driver;
 pub struct Board {
     pub clocks: Clocks,
     pub bootloader: Bootloader,
+    pub storage: storage::Storage,
+    pub leds: Option<lighting::LedDriver>,
 }
 
 impl Board {
@@ -76,9 +88,31 @@ impl Board {
     pub fn new(peripherals: pac::Peripherals) -> (Self, UsbDriver) {
         let clocks = CLOCK_TREE.configure(peripherals.rcu, &peripherals.pmu);
         hal::time::start(peripherals.timer4, &clocks);
+        scan::install(hal::scan::Converter::new(
+            hal::scan::Peripherals {
+                adc: peripherals.adc0,
+                adc_common: peripherals.adc_common,
+                timer: peripherals.timer1,
+            },
+            &scan::WIRING,
+            &clocks,
+            Irqs,
+        ));
         let port_a = Port::<'A'>::new(peripherals.gpioa);
         let port_b = Port::<'B'>::new(peripherals.gpiob);
         let port_c = Port::<'C'>::new(peripherals.gpioc);
+        let port_d = Port::<'D'>::new(peripherals.gpiod);
+        let mut bootloader = Bootloader::new(peripherals.pmu, peripherals.rtc);
+        let nor = storage::nor(
+            peripherals.spi0,
+            port_b.pin3,
+            port_a.pin7,
+            port_b.pin4,
+            port_d.pin2,
+            Irqs,
+            &clocks,
+        );
+        let storage = block_on(storage::start(nor, bootloader.take_format_request()));
         let usb = usb::Driver::new(
             usb::Core {
                 global: peripherals.hs_global,
@@ -110,9 +144,19 @@ impl Board {
                 openwoot::usb::Speed::Full => usb::SpeedLimit::Full,
             },
         );
+        let leds = lighting::led_driver(
+            peripherals.i2c0,
+            port_b.pin6,
+            port_b.pin7,
+            port_b.pin8,
+            Irqs,
+            &clocks,
+        );
         let board = Self {
             clocks,
-            bootloader: Bootloader::new(peripherals.pmu, peripherals.rtc),
+            bootloader,
+            storage,
+            leds: Some(leds),
         };
         (board, usb)
     }
@@ -134,6 +178,8 @@ pub const fn identity(serial_number: Option<&'static str>) -> Identity<'static> 
 }
 
 impl Keyboard for Board {
+    type Sensing = scan::Sensing;
+
     const DESCRIPTOR: Descriptor = DESCRIPTOR;
     const KEY_COLUMNS: usize = KEY_COLUMNS;
     const KEY_ROWS: usize = KEY_ROWS;

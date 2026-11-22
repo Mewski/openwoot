@@ -54,6 +54,45 @@ firmware does. The firmware version answered to `GetVersion` is the board crate'
 version; the serial number string is the text of the serial page (`[length][text]`, written by
 the stock firmware), and no serial number string is offered when the page is blank.
 
+## Sensing
+
+The hall sensors sit behind analog multiplexers that share four address lines; each multiplexer
+has an enable line and its own converter input. The chip HAL's `scan::Converter` drives them the
+way the C HAL does: TIMER1 channel 1 (1 MHz, single pulse) triggers ADC0, a DMA channel moves the
+result words into a buffer, and the end-of-conversion interrupt runs at priority 0, never masked
+by critical sections. On the Wooting 60HE+ ADC1 converts the zero-field reference at the same
+instant (regular parallel mode) and both converters average 8 conversions.
+
+`openwoot::scan::Scanner` is the C scan state machine: the start-up sweep (rest level and noise
+band of both scan modes per sensor), single-input and parallel scanning, the mode switch with its
+settling cycles, magnitude, dead band and hysteresis, and the per-key work of the interrupt
+(idle noise recalibration, bottom-out learning, release-rebound filter, travel). Features and
+strategies are types the board binds through `scan::Sensing` (`Keyboard::Sensing`):
+
+| Slot | Wooting 80HE | Wooting 60HE+ |
+| --- | --- | --- |
+| `Noise` (idle recalibration) | `analog::MinMax` | `analog::StdDev` |
+| `Recheck` (second conversion of changed readings) | `scan::RecheckFrom<3>` | `()` |
+| `Reference` (zero-field level) | `scan::ZeroLevel<2048>` | `scan::MeasuredReference<2482>` |
+
+`scan::Shared` hands the scanner between the key executor and the interrupt: between cycles the
+task owns it (`Shared::with`: events, settings, switch profiles, scan mode, layout map), and
+`Shared::start` lends it to the interrupt for one cycle (or the sweep) and pends the interrupt,
+which arms the first conversion. The interrupt takes the scanner with a non-blocking try-lock,
+signals the end of the cycle through a lock-free waker and never waits. Key travel of every
+position is published in `scan::Travel` (one atomic per position), readable from any context.
+The board's `scanning` task runs `Shared::run` on the key executor; the key task replaces its
+empty closure.
+
+Differences from the C firmware: scan modes 2 to 7 (unreachable in C, the profile clamps the mode
+to 0 or 1) do not exist; the end of a cycle is signalled instead of reserving a ring slot, and the
+events of a cycle are a list sized for every key, so none is dropped; a rest level above the
+nominal bottom-out level gives a bottom level of rest + 50 instead of wrapping; the single-input
+scan skips a multiplexer without keys instead of spinning; the parallel scan maps each converter
+rank through the board's multiplexer order (both boards use the identity); the noise statistics
+and the plateau mean use a separate multiply and add where GCC fused them (no difference in the
+reference vectors).
+
 ## Image descriptor
 
 Every image carries a 60-byte descriptor on the first 64-byte boundary behind the vector table:

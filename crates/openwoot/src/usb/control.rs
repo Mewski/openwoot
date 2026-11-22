@@ -37,6 +37,8 @@ pub struct HostState {
     keyboard_leds: AtomicU8,
     keyboard_boot_protocol: AtomicBool,
     feature_requests: FeatureRequests,
+    configured: AtomicBool,
+    suspended: AtomicBool,
 }
 
 #[derive(Debug)]
@@ -60,6 +62,8 @@ impl HostState {
             keyboard_leds: AtomicU8::new(0),
             keyboard_boot_protocol: AtomicBool::new(false),
             feature_requests: FeatureRequests::new(),
+            configured: AtomicBool::new(false),
+            suspended: AtomicBool::new(false),
         }
     }
 
@@ -77,6 +81,10 @@ impl HostState {
 
     pub const fn feature_requests(&self) -> &FeatureRequests {
         &self.feature_requests
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.configured.load(Ordering::Relaxed) && !self.suspended.load(Ordering::Relaxed)
     }
 
     fn set_keyboard_protocol(&self, protocol: Protocol) {
@@ -147,6 +155,21 @@ impl Handler for Control<'_> {
             interface.protocol = Protocol::Report;
         }
         self.host.set_keyboard_protocol(Protocol::Report);
+        self.host.configured.store(false, Ordering::Relaxed);
+    }
+
+    fn enabled(&mut self, enabled: bool) {
+        if !enabled {
+            self.host.configured.store(false, Ordering::Relaxed);
+        }
+    }
+
+    fn configured(&mut self, configured: bool) {
+        self.host.configured.store(configured, Ordering::Relaxed);
+    }
+
+    fn suspended(&mut self, suspended: bool) {
+        self.host.suspended.store(suspended, Ordering::Relaxed);
     }
 
     fn control_out(&mut self, req: Request, data: &[u8]) -> Option<OutResponse> {

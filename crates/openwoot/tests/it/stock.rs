@@ -181,6 +181,28 @@ fn device_settings_answer_the_face_unprotected_flash_and_the_first_layout() {
 }
 
 #[test]
+fn the_layout_and_the_hardware_ids_come_from_the_identity() {
+    let identity = StockIdentity {
+        layout: 2,
+        mcu_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+        flash_ids: [0xEF, 0x16, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28],
+        ..stock_identity(None)
+    };
+    assert_eq!(
+        answer(identity, 19, 0),
+        input_report(&[
+            0xD1, 0xDA, 0x13, 0x88, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x02, 0x0C
+        ])
+    );
+    let mut mcu_id = vec![0xD1, 0xDA, 0x03, 0x88, 0x0C, 0x00];
+    mcu_id.extend(identity.mcu_id);
+    assert_eq!(answer(identity, 3, 1), input_report(&mcu_id));
+    let mut flash_ids = vec![0xD1, 0xDA, 0x03, 0x88, 0x0A, 0x00];
+    flash_ids.extend(identity.flash_ids);
+    assert_eq!(answer(identity, 3, 3), input_report(&flash_ids));
+}
+
+#[test]
 fn other_commands_get_the_stock_unknown_or_unsupported_status() {
     for (command, status) in [
         (4, 0x66),

@@ -1,4 +1,5 @@
 mod configuration;
+mod lighting;
 mod package;
 mod reports;
 
@@ -7,6 +8,7 @@ use embassy_usb::{
     UsbDevice,
     driver::{self, Driver},
 };
+pub use lighting::{LIGHTING_POLL_MS, LightingTask};
 pub use package::version;
 pub use reports::Reports;
 

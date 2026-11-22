@@ -1,6 +1,8 @@
 use openwoot::{Keyboard, protocol::StockIdentity, usb::Face};
 use openwoot_image::{Descriptor, Region, UpdateMode, UsbIds};
 
+use super::Bench;
+
 pub(crate) const EXAMPLE_SERIAL: &str = "A01B2401W01T00100S01H00300";
 
 #[derive(Debug, Default)]
@@ -9,6 +11,8 @@ pub(crate) struct Recorder {
 }
 
 impl Keyboard for Recorder {
+    type Sensing = Bench;
+
     const DESCRIPTOR: Descriptor = Descriptor::new(
         "Test keyboard",
         UsbIds {
@@ -37,5 +41,8 @@ pub(crate) fn stock_identity(serial: Option<&'static str>) -> StockIdentity {
     StockIdentity {
         serial,
         face: Face::default(),
+        layout: 0,
+        mcu_id: [0; 12],
+        flash_ids: [0; 10],
     }
 }

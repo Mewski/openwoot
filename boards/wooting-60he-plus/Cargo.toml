@@ -14,7 +14,10 @@ bench = false
 
 [dependencies]
 cortex-m-rt = { workspace = true }
+embassy-futures = { workspace = true }
+embassy-sync = { workspace = true }
 openwoot = { workspace = true }
+openwoot-drivers = { workspace = true }
 openwoot-gd32f3 = { workspace = true }
 openwoot-image = { workspace = true }
 

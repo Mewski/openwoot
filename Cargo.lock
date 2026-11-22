@@ -666,6 +666,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-storage"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c815b3ed4213d85d6cfd274b871f430c0681084e28dfd4a537877f47f844ec83"
+
+[[package]]
+name = "embedded-storage-async"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69aa7787b8ba0cf4e626c95839f811d853b75e24a0f7312a1eef324fedc13b21"
+dependencies = [
+ "embedded-storage",
+]
+
+[[package]]
 name = "encode_unicode"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -813,7 +828,7 @@ dependencies = [
  "hash32 0.2.1",
  "rustc_version 0.4.1",
  "serde",
- "spin",
+ "spin 0.9.9",
  "stable_deref_trait",
 ]
 
@@ -824,6 +839,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "411fdef4df93751117bd9ef8caa0e7f99c65dafec5bd84313eb8e2fdd75e32f2"
 dependencies = [
  "hash32 0.3.1",
+ "serde_core",
  "stable_deref_trait",
 ]
 
@@ -896,6 +912,12 @@ name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
+
+[[package]]
+name = "libm"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "linux-raw-sys"
@@ -1080,14 +1102,26 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 name = "openwoot"
 version = "0.0.0"
 dependencies = [
+ "atomic-waker",
  "critical-section",
  "embassy-futures",
  "embassy-sync",
+ "embassy-time",
  "embassy-usb",
  "embassy-usb-driver",
+ "embedded-hal 1.0.0",
+ "embedded-hal-async",
+ "embedded-storage-async",
+ "heapless 0.9.4",
+ "libm",
+ "openwoot-drivers",
  "openwoot-image",
  "openwoot-protocol",
+ "postcard",
+ "sequential-storage",
  "serde",
+ "spin 0.12.3",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1113,7 +1147,11 @@ dependencies = [
 name = "openwoot-drivers"
 version = "0.0.0"
 dependencies = [
+ "embassy-futures",
+ "embedded-hal 1.0.0",
  "embedded-hal-async",
+ "embedded-storage-async",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1124,14 +1162,18 @@ dependencies = [
  "cortex-m-rt",
  "critical-section",
  "embassy-executor",
+ "embassy-futures",
  "embassy-sync",
  "embassy-time",
  "embassy-time-driver",
  "embassy-time-queue-utils",
  "embassy-usb-driver",
  "embedded-hal 1.0.0",
+ "embedded-hal-async",
  "gd32f303-pac",
+ "openwoot",
  "openwoot-image",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1142,13 +1184,19 @@ dependencies = [
  "cortex-m-rt",
  "critical-section",
  "embassy-executor",
+ "embassy-futures",
+ "embassy-sync",
+ "embassy-time",
  "embassy-time-driver",
  "embassy-time-queue-utils",
  "embassy-usb-driver",
  "embassy-usb-synopsys-otg",
  "embedded-hal 1.0.0",
+ "embedded-hal-async",
  "gd32f425-pac",
+ "openwoot",
  "openwoot-image",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1162,6 +1210,7 @@ dependencies = [
 name = "openwoot-protocol"
 version = "0.0.0"
 dependencies = [
+ "heapless 0.9.4",
  "postcard",
  "postcard-rpc",
  "postcard-schema",
@@ -1243,6 +1292,7 @@ version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2408087cb64d6c79af5674063d6ab4308cf11ca26d5c151ea3602cb36beec5a2"
 dependencies = [
+ "heapless 0.9.4",
  "postcard-derive",
  "serde",
 ]
@@ -1405,6 +1455,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
 
 [[package]]
+name = "sequential-storage"
+version = "8.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1550e4d0c7a6a54e2d7884309dc6bfe206d2d8884cb5498177fd936cb233616d"
+dependencies = [
+ "embedded-storage-async",
+]
+
+[[package]]
 name = "serde"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1482,6 +1541,12 @@ checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 dependencies = [
  "lock_api",
 ]
+
+[[package]]
+name = "spin"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0134f9043ed38b087ac4f7d4af44c79e2c9e5094421fe3164f435ce585953b10"
 
 [[package]]
 name = "stable_deref_trait"
@@ -1941,8 +2006,11 @@ version = "0.0.0"
 dependencies = [
  "cortex-m-rt",
  "embassy-executor",
+ "embassy-futures",
+ "embassy-sync",
  "embassy-usb",
  "openwoot",
+ "openwoot-drivers",
  "openwoot-gd32f3",
  "openwoot-image",
  "static_cell",
@@ -1954,8 +2022,11 @@ version = "0.0.0"
 dependencies = [
  "cortex-m-rt",
  "embassy-executor",
+ "embassy-futures",
+ "embassy-sync",
  "embassy-usb",
  "openwoot",
+ "openwoot-drivers",
  "openwoot-gd32f4",
  "openwoot-image",
  "static_cell",

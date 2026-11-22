@@ -2,7 +2,7 @@ use embassy_usb::driver::Driver;
 
 use crate::{
     Keyboard,
-    protocol::{Channel, Handler},
+    protocol::{self, Channel, Handler},
     usb::{ChannelEndpoints, HostState},
 };
 
@@ -12,7 +12,11 @@ pub struct Configuration<'d, D: Driver<'d>> {
 }
 
 impl<'d, D: Driver<'d>> Configuration<'d, D> {
-    pub async fn run<Board: Keyboard>(self, mut handler: Handler, keyboard: &mut Board) -> ! {
+    pub async fn run<Board: Keyboard, C: protocol::Configuration>(
+        self,
+        mut handler: Handler<C>,
+        keyboard: &mut Board,
+    ) -> ! {
         let mut channel = Channel::new(self.endpoints.output, self.endpoints.input);
         channel
             .run(&mut handler, self.host.feature_requests(), keyboard)
