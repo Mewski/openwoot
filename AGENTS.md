@@ -2,7 +2,7 @@
 
 Keyboard firmware for Wooting hall-effect keyboards, written in Rust, with its own configuration protocol shared with a Rust host application. This branch (`rust`) is a new firmware; the branch `main` holds the earlier C firmware, which is the reference for features and hardware behaviour. Read code there; never copy it.
 
-**State: toward milestone M1** (the 80HE boots, enumerates and answers `openwoot version`). Done: generated PACs, image descriptor, chip bring-up on both families (clocks, GPIO, time, interrupts, executors, update-mode hand-over), the USB face and the configuration channel with `GetVersion` (host-tested), the CLI (`version`, `flash`). In progress: USB device-controller drivers. Not yet: scanning, keys, storage, lighting, profiles. Nothing has run on hardware. Update this file whenever the layout, commands or rules change.
+**State: toward milestone M1** (the 80HE boots, enumerates and answers `openwoot version`). Done: generated PACs, image descriptor, chip bring-up on both families (clocks, GPIO, time, interrupts, executors, update-mode hand-over), USB device-controller drivers on both families, the USB face and the configuration channel with `GetVersion` (host-tested), the CLI (`version`, `flash`). In progress: the runtime that joins them (M1) and the stock identification responder. Not yet: scanning, keys, storage, lighting, profiles. Nothing has run on hardware. Update this file whenever the layout, commands or rules change.
 
 ## Layout
 
@@ -13,7 +13,7 @@ Keyboard firmware for Wooting hall-effect keyboards, written in Rust, with its o
 | `crates/openwoot-image/` | the firmware image format: the image descriptor, its location, the image checks, the `memory.x` reader; `no_std`; used by boards, the CLI and `xtask` | ecosystem crates only |
 | `crates/openwoot-drivers/` | chip drivers (`is31fl3741` LED matrix, `spi_nor` flash), generic over `embedded-hal-async` traits | `embedded-hal-async` |
 | `crates/gd32f425-pac/`, `crates/gd32f303-pac/` | generated register access (`cargo xtask pac`); exempt from the comment and `unsafe` rules | `cortex-m`, `cortex-m-rt`, `vcell` |
-| `crates/openwoot-gd32f4/`, `crates/openwoot-gd32f3/` | one HAL per microcontroller family on its PAC (`rt` only for `target_os = "none"`): `rcu`, `gpio`, `time` (embassy-time driver), `interrupt` (`bind_interrupts!`), `executor`, `system` (reset, update-mode hand-over), `usb`; private `basepri` (critical section) and `register`; `app_descriptor!`; the only hand-written crates with `unsafe` (`#![allow(unsafe_code, reason = ...)]`) | their PAC, `openwoot`, `openwoot-image`, `cortex-m`, `embedded-hal` |
+| `crates/openwoot-gd32f4/`, `crates/openwoot-gd32f3/` | one HAL per microcontroller family on its PAC (`rt` only for `target_os = "none"`): `rcu`, `gpio`, `time` (embassy-time driver), `interrupt` (`bind_interrupts!`), `executor`, `system` (reset, update-mode hand-over), `usb` (`usb::Driver`, `usb::negotiated_speed()`; the GD32F425 wraps `embassy-usb-synopsys-otg` with the ULPI PHY, the GD32F303 has a port of embassy-stm32's fsdev driver under `src/usb/`); private `basepri` (critical section) and `register`; `app_descriptor!`; the only hand-written crates with `unsafe` (`#![allow(unsafe_code, reason = ...)]`) | their PAC, `openwoot`, `openwoot-image`, `cortex-m`, `embedded-hal`, `embassy-usb-driver`, `embassy-sync`, `embassy-time`, `embassy-usb-synopsys-otg` |
 | `crates/openwoot-cli/` | host tool `openwoot` (`version`, `flash [--dry-run]`): image checks, stock enter-update-mode command, factory bootloader session with CRC-24 verification, configuration channel; `async-hid` with `async-io`, `indicatif` | `openwoot-protocol`, `openwoot-image` |
 | `boards/<board>/` | one board support crate per keyboard (see Boards) | everything above except the CLI |
 | `xtask/` | build helper: list boards, build images, checks, flashing via the CLI, PAC generation | `openwoot-image` |
@@ -40,7 +40,7 @@ Optional features (light bar, host signals, editions, ...) and alternative behav
 | `cargo xtask boards [--json]` | lists the boards |
 | `cargo xtask build <board>` / `--all` | `build/<board>/openwoot-<board>.{elf,hex,bin}` |
 | `cargo xtask flash <board> --dry-run` | builds and checks the image with `openwoot flash --dry-run`; without `--dry-run` it would flash, which needs the owner's go-ahead |
-| `cargo xtask check` | file types, dependency direction, file-set symmetry, names in shared code, comment, `unsafe` and module-name rules, formatting, clippy (host and every board target), every board image |
+| `cargo xtask check` | file types, dependency direction, file-set symmetry (boards: every file; chip HALs: top-level `src/*.rs`, since a peripheral module's children are chip-specific), names in shared code, comment, `unsafe` and module-name rules, formatting, clippy (host and every board target), every board image |
 | `cargo xtask pac` | regenerates the PAC crates |
 | `openwoot version` | firmware and protocol version over the configuration channel |
 | `openwoot flash <image> [--dry-run]` | checks the image; enters update mode (stock firmware), writes through the factory bootloader with CRC-24 verification; `--dry-run` only checks |
