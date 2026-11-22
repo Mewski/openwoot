@@ -11,6 +11,7 @@ const GET_PROTOCOL: u8 = 0x03;
 const SET_REPORT: u8 = 0x09;
 const SET_IDLE: u8 = 0x0A;
 const SET_PROTOCOL: u8 = 0x0B;
+const SET_CONFIGURATION: u8 = 0x09;
 
 #[test]
 fn hid_class_requests_reach_the_host_state() {
@@ -87,4 +88,25 @@ fn hid_class_requests_reach_the_host_state() {
         host.control_in(run.as_mut(), setup(0x81, 0x06, 0x2100, 4, 9)),
         Ok(vec![9, 0x21, 0x11, 0x01, 0x00, 0x01, 0x22, 21, 0])
     );
+}
+
+#[test]
+fn a_bus_reset_after_an_early_suspend_leaves_the_host_active_once_configured() {
+    let host = Host::default();
+    let state = HostState::new();
+    let mut resources = Resources::new();
+    let mut device = build(
+        host.driver(),
+        Face::default(),
+        IDENTITY,
+        &mut resources,
+        &state,
+    );
+    let mut run = pin!(device.usb.run());
+    host.attach_after_idle_bus(run.as_mut());
+    assert_eq!(
+        host.control_out(run.as_mut(), setup(0, SET_CONFIGURATION, 1, 0, 0), &[]),
+        Some(Outcome::Accepted)
+    );
+    assert!(state.is_active());
 }

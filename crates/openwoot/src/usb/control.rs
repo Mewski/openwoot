@@ -94,6 +94,7 @@ impl Handler for Control<'_> {
             interface.protocol = HidProtocol::Report;
         }
         self.host.set_keyboard_protocol(HidProtocol::Report);
+        self.host.set_suspended(false);
         self.host.set_configured(false);
     }
 
