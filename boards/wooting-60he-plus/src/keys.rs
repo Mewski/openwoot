@@ -1,5 +1,5 @@
 use openwoot::{
-    analog::SwitchType,
+    analog::SwitchModel,
     layout::{DefaultKeymap, Patch},
     scan::Map,
 };
@@ -331,7 +331,7 @@ pub fn capabilities() -> Capabilities {
         layouts: Vec::from_iter([Layout::Ansi, Layout::Iso]),
         lightbar_leds: 0,
         host_signals: false,
-        switch_models: SwitchType::COUNT,
+        switch_models: SwitchModel::COUNT,
         edition: None,
     }
 }

@@ -327,7 +327,10 @@ fn profiles_are_created_up_to_the_capacity_and_only_the_last_one_is_deleted() {
     let mut model = open(&keys, &shared, Some(&mut settings));
     assert_eq!(block_on(model.create()), Ok(Slot::new(2)));
     assert_eq!(block_on(model.create()), Ok(Slot::new(3)));
-    assert_eq!(block_on(model.create()), Err(Rejection::ProfileLimit));
+    assert_eq!(
+        block_on(model.create()),
+        Err(Rejection::ProfileLimitReached)
+    );
     assert_eq!(keys.profiles(), (4, 0));
     assert_eq!(
         block_on(model.delete(Slot::new(0))),

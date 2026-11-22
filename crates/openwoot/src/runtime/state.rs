@@ -6,8 +6,9 @@ use super::{KeyNotices, KeyReports};
 use crate::{
     diagnostics::{Diagnostics, Hardware, Readout},
     keys,
-    lighting::{self, KeyEvents},
+    lighting::{self, HostControl, KeyEvents},
     profile,
+    scan::SensorReadout,
     usb::{HostState, Resources},
 };
 
@@ -22,6 +23,8 @@ pub struct State<
     pub(super) resources: ConstStaticCell<Resources<'static>>,
     pub(super) diagnostics: Diagnostics,
     pub(super) host: HostState,
+    pub(super) host_control: HostControl,
+    pub(super) sensors: SensorReadout,
     pub(super) key_events: KeyEvents,
     pub(super) key_notices: KeyNotices,
     pub(super) key_reports: KeyReports<M>,
@@ -45,6 +48,8 @@ impl<
             resources: ConstStaticCell::new(Resources::new()),
             diagnostics: Diagnostics::new(),
             host: HostState::new(),
+            host_control: HostControl::new(),
+            sensors: SensorReadout::new(),
             key_events: KeyEvents::new(),
             key_notices: KeyNotices::new(),
             key_reports: KeyReports::new(),
@@ -77,6 +82,16 @@ impl<
     #[must_use]
     pub const fn host(&self) -> &HostState {
         &self.host
+    }
+
+    #[must_use]
+    pub const fn host_control(&self) -> &HostControl {
+        &self.host_control
+    }
+
+    #[must_use]
+    pub const fn sensors(&self) -> &SensorReadout {
+        &self.sensors
     }
 
     #[must_use]

@@ -5,7 +5,7 @@ use openwoot_protocol::{
     advanced,
     configuration::{Capabilities, Rejection},
     device, gamepad, global,
-    keys::{self as config, Keymap, Layer, Overrides},
+    keys::{self, Keymap, Layer, Overrides},
     lightbar,
     lighting::{self, KeyColors},
     profile::{Info, Slot, Summary},
@@ -129,14 +129,14 @@ where
         self.model.lock().await.revision(profile).await
     }
 
-    async fn key_settings(&mut self, profile: Slot) -> Result<config::Settings, Rejection> {
+    async fn key_settings(&mut self, profile: Slot) -> Result<keys::Settings, Rejection> {
         self.model.lock().await.settings(profile).await
     }
 
     async fn set_key_settings(
         &mut self,
         profile: Slot,
-        settings: config::Settings,
+        settings: keys::Settings,
     ) -> Result<(), Rejection> {
         self.model
             .lock()

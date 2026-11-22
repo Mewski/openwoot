@@ -10,7 +10,7 @@ use heapless::Vec;
 pub(crate) use mod_tap::SlotChange;
 pub use mod_tap::{Decision, ModTap, ModTapState};
 use openwoot_protocol::{
-    advanced::{self as config, MAX_ENTRIES, STROKES, Stroke},
+    advanced::{self, MAX_ENTRIES, STROKES, Stroke},
     keys::Action,
 };
 pub use pair::{Last, PairState, Side};
@@ -37,11 +37,11 @@ pub enum Behaviour {
     Toggle(Action),
     DepthPriority {
         other: Key,
-        both_bottomed_out: config::Resolution,
+        both_bottomed_out: advanced::Resolution,
     },
     Socd {
         other: Key,
-        resolution: config::Resolution,
+        resolution: advanced::Resolution,
         both_when_bottomed_out: bool,
     },
 }
@@ -120,32 +120,32 @@ impl Behaviour {
 
 impl Entry {
     #[must_use]
-    pub fn from_config(
-        entry: &config::Key,
+    pub fn from_settings(
+        entry: &advanced::Key,
         columns: usize,
         minimum: impl Fn(Key) -> u16,
     ) -> Option<Self> {
         let key = Key::from_index(entry.key.get(), columns)?;
         let behaviour = match entry.behaviour {
-            config::Behaviour::DynamicKeystroke(keystroke) => Behaviour::DynamicKeystroke {
+            advanced::Behaviour::DynamicKeystroke(keystroke) => Behaviour::DynamicKeystroke {
                 strokes: keystroke.strokes,
                 bottom_out: keystroke
                     .bottom_out
                     .map(travel_of)
                     .filter(|&bottom_out| bottom_out >= minimum(key)),
             },
-            config::Behaviour::ModTap(mod_tap) => Behaviour::ModTap(ModTap {
+            advanced::Behaviour::ModTap(mod_tap) => Behaviour::ModTap(ModTap {
                 tap: mod_tap.tap,
                 hold: mod_tap.hold,
                 hold_ms: mod_tap.hold_time_ms,
                 interrupt: mod_tap.interrupt,
             }),
-            config::Behaviour::Toggle(action) => Behaviour::Toggle(action),
-            config::Behaviour::DepthPriority(pair) => Behaviour::DepthPriority {
+            advanced::Behaviour::Toggle(action) => Behaviour::Toggle(action),
+            advanced::Behaviour::DepthPriority(pair) => Behaviour::DepthPriority {
                 other: Key::from_index(pair.other.get(), columns)?,
                 both_bottomed_out: pair.both_bottomed_out,
             },
-            config::Behaviour::Socd(socd) => Behaviour::Socd {
+            advanced::Behaviour::Socd(socd) => Behaviour::Socd {
                 other: Key::from_index(socd.other.get(), columns)?,
                 resolution: socd.resolution,
                 both_when_bottomed_out: socd.both_when_bottomed_out,

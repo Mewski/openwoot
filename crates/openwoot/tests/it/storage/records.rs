@@ -1,7 +1,7 @@
 use embassy_futures::block_on;
 use openwoot::{
     diagnostics::{Diagnostics, Hardware},
-    storage::{Key, Record, Scope},
+    storage::{Record, RecordKey, Scope},
 };
 use openwoot_protocol::diagnostics::{Storage, Usb};
 use serde::{Deserialize, Serialize};
@@ -47,7 +47,7 @@ impl Record for FutureLighting {
 fn visiting_reports_every_key_and_the_last_value_wins() {
     let (nor, layout, expected) = filled(20).unwrap();
     let (mut settings, _) = open(nor, layout, false).unwrap();
-    block_on(settings.remove(Key::of::<Blob>(Scope::Profile(5)))).unwrap();
+    block_on(settings.remove(RecordKey::of::<Blob>(Scope::Profile(5)))).unwrap();
     let mut seen = vec![None; usize::from(PROFILES)];
     block_on(settings.visit(|key, stored| {
         if let (Scope::Profile(profile), Blob::ITEM) = (key.scope(), key.item()) {
@@ -99,7 +99,7 @@ fn settings_count_their_loads_and_stores_into_the_diagnostics() {
     let settings = opened.with_diagnostics(&DIAGNOSTICS);
     block_on(settings.store(Scope::Global, &Brightness(40))).unwrap();
     block_on(settings.load::<Brightness>(Scope::Global)).unwrap();
-    block_on(settings.remove(Key::of::<Brightness>(Scope::Global))).unwrap();
+    block_on(settings.remove(RecordKey::of::<Brightness>(Scope::Global))).unwrap();
     assert_eq!(
         DIAGNOSTICS
             .report(Usb::default(), Hardware::default())
@@ -116,7 +116,7 @@ fn settings_count_their_loads_and_stores_into_the_diagnostics() {
 fn records_encoded_and_decoded_in_place_are_ordinary_records() {
     let (nor, layout) = chip(SETTINGS_SECTORS);
     let (mut settings, _) = open(nor, layout, false).unwrap();
-    let key = Key::of::<Lighting>(Scope::Profile(1));
+    let key = RecordKey::of::<Lighting>(Scope::Profile(1));
     let lighting = Lighting {
         brightness: 7,
         effect: 3,
@@ -137,7 +137,7 @@ fn records_encoded_and_decoded_in_place_are_ordinary_records() {
     );
     assert_eq!(
         block_on(
-            settings.load_with(Key::of::<Lighting>(Scope::Global), |stored| {
+            settings.load_with(RecordKey::of::<Lighting>(Scope::Global), |stored| {
                 stored.version
             })
         )
@@ -155,7 +155,7 @@ fn an_encoding_that_fails_or_overflows_keeps_the_stored_record() {
         effect: 1,
     };
     block_on(settings.store(Scope::Global, &kept)).unwrap();
-    let key = Key::of::<Lighting>(Scope::Global);
+    let key = RecordKey::of::<Lighting>(Scope::Global);
     assert_eq!(
         block_on(settings.store_with(key, Lighting::VERSION, |_| None)),
         Err(openwoot::storage::Error::Unencodable)

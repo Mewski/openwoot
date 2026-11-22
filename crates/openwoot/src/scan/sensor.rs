@@ -1,6 +1,6 @@
 use super::{Converter, Mode};
 use crate::analog::{
-    BottomOut, Calibration, NoiseState, NoiseStatistics, Rebound, ReboundState, Switch, SwitchType,
+    BottomOut, Calibration, NoiseState, NoiseStatistics, Rebound, ReboundState, Switch, SwitchModel,
 };
 
 const NOISE_BAND_UNMEASURED: u16 = 0xFFFF;
@@ -66,7 +66,7 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
             rebound: Rebound::new(),
             noise: Noise::default(),
             recalibrating: false,
-            switch: Switch::new(SwitchType::DEFAULT, None),
+            switch: Switch::new(SwitchModel::DEFAULT, None),
             holds_events: false,
         }
     }

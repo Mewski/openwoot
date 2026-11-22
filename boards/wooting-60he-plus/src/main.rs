@@ -56,7 +56,9 @@ fn start(spawner: Spawner, key_executor: SendSpawner) {
         Configurator::new(model, keys::capabilities()),
     )
     .with_diagnostics(STATE.readout(hal::usb::negotiated_speed, hal::diagnostics::hardware))
-    .with_host(STATE.host());
+    .with_host(STATE.host())
+    .with_host_control(STATE.host_control())
+    .with_sensors(STATE.sensors());
     let profile_keys = Configurator::new(model, keys::capabilities());
     let face = board.face;
     let firmware = Firmware::new(

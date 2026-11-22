@@ -36,7 +36,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
     fn configure_settings(&mut self, profile: &impl ProfileSource) {
         if let Some(settings) = profile.read(|profile| profile.settings) {
             let minimum = self.largest_minimum();
-            self.set_tuning(Tuning::from_config(&settings, minimum));
+            self.set_tuning(Tuning::from_settings(&settings, minimum));
         }
     }
 
@@ -69,7 +69,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
             self.set_override(
                 key,
                 entry.actuation.map(travel_of),
-                RapidTriggerOverride::from_config(&entry.rapid_trigger, minimum),
+                RapidTriggerOverride::from_settings(&entry.rapid_trigger, minimum),
             );
         }
     }
@@ -85,7 +85,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
                 break;
             };
             if let Some(entry) =
-                Entry::from_config(&entry, COLUMNS, |key| self.minimum_or_default(key))
+                Entry::from_settings(&entry, COLUMNS, |key| self.minimum_or_default(key))
                 && converted.push(entry).is_err()
             {
                 break;

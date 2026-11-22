@@ -1,16 +1,16 @@
-use openwoot::analog::{Switch, SwitchType};
+use openwoot::analog::{Switch, SwitchModel};
 
-const fn kind(id: u8) -> SwitchType {
-    match SwitchType::new(id) {
+const fn kind(id: u8) -> SwitchModel {
+    match SwitchModel::new(id) {
         Some(kind) => kind,
-        None => SwitchType::DEFAULT,
+        None => SwitchModel::DEFAULT,
     }
 }
 
 #[test]
-fn switch_types_exist_for_the_49_ids_of_the_c_table() {
-    assert!(SwitchType::new(48).is_some());
-    assert!(SwitchType::new(49).is_none());
+fn switch_models_exist_for_the_49_ids_of_the_c_table() {
+    assert!(SwitchModel::new(48).is_some());
+    assert!(SwitchModel::new(49).is_none());
     assert_eq!(kind(34).travel(), 80);
     assert_eq!(kind(24).nominal_bottom(), 1450);
     assert_eq!(kind(14).learn_strength(), 114);
@@ -19,7 +19,7 @@ fn switch_types_exist_for_the_49_ids_of_the_c_table() {
 
 #[test]
 fn a_switch_without_travel_offset_uses_the_whole_curve() {
-    let switch = Switch::new(SwitchType::DEFAULT, None);
+    let switch = Switch::new(SwitchModel::DEFAULT, None);
     assert_eq!(switch.curve_end(), 0xF_FF00);
     assert_eq!(switch.learn_strength(), 255);
     assert_eq!(switch.nominal_bottom(), 1200);
@@ -44,21 +44,21 @@ fn a_travel_offset_shortens_the_curve_and_weakens_the_learning() {
 
 #[test]
 fn the_bottom_level_keeps_fifty_counts_above_the_rest_level() {
-    let switch = Switch::new(SwitchType::DEFAULT, None);
+    let switch = Switch::new(SwitchModel::DEFAULT, None);
     assert_eq!(switch.bottom_level(1180), 1230);
     assert_eq!(switch.bottom_level(1300), 1350);
 }
 
 #[test]
 fn a_zero_range_between_rest_and_bottom_reads_the_start_of_the_curve() {
-    let switch = Switch::new(SwitchType::DEFAULT, None);
+    let switch = Switch::new(SwitchModel::DEFAULT, None);
     assert_eq!(switch.travel(900, 300, 300), 0);
 }
 
 #[test]
 fn travel_per_tenth_millimetre_follows_the_remaining_travel() {
     assert_eq!(
-        Switch::new(SwitchType::DEFAULT, None).travel_per_tenth_millimetre(),
+        Switch::new(SwitchModel::DEFAULT, None).travel_per_tenth_millimetre(),
         102
     );
     assert_eq!(

@@ -11,7 +11,7 @@ use crate::{
     diagnostics::Diagnostics,
     keys::{Functions, Keys, Notice, Parts, ProfileSource, Shared, Switch},
     lighting::{KeyActivity, KeyEvents, LockState},
-    scan::{self, Sensing},
+    scan::{self, Sensing, SensorReadout},
     usb::{Face, HidProtocol, HostState, KeyboardFormat},
 };
 
@@ -24,6 +24,7 @@ pub struct KeyTask<'d, M: RawMutex> {
     pub events: &'d KeyEvents,
     pub notices: &'d KeyNotices,
     pub host: &'d HostState,
+    pub sensors: &'d SensorReadout,
     pub face: Face,
     pub diagnostics: &'d Diagnostics,
 }
@@ -57,10 +58,7 @@ impl<M: RawMutex> KeyTask<'_, M> {
             match select(scan.calibrate(), Timer::after(CALIBRATION_TIMEOUT)).await {
                 Either::First(true) => break,
                 Either::First(false) => yield_now().await,
-                Either::Second(()) => {
-                    scan.recover();
-                    self.diagnostics.scan_recovered();
-                }
+                Either::Second(()) => self.recover::<S, INPUTS, ADDRESSES, ROWS, COLUMNS>(scan),
             }
         }
         let mut progress = Progress::default();
@@ -72,10 +70,7 @@ impl<M: RawMutex> KeyTask<'_, M> {
                     self.step(scan, keys, &mut progress, now_ms);
                 }
                 Either::First(false) => yield_now().await,
-                Either::Second(()) => {
-                    scan.recover();
-                    self.diagnostics.scan_recovered();
-                }
+                Either::Second(()) => self.recover::<S, INPUTS, ADDRESSES, ROWS, COLUMNS>(scan),
             }
         }
     }
@@ -146,6 +141,7 @@ impl<M: RawMutex> KeyTask<'_, M> {
                 scanner.set_rebound_filter(rebound_filter);
                 progress.rebound_filter = Some(rebound_filter);
             }
+            self.sensors.serve::<ROWS, COLUMNS, _, _>(scanner, travel);
             keys.pass(
                 scanner
                     .events()
@@ -196,6 +192,24 @@ impl<M: RawMutex> KeyTask<'_, M> {
             self.diagnostics.profile_requested();
             self.shared.request_profile(profile);
         }
+    }
+
+    fn recover<
+        S: Sensing,
+        const INPUTS: usize,
+        const ADDRESSES: usize,
+        const ROWS: usize,
+        const COLUMNS: usize,
+    >(
+        &self,
+        scan: &scan::Shared<S, INPUTS, ADDRESSES>,
+    ) {
+        scan.recover();
+        self.diagnostics.scan_recovered();
+        scan.with(|scanner| {
+            self.sensors
+                .serve::<ROWS, COLUMNS, _, _>(scanner, scan.travel());
+        });
     }
 }
 

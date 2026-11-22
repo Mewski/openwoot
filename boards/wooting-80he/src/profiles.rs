@@ -1,5 +1,5 @@
 use openwoot::{
-    analog::SwitchType,
+    analog::SwitchModel,
     layout::LAYERS,
     lighting::{from_rgb565, lightbar_indicator},
     profile::{Edition, Factory, Preset},
@@ -44,9 +44,9 @@ pub static EDITION: Edition<KEY_ROWS, KEY_COLUMNS> = Edition {
         lightbar: lightbar_indicator(LIGHTBAR_COUNT, Background::ProfileColor, 1),
         face: FACE,
     },
-    switch_type: match SwitchType::new(1) {
-        Some(switch_type) => switch_type,
-        None => SwitchType::DEFAULT,
+    switch_model: match SwitchModel::new(1) {
+        Some(switch_model) => switch_model,
+        None => SwitchModel::DEFAULT,
     },
 };
 
@@ -425,12 +425,12 @@ mod tests {
     }
 
     #[test]
-    fn a_tenz_serial_selects_the_edition_product_profiles_and_switch_type() {
+    fn a_tenz_serial_selects_the_edition_product_profiles_and_switch_model() {
         for code in EDITION_CODES {
             let unit = unit_with_edition(Some(code));
             assert_eq!(unit.product, "Wooting 80HE TenZ");
             assert_eq!(unit.edition, Some(code));
-            assert_eq!(unit.switch_type.id(), 1);
+            assert_eq!(unit.switch_model.id(), 1);
             assert_eq!(unit.factory.created, 3);
             assert_eq!(unit.factory.preset(0).info().name.as_str(), "TenZ Profile");
             assert_eq!(
@@ -456,7 +456,7 @@ mod tests {
             let unit = unit_with_edition(edition);
             assert_eq!(unit.product, "Wooting 80HE");
             assert_eq!(unit.edition, None);
-            assert_eq!(unit.switch_type.id(), 0);
+            assert_eq!(unit.switch_model.id(), 0);
             assert_eq!(unit.factory.created, 2);
         }
         let unread = EDITION.unit(Unit::regular(NAME, &FACTORY), None);

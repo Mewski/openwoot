@@ -2,7 +2,7 @@ use heapless::Vec;
 use openwoot_protocol::{
     advanced,
     gamepad::{self, CurvePoint, Normalization},
-    keys::{self as config, Keymap, Overrides},
+    keys::{self, Keymap, Overrides},
 };
 use serde::{Deserialize, Serialize};
 
@@ -33,7 +33,7 @@ pub struct Parts(u8);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Profile {
-    pub settings: config::Settings,
+    pub settings: keys::Settings,
     pub keymaps: Keymaps,
     pub overrides: Overrides,
     pub advanced: advanced::Keys,
@@ -112,7 +112,7 @@ pub const fn default_gamepad_settings() -> gamepad::Settings {
     }
 }
 
-impl Record for config::Settings {
+impl Record for keys::Settings {
     const ITEM: u8 = 0x10;
     const VERSION: u16 = 1;
 }

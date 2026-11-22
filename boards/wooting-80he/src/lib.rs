@@ -177,7 +177,7 @@ impl Board {
         );
         if unit.edition.is_some() {
             let _ = scan::SCAN.with(|scanner| {
-                scanner.apply_switches(|_| Switch::new(unit.switch_type, None));
+                scanner.apply_switches(|_| Switch::new(unit.switch_model, None));
             });
         }
         Self {

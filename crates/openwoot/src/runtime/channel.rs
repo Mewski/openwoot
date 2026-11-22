@@ -1,7 +1,7 @@
 use embassy_usb::driver::Driver;
 
 use crate::{
-    protocol::{self, Configuration, Handler, UpdateMode},
+    protocol::{self, Configuration, Handler, Restart, UpdateMode},
     usb::{ChannelEndpoints, HostState},
 };
 
@@ -14,11 +14,11 @@ impl<'d, D: Driver<'d>> Channel<'d, D> {
     pub async fn run<C: Configuration>(
         self,
         mut handler: Handler<C>,
-        update_mode: &mut impl UpdateMode,
+        bootloader: &mut (impl UpdateMode + Restart),
     ) -> ! {
         let mut channel = protocol::Channel::new(self.endpoints.output, self.endpoints.input);
         channel
-            .run(&mut handler, self.host.feature_requests(), update_mode)
+            .run(&mut handler, self.host.feature_requests(), bootloader)
             .await
     }
 }

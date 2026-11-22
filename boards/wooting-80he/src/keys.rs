@@ -1,5 +1,5 @@
 use openwoot::{
-    analog::SwitchType,
+    analog::SwitchModel,
     keys::Key,
     layout::{DefaultKeymap, Patch},
     scan::Map,
@@ -283,7 +283,7 @@ pub fn capabilities(edition: Option<u8>) -> Capabilities {
         layouts: Vec::from_iter([Layout::Ansi, Layout::Iso, Layout::Jis]),
         lightbar_leds: u8::try_from(crate::lighting::LIGHTBAR_LEDS.len()).unwrap_or(u8::MAX),
         host_signals: true,
-        switch_models: SwitchType::COUNT,
+        switch_models: SwitchModel::COUNT,
         edition,
     }
 }

@@ -8,7 +8,7 @@ use openwoot::{
     profile::{self, Configurator, Factory, Model, Preset},
     protocol::Configuration,
     runtime::{KeyNotices, KeyReports, KeyTask, Progress},
-    scan::{self, Map, Position, Scanner},
+    scan::{self, Map, Position, Scanner, SensorReadout},
     storage::{NorLayout, Partition, Settings},
     usb::{Face, HostState, Mode},
 };
@@ -20,7 +20,7 @@ use openwoot_protocol::{
     gamepad::{self, Control},
     global,
     heapless::Vec as Bounded,
-    keys::{self as config, Action, Distance, Index, Layer},
+    keys::{self, Action, Distance, Index, Layer},
     lighting::{Color, Indicators, Rgb},
     profile::Slot,
 };
@@ -42,7 +42,7 @@ const HOME_ROW: [Action; COLUMNS] = [
     Action::Keyboard(0x07),
     Action::Keyboard(0x09),
     Action::Keyboard(0x0A),
-    Action::Function(openwoot_protocol::keys::Function::Profile(Slot::new(1))),
+    Action::Function(keys::Function::Profile(Slot::new(1))),
     NOTHING,
     NOTHING,
     NOTHING,
@@ -252,6 +252,7 @@ pub(super) struct World {
     pub(super) events: KeyEvents,
     notices: KeyNotices,
     host: HostState,
+    sensors: SensorReadout,
     diagnostics: Diagnostics,
 }
 
@@ -264,6 +265,7 @@ impl World {
             events: KeyEvents::new(),
             notices: KeyNotices::new(),
             host: HostState::new(),
+            sensors: SensorReadout::new(),
             diagnostics: Diagnostics::new(),
         }
     }
@@ -275,6 +277,7 @@ impl World {
             events: &self.events,
             notices: &self.notices,
             host: &self.host,
+            sensors: &self.sensors,
             face: Face {
                 mode,
                 ..Face::default()
@@ -351,9 +354,9 @@ fn rapid_trigger_from_the_configuration_channel_applies_between_cycles() {
         .collect();
     assert_eq!(fixed, [true, true, true]);
     assert!(bench.travel(KEY_A) - 400 > 1500);
-    let settings = config::Settings {
+    let settings = keys::Settings {
         rapid_trigger_enabled: true,
-        rapid_trigger: config::RapidTrigger {
+        rapid_trigger: keys::RapidTrigger {
             press: Distance::from_fraction(0x0800),
             release: None,
             continuous: false,
@@ -494,7 +497,7 @@ fn unsaved_changes_are_dropped_by_revert_and_kept_by_save() {
     let mut settings = storage();
     let model = world.model(&mut settings);
     let mut configurator = Configurator::new(&model, capabilities());
-    let changed = config::Settings {
+    let changed = keys::Settings {
         rapid_trigger_enabled: true,
         ..default_settings()
     };

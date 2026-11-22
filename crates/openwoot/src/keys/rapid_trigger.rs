@@ -1,4 +1,4 @@
-use openwoot_protocol::keys as config;
+use openwoot_protocol::keys;
 
 use super::travel_of;
 
@@ -20,7 +20,7 @@ pub enum RapidTriggerOverride {
 
 impl RapidTrigger {
     #[must_use]
-    pub fn from_config(rapid_trigger: &config::RapidTrigger, minimum: u16) -> Self {
+    pub fn from_settings(rapid_trigger: &keys::RapidTrigger, minimum: u16) -> Self {
         let press = travel_of(rapid_trigger.press).max(minimum);
         Self {
             press,
@@ -34,13 +34,13 @@ impl RapidTrigger {
 
 impl RapidTriggerOverride {
     #[must_use]
-    pub fn from_config(rapid_trigger: &config::RapidTriggerOverride, minimum: u16) -> Self {
+    pub fn from_settings(rapid_trigger: &keys::RapidTriggerOverride, minimum: u16) -> Self {
         match rapid_trigger {
-            config::RapidTriggerOverride::Profile => Self::Profile,
-            config::RapidTriggerOverride::Off => Self::Off,
-            config::RapidTriggerOverride::On => Self::On,
-            config::RapidTriggerOverride::With(rapid_trigger) => {
-                Self::With(RapidTrigger::from_config(rapid_trigger, minimum))
+            keys::RapidTriggerOverride::Profile => Self::Profile,
+            keys::RapidTriggerOverride::Off => Self::Off,
+            keys::RapidTriggerOverride::On => Self::On,
+            keys::RapidTriggerOverride::With(rapid_trigger) => {
+                Self::With(RapidTrigger::from_settings(rapid_trigger, minimum))
             }
         }
     }
@@ -54,26 +54,26 @@ mod tests {
 
     #[test]
     fn the_release_sensitivity_defaults_to_the_press_sensitivity_and_both_keep_the_minimum() {
-        let config = config::RapidTrigger {
+        let shared = keys::RapidTrigger {
             press: Distance::from_fraction(1),
             release: None,
             continuous: true,
         };
         assert_eq!(
-            RapidTrigger::from_config(&config, 112),
+            RapidTrigger::from_settings(&shared, 112),
             RapidTrigger {
                 press: 112,
                 release: 112,
                 continuous: true
             }
         );
-        let separate = config::RapidTrigger {
+        let separate = keys::RapidTrigger {
             press: Distance::from_fraction(0x8000),
             release: Some(Distance::from_fraction(0x4000)),
             continuous: false,
         };
         assert_eq!(
-            RapidTrigger::from_config(&separate, 112),
+            RapidTrigger::from_settings(&separate, 112),
             RapidTrigger {
                 press: 2047,
                 release: 1023,

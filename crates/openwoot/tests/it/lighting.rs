@@ -8,10 +8,13 @@
 
 mod effects;
 mod engine;
+mod host_control;
 mod idle;
 mod indicators;
 mod lightbar;
 mod support;
 mod task;
 
-pub(crate) use support::{COLUMNS, GEOMETRY, LENGTH, MAP, PAGES, ROWS, VARIANT};
+pub(crate) use support::{
+    COLUMNS, GEOMETRY, LENGTH, MAP, PAGES, ROWS, VARIANT, base_color, lighting,
+};

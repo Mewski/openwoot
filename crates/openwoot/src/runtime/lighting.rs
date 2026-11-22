@@ -1,4 +1,4 @@
-use embassy_futures::select::select3;
+use embassy_futures::select::select4;
 use embassy_sync::{blocking_mutex::raw::RawMutex, mutex::Mutex};
 use embassy_time::{Duration, Instant, Timer};
 
@@ -6,7 +6,10 @@ use super::KeyNotices;
 use crate::{
     diagnostics::Diagnostics,
     keys::Key,
-    lighting::{self, KeyEvent, KeyEvents, KeyTravel, LedMatrix, Lightbar, OutputChange, Signals},
+    lighting::{
+        self, HostControl, KeyEvent, KeyEvents, KeyTravel, LedMatrix, Lightbar, OutputChange,
+        Signals,
+    },
     profile,
     usb::HostState,
 };
@@ -24,6 +27,7 @@ pub struct Lighting<
     pub events: &'d KeyEvents,
     pub notices: &'d KeyNotices,
     pub host: &'d HostState,
+    pub host_control: &'d HostControl,
     pub diagnostics: &'d Diagnostics,
     pub profile: &'d profile::Shared<M>,
 }
@@ -45,9 +49,10 @@ where
             self.diagnostics.set_lighting_initialized(initialized);
             self.step(matrix, input, now_ms(), self.host.is_active())
                 .await;
-            select3(
+            select4(
                 self.events.ready_to_receive(),
                 self.notices.ready(),
+                self.host_control.ready(),
                 Timer::after(Self::POLL_INTERVAL),
             )
             .await;
@@ -71,6 +76,7 @@ where
             }
         }
         self.notices.apply(&mut lighting, now_ms);
+        self.host_control.apply(&mut lighting, now_ms);
         let hooks = lighting.hooks_mut();
         hooks.travel_changed(deepest_travel::<ROWS, COLUMNS>(input));
         hooks.tick(now_ms);
