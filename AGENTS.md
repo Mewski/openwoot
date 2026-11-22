@@ -2,38 +2,65 @@
 
 Keyboard firmware for Wooting hall-effect keyboards, written in Rust, with its own configuration protocol shared with a Rust host application. This branch (`rust`) is a new firmware; the branch `main` holds the earlier C firmware, which is the reference for features and hardware behaviour. Read code there; never copy it.
 
-**State: scaffold.** The layout below is in place with empty files; nothing builds yet. Update this file whenever the layout, commands or rules change.
+**State: scaffold.** Every crate below exists at its minimum: both boards link an image with a valid descriptor, the host tests pass, `cargo xtask check` passes. The firmware does nothing yet (no scanning, USB or lighting). Update this file whenever the layout, commands or rules change.
 
 ## Layout
 
 | Path | Holds | May depend on |
 | --- | --- | --- |
-| `crates/openwoot/` | the firmware: scan, analog, keys, layout, HID, USB classes, configuration handler, storage, profiles, lighting, runtime; `no_std`, no hardware access, tested on the host | `openwoot-protocol`, `openwoot-drivers` traits, ecosystem crates |
-| `crates/openwoot-protocol/` | messages between firmware and host software (commands, configuration, keymap, lighting); `no_std` | ecosystem crates only |
-| `crates/openwoot-drivers/` | chip drivers (`is31fl3741` LED matrix, `spi_nor` flash), generic over `embedded-hal` traits | `embedded-hal` |
-| `crates/openwoot-gd32f4/`, `crates/openwoot-gd32f3/` | one HAL per microcontroller family on the GD32 PACs; the only crates with `unsafe` register access | their PAC, `cortex-m`, `embedded-hal` |
-| `crates/openwoot-cli/` | host command-line tool: find keyboards, talk the configuration protocol, flash through the factory bootloader | `openwoot-protocol` |
-| `boards/<board>/` | one binary crate per keyboard: `memory.x`, `board.json`, `src/board.rs` (the board's numbers, tables and choice of features), `src/main.rs` (wiring) | everything above except the CLI |
-| `xtask/` | build helper: list boards, build images, checks, flashing via the CLI | host only |
+| `crates/openwoot/` | the firmware: the `Keyboard` trait a board implements, key processing, layout, HID, USB classes, configuration handler, storage, profiles, lighting, runtime; `no_std`, no hardware access, tested on the host | `openwoot-protocol`, `openwoot-drivers`, `openwoot-image`, ecosystem crates |
+| `crates/openwoot-protocol/` | the configuration protocol between firmware and host software (commands, configuration, keymap, lighting); `no_std` | ecosystem crates only |
+| `crates/openwoot-image/` | the firmware image format: the image descriptor, its location, the image checks, the `memory.x` reader; `no_std`; used by boards, the CLI and `xtask` | ecosystem crates only |
+| `crates/openwoot-drivers/` | chip drivers (`is31fl3741` LED matrix, `spi_nor` flash), generic over `embedded-hal-async` traits | `embedded-hal-async` |
+| `crates/gd32f425-pac/`, `crates/gd32f303-pac/` | generated register access (`cargo xtask pac`); exempt from the comment and `unsafe` rules | `cortex-m`, `cortex-m-rt`, `vcell` |
+| `crates/openwoot-gd32f4/`, `crates/openwoot-gd32f3/` | one HAL per microcontroller family on its PAC (`rt` only for `target_os = "none"`); the only hand-written crates with `unsafe`; `app_descriptor!` | their PAC, `openwoot`, `openwoot-image`, `cortex-m`, `embedded-hal` |
+| `crates/openwoot-cli/` | host tool `openwoot`: checks and flashes images through the factory bootloader, talks the configuration protocol | `openwoot-protocol`, `openwoot-image` |
+| `boards/<board>/` | one board support crate per keyboard (see Boards) | everything above except the CLI |
+| `xtask/` | build helper: list boards, build images, checks, flashing via the CLI, PAC generation | `openwoot-image` |
 
-Optional features (light bar, host signals, editions, ...) and alternative behaviours (noise recalibration methods, device-information storage) are modules with types in `crates/openwoot/`; a board selects them in `src/board.rs`. Shared crates have no Cargo features that depend on a board, and no shared code names a board or a family.
+Optional features (light bar, host signals, editions, ...) and alternative behaviours (noise recalibration methods, device-information storage) are modules with types in `crates/openwoot/`; a board selects them in its library. Shared crates have no Cargo features that depend on a board, and no shared code names a board or a family.
+
+## Boards
+
+- A board is a board support crate `boards/<board>/`, kebab-case, package name = directory name: a library with the board facts as typed constants (name, USB ids, update mode, protected flash areas, key matrix), `DESCRIPTOR`, `pub struct Board` (later: the configured drivers and peripherals by board function, built by `Board::new(peripherals)`) with `impl openwoot::Keyboard`, re-exports `hal` (its chip HAL) and `entry`; the binary `openwoot-<board>` in `src/main.rs`; `memory.x` and `build.rs` as board support crates ship them.
+- `memory.x` is the single source of the image area and RAM, and places the image descriptor (section `.app_descriptor`) on the first 64-byte boundary behind the vector table; `build.rs` reads it into the constant `IMAGE`.
+- The image describes itself: the descriptor (`openwoot_image::Descriptor`) carries the board name, USB ids, update mode and image area. There is no `board.json`; the CLI never lists boards, and `xtask` finds them under `boards/`.
+
+## Commands
+
+| Command | Does |
+| --- | --- |
+| `cargo test --workspace` | host tests of every crate |
+| `cargo xtask boards [--json]` | lists the boards |
+| `cargo xtask build <board>` / `--all` | `build/<board>/openwoot-<board>.{elf,hex,bin}` |
+| `cargo xtask flash <board> --dry-run` | builds and checks the image with `openwoot flash --dry-run`; without `--dry-run` it would flash, which needs the owner's go-ahead |
+| `cargo xtask check` | file types, dependency direction, file-set symmetry, names in shared code, comment, `unsafe` and module-name rules, formatting, clippy (host and every board target), every board image |
+| `cargo xtask pac` | regenerates the PAC crates |
+| `cargo run -p openwoot-cli -- flash --dry-run <image>` | checks an image file |
 
 ## Rules
 
-- Pure Rust: no C, assembly files, Python, shell scripts or make. Prefer maintained ecosystem crates over own code; justify each new dependency (maintenance, `no_std`, `unsafe`, licence compatible with MIT).
-- `unsafe` only in the family HAL crates, each block with a `// SAFETY:` comment.
+- Pure Rust: no C, assembly files, Python, shell scripts or make. Prefer maintained ecosystem crates over own code; justify each new dependency (maintenance, `no_std`, `unsafe`, licence compatible with MIT). Exact version pins live in `[workspace.dependencies]`, added when a crate first uses them (cargo warns about unused entries).
+- `unsafe` only in the chip HAL crates (and the generated PACs), each with a `// SAFETY:` comment.
 - No panics on the scan or USB path; no heap.
-- The microcontroller flash below the image base holds the factory bootloader, and the pages above the image end hold the serial number and device information. Code must never erase or program either; `memory.x` keeps the linker out of them.
+- The microcontroller flash below the image base holds the factory bootloader, and the pages above the image end hold the serial number and device information. Code must never erase or program either; `memory.x` keeps the linker out of them and each board tests its image area against them.
 - The USB face (ids, interfaces, HID reports, the analog report read by the Wooting Analog SDK) stays close to stock; deviations are listed in `docs/protocol.md`.
 - Nothing is flashed to a keyboard and nothing is pushed without the owner's go-ahead.
 - Commits: one line, conventional (`feat(keys): ...`, `fix(usb): ...`, `docs: ...`).
 
+## Naming
+
+- Rust API Guidelines naming: RFC 430 casing; acronyms are one word (`UsbIds`, `Hid`, not `USB`); constructors `new`/`with_*`, conversions `from_*`; `as_`/`to_`/`into_` by cost; getters without `get_`; iterators `iter`/`iter_mut`/`into_iter`; no `-rs`/`-rust` in crate names; Cargo features without `use-`/`with-`.
+- Names say what a thing is in the domain (`actuation_point`, not `ap`, `val`, `data`, `tmp`, `info`, `mgr`, `util`, `helper`, `common`); no modules named `utils`, `misc`, `helpers`, `common` or `types` (`xtask check` rejects them).
+- No stuttering: `keys::Index`, not `keys::KeyIndex`.
+- Enforced by clippy (`pedantic` with `module_name_repetitions`, `min_ident_chars`, `renamed_function_params`, `pub_underscore_fields`, `same_name_method`).
+
 ## Code style
 
-- Code documents itself: names, types and small functions carry the meaning. No comments, no doc comments and no commented-out code. The one exception is the `// SAFETY:` comment that every `unsafe` block requires.
-- Lints are set once in the workspace `Cargo.toml` (`[workspace.lints]`, clippy pedantic plus denials of panics, `unwrap`, indexing, `todo!` and undocumented `unsafe`); every crate has `[lints] workspace = true`. An `#[allow]` or `#[expect]` must give a `reason`.
+- Code documents itself: names, types and small functions carry the meaning. No comments, no doc comments and no commented-out code. The one exception is the `// SAFETY:` comment that every `unsafe` block or attribute requires.
+- Lints are set once in the workspace `Cargo.toml` (`[workspace.lints]`, clippy pedantic plus denials of panics, `unwrap`, indexing, `todo!` and undocumented `unsafe`); every crate except the generated PACs has `[lints] workspace = true`. An `#[allow]` or `#[expect]` must give a `reason`.
 - Formatting is enforced, never hand-tuned:
   - Rust: `cargo +nightly fmt` (`rustfmt.toml`; import grouping, import merging and impl item ordering are nightly-only options, so formatting uses nightly while building uses the pinned stable toolchain).
   - TOML: `taplo fmt` (`taplo.toml`); `Cargo.toml` dependency and section order: `cargo sort --workspace`.
-- Before every commit: `cargo +nightly fmt --check`, `taplo fmt --check`, `cargo sort --workspace --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
+- Before every commit: `cargo xtask check` and `cargo test --workspace`.
 - Modules are small and named for what they hold; one concept per file; public items first, helpers after.
