@@ -1,5 +1,8 @@
 mod channel;
 mod firmware;
+mod key_notices;
+mod key_reports;
+mod key_task;
 mod lighting;
 mod reports;
 mod state;
@@ -7,6 +10,9 @@ mod usb;
 
 pub use channel::Channel;
 pub use firmware::Firmware;
+pub use key_notices::{KEY_NOTICE_CAPACITY, KeyNotices};
+pub use key_reports::{KeyReports, Pending};
+pub use key_task::{KeyTask, Progress};
 pub use lighting::Lighting;
 pub use reports::Reports;
 pub use state::State;

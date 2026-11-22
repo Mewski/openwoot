@@ -4,7 +4,7 @@ use embassy_usb::{
     driver::{self, Driver},
 };
 
-use super::{Channel, Lighting, Reports, State, Usb};
+use super::{Channel, KeyReports, KeyTask, Lighting, Reports, State, Usb};
 use crate::{
     lighting,
     usb::{Face, Identity, Negotiated},
@@ -22,6 +22,8 @@ pub struct Firmware<
     pub device: UsbDevice<'static, Negotiated<D>>,
     pub channel: Channel<'static, Negotiated<D>>,
     pub reports: Reports<'static, Negotiated<D>>,
+    pub key_reports: &'static KeyReports<M>,
+    pub keys: KeyTask<'static, M>,
     pub lighting: Lighting<'static, M, H, ROWS, COLUMNS, PAGES, LENGTH>,
 }
 
@@ -56,9 +58,19 @@ where
             device,
             channel,
             reports,
+            key_reports: &state.key_reports,
+            keys: KeyTask {
+                shared: &state.keys,
+                reports: &state.key_reports,
+                events: &state.key_events,
+                notices: &state.key_notices,
+                host: &state.host,
+                face,
+            },
             lighting: Lighting {
                 lighting: state.lighting.init(Mutex::new(lighting)),
                 events: &state.key_events,
+                notices: &state.key_notices,
                 host: &state.host,
             },
         }

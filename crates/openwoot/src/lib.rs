@@ -4,6 +4,7 @@
 pub mod analog;
 pub mod hid;
 pub mod keys;
+pub mod layout;
 pub mod lighting;
 pub mod protocol;
 pub mod runtime;

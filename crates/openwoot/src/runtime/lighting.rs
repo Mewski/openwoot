@@ -1,7 +1,8 @@
-use embassy_futures::select::select;
+use embassy_futures::select::select3;
 use embassy_sync::{blocking_mutex::raw::RawMutex, mutex::Mutex};
 use embassy_time::{Duration, Instant, Timer};
 
+use super::KeyNotices;
 use crate::{
     lighting::{self, KeyEvent, KeyEvents, KeyTravel, LedMatrix, Lightbar, OutputChange, Signals},
     usb::HostState,
@@ -18,6 +19,7 @@ pub struct Lighting<
 > {
     pub lighting: &'d Mutex<M, lighting::Lighting<H, ROWS, COLUMNS, PAGES, LENGTH>>,
     pub events: &'d KeyEvents,
+    pub notices: &'d KeyNotices,
     pub host: &'d HostState,
 }
 
@@ -37,8 +39,9 @@ where
             }
             self.step(matrix, input, now_ms(), self.host.is_active())
                 .await;
-            select(
+            select3(
                 self.events.ready_to_receive(),
+                self.notices.ready(),
                 Timer::after(Self::POLL_INTERVAL),
             )
             .await;
@@ -59,6 +62,7 @@ where
                 lighting.reset_idle_timer(now_ms);
             }
         }
+        self.notices.apply(&mut lighting, now_ms);
         match lighting.set_output(usb_active) {
             Some(OutputChange::Wake) => {
                 if matrix.set_running(true).await.is_ok() {
