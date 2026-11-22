@@ -60,14 +60,17 @@ The command repeats the checks of the dry run, then finds the keyboard by the US
 image descriptor:
 
 1. **Keyboard in update mode** (`31e3:140f`, "Wooting Restore (80HE)"): it is used as it is.
-2. **Keyboard running stock firmware**: the tool reads the firmware version with the stock feature
+2. **Keyboard running openwoot**: the tool reads the version over the configuration channel and
+   sends the request `EnterUpdateMode`; the firmware answers and resets into update mode. An
+   openwoot build without that request answers it with an error, and the tool says to use the
+   [key combination](#recovery-with-the-key-combination) instead.
+3. **Keyboard running stock firmware**: it does not answer the configuration channel (the tool
+   waits 2 seconds for that), so the tool reads the firmware version with the stock feature
    command 1 and sends feature command 2 with argument 0, which resets the keyboard into update
-   mode; the keyboard appears in update mode within 2 to 9 seconds (the tool waits up to
-   20 seconds). Until the transfer starts nothing in flash has changed.
-3. **Keyboard running openwoot**: the configuration protocol has no request for update mode yet,
-   so the tool stops with an error that says so. Use the
-   [key combination](#recovery-with-the-key-combination) to enter update mode, then run the
-   command again.
+   mode.
+
+Either way the keyboard appears in update mode within a few seconds (the tool waits up to
+20 seconds), and until the transfer starts nothing in flash has changed.
 
 In update mode the tool prints what the bootloader reports (why it is in update mode, its version,
 the serial number, the CRC of this session), then:
@@ -116,15 +119,22 @@ leave update mode without flashing, unplug the keyboard and plug it in without h
 ## Returning to the stock firmware
 
 `openwoot flash` writes only openwoot images: it needs the image descriptor that every openwoot
-build carries, and Wooting's update file has none. Return to stock with Wooting's own tool:
+build carries, and Wooting's update file has none. Return to stock with Wooting's own tool, which
+recognises a keyboard running openwoot:
 
-1. put the keyboard into update mode with the [key combination](#recovery-with-the-key-combination);
-2. open Wootility; it finds the keyboard in update mode and offers to restore it;
-3. accept the restore. It installs Wooting's firmware and also resets the settings, so all
-   profiles are lost.
+1. open Wootility with the keyboard plugged in (normal mode, no keys held);
+2. Wootility finds the keyboard and asks for a firmware update before anything else, because
+   openwoot reports itself to it as factory firmware (version 2.1.2, see
+   [the identification responder](protocol.md#stock-identification-responder));
+3. accept the update. Wootility resets the keyboard into update mode, installs Wooting's current
+   firmware and then resets the settings, so all profiles are lost.
 
-The restore through Wootility is not yet tested on hardware with openwoot installed. It uses the
-same factory bootloader as `openwoot flash`, which never changes the bootloader.
+If Wootility does not show the keyboard or the update does not start, use the emergency route: put
+the keyboard into update mode with the [key combination](#recovery-with-the-key-combination),
+open Wootility, which finds it in update mode and offers to restore it, and accept the restore.
+
+Neither way is tested on hardware with openwoot installed yet. Both use the same factory
+bootloader as `openwoot flash`, which never changes the bootloader.
 
 ## Risks
 

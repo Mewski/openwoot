@@ -6,7 +6,7 @@ What a host sees when a keyboard runs openwoot: the USB device, its five interfa
 | --- | --- |
 | device and interfaces | `crates/openwoot/src/usb/` (`usb::build`, `usb::Face`, `usb::Control`) |
 | report descriptors and typed reports | `crates/openwoot/src/hid/` (`hid::DescriptorBuilder`, one module per report, re-exported by `hid`) |
-| configuration channel, firmware side | `crates/openwoot/src/protocol/` (`protocol::Channel`, `protocol::Handler`) |
+| configuration channel, firmware side | `crates/openwoot/src/protocol/` (`protocol::Channel`, `protocol::Handler`, the stock identification responder with `protocol::StockIdentity` and `protocol::FeatureRequests`) |
 | messages, framing, host side | `crates/openwoot-protocol/` |
 
 Everything above is generic over `embassy_usb_driver::Driver` and runs on the host; the chip HALs provide the drivers (USBHS with an external ULPI PHY on the Wooting 80HE, USBD on the Wooting 60HE+).
@@ -65,6 +65,9 @@ Every HID interface has a HID descriptor with `bcdHID` 1.11, country 0 and one r
 | `SET_IDLE`, `GET_IDLE` | stored per interface, reset by a bus reset |
 | `SET_PROTOCOL`, `GET_PROTOCOL` | stored per interface; on interface 1 published as `HostState::keyboard_protocol` (boot or report) |
 | `SET_REPORT` output on interface 1 | the lock lights, published as `HostState::keyboard_leds` (bit 0 Num Lock, 1 Caps Lock, 2 Scroll Lock, 3 Compose, 4 Kana) |
+| `SET_REPORT` feature on interface 2 | a stock feature command, queued in `HostState::feature_requests` for the [stock identification responder](#stock-identification-responder) |
+| `SET_REPORT` output or input on interface 2 | accepted and ignored (stock output-report commands; none is supported) |
+| `GET_REPORT` on interface 2 | the report id byte only, as stock; report id 0 stalls |
 | string `0xee` in the XInput mode | Microsoft OS 1.0 string `MSFT100` with request code `0xb0` |
 | vendor request `0xb0`, `wIndex` 4, in the XInput mode | 40-byte extended compat ID that gives interface 0 the compatible id `XUSB10`, so Windows binds its XInput driver without an INF file |
 
@@ -87,7 +90,7 @@ Report descriptors are built at compile time by `hid::DescriptorBuilder` (a `con
 
 ## Configuration channel
 
-The channel uses interface 2 (usage page `0xff55`, usage 1) with the stock report ids and sizes: ids 1 to 6 carry 32, 62, 254, 510, 1022 and 2046 bytes (without the report id byte) as input and output reports; id 1 also declares a 7-byte feature report, kept for the planned identification responder. The host writes output reports, which travel over the interrupt OUT endpoint `0x03` (hidapi `write`); the firmware answers with input reports on `0x83` (hidapi `read`). Every report ends with a short packet, so no zero-length packets are needed.
+The channel uses interface 2 (usage page `0xff55`, usage 1) with the stock report ids and sizes: ids 1 to 6 carry 32, 62, 254, 510, 1022 and 2046 bytes (without the report id byte) as input and output reports; id 1 also declares the 7-byte stock feature report, which carries the stock commands of the [identification responder](#stock-identification-responder). The host writes output reports, which travel over the interrupt OUT endpoint `0x03` (hidapi `write`); the firmware answers with input reports on `0x83` (hidapi `read`). Every report ends with a short packet, so no zero-length packets are needed.
 
 ### Report envelope
 
@@ -114,26 +117,55 @@ The host sends requests with 8-byte keys and 2-byte sequence numbers (`openwoot_
 | Endpoint | Path | Request | Response |
 | --- | --- | --- | --- |
 | `GetVersion` | `openwoot/version` | `()` | `Version { protocol: u16, firmware: FirmwareVersion { major: u16, minor: u16, patch: u16 } }` |
+| `EnterUpdateMode` | `openwoot/update-mode` | `()` | `()`; after sending it the firmware hands over to the factory bootloader (`Keyboard::enter_update_mode` with option byte 0), which stays in update mode for one start |
 
 `PROTOCOL_VERSION` is 1. The types behind a path never change: a changed request or response type gets a new path (`openwoot/version/2`), so old and new hosts and firmware recognise each other's endpoints by key.
 
-### Planned: stock identification responder
+### Stock identification responder
 
-The official Wootility finds keyboards by vendor id, product id and usage page `0xff55` and sends stock commands (`d1 da ...`, also as feature report 1). A minimal responder for the stock identification commands (ping, version, serial number, reset into update mode) will let it recognise the keyboard and offer the stock firmware. It is not built yet: its answers are fixed after one recorded Wootility session. Until then stock requests get no answer, and stock feature and output reports sent through the control endpoint are stalled.
+The official Wootility recognises keyboards by vendor id, product id and usage page `0xff55` and talks to them with stock feature commands. The responder answers the few it needs to recognise the keyboard and to install the stock firmware, so that returning to stock is the normal Wootility update (see [flashing](flashing.md)).
+
+A stock feature command is a `SET_REPORT` of feature report 1 on interface 2 (`wValue` `0x0301`): `01 d1 da <command> <a0 a1 a2 a3>` (argument little endian; data without the report id byte is accepted too). `usb::Control` checks and queues it in `HostState::feature_requests` (`protocol::FeatureRequests`: four entries, at most three commands, as stock), and `protocol::Channel` answers it on `0x83` as an input report in the smallest report that holds it, zero padded:
+
+```
+report id | d1 da | command | status | payload length (u16, little endian) | payload
+```
+
+| Command | Argument | Answer (status `0x88` unless stated) |
+| --- | --- | --- |
+| 0, ping | `a0` | 1 byte: `a0` inverted |
+| 1, version | none | `02 01 02`: version 2.1.2, see below |
+| 2, reset to update mode | `a0`: option bits for the bootloader (bit 0 high speed, bit 1 ignore the key combination, bit 2 no lighting) | none; the channel calls `Keyboard::enter_update_mode(a0)`, which writes `0x504` and `a0` to the backup registers and resets, as stock |
+| 3, serial number, selector 0 | `arg` = 0 | 11 bytes: supplier (u16), year, week, product (u16), revision (u16), product id (u16, at most `0xfffe`), stage; all zero without a serial number |
+| 3, selector 1 | `arg` = 1 | 12 zero bytes (stock: the unique id of the microcontroller, not read yet) |
+| 3, selector 2 | `arg` = 2 | the protobuf message `SerialNumber` (fields 1 to 7 always, 9 edition, 10 PCB design, 11 minor revision when present), encoded as the stock firmware encodes it; without a serial number status `0xff` with the 16-bit error -2 (`fe ff`, no device information) |
+| 3, selector 3 | `arg` = 3 | 10 zero bytes (stock: the ids of the settings flash, not read yet) |
+| 3, other selectors | | status `0xff`, no payload |
+| 19, device settings | none | 7 bytes: byte 0 bit 3 full speed forced (`usb::Speed::Full`), bit 4 boot keyboard report; bytes 1 to 3 zero; byte 4 `0x11` (flash read-out allowed); byte 5 layout 0; byte 6 bits 2..1 USB mode (`usb::Mode`: 0 XInput, 1 gamepad, 2 none) and bits 4..3 gamepad polling (0 4 ms, 1 1 ms, 2 125 µs) |
+| every other command | | no payload; status `0x66` (unknown) for numbers below 38 and above 88, `0xaa` (unsupported) for 38 to 88, the stock rule for commands without a handler |
+
+A request with another magic gets status `0xff` (under the magic `d1 da`), and a fourth waiting command status `0x77`, both at once as stock does.
+
+The serial number comes from `StockIdentity::serial`, the serial text the board reads from the serial page of the microcontroller (for example `A01B2401W01T00100S01H00300`, a made-up serial: supplier 01, year 24, week 01, product 01, PCB design 00, revision 1, minor revision 00, edition 01, stage H, product id 00300). The official Wootility identifies a keyboard by these fields and finds it again by them after the update, so they must equal what the stock firmware reports.
+
+Version 2.1.2 is a factory version for the official Wootility: it asks for the update to the current stock firmware before anything else, reads no profiles first (openwoot answers none), and resets the stock settings after the update. The C reference reports 2.14.1, with which Wootility would treat the keyboard as up to date and read its profiles.
+
+Stock output-report commands (`d1 da` in an output report on `0x03` or through `SET_REPORT`) get no answer, as stock does for unknown ones; `OW` frames on the same reports work as described above.
 
 ## Deviations from the stock face
 
 | Topic | Stock firmware | openwoot |
 | --- | --- | --- |
-| `DEVICE_QUALIFIER` | stalled | answered (embassy-usb); correct for the high-speed Wooting 80HE, a small embassy-usb change is pending for the full-speed-only Wooting 60HE+ |
+| `DEVICE_QUALIFIER` | stalled | answered on the high-speed Wooting 80HE (embassy-usb); stalled on the full-speed-only Wooting 60HE+ by its USB driver, as stock |
 | BOS | stalled | answered with an empty BOS (only asked for by hosts when `bcdUSB` is 2.01 or higher) |
 | `GET_STATUS` on an interface | stalled | answered with 0 |
 | `SET_INTERFACE` with an alternate setting above 0, `SET_CONFIGURATION` above 1, `SET_ADDRESS` 0 | acknowledged | stalled |
 | interface-0 `bInterval` when the Wooting 80HE falls back to full speed | switched to the full-speed value | built once for the configured speed, so a high-speed build on a full-speed hub polls interface 0 at the high-speed value read as frames (4 ms instead of 1 ms at the default rate) |
 | resume | reported at the first start of frame after the wake-up interrupt | reported at the wake-up interrupt |
 | configuration channel OUT endpoint | not re-armed until the command is processed | one packet of the next transfer may arrive before the current one is processed (the channel's request/response pairing is the flow control) |
-| `SET_REPORT` on interface 2 (feature or output report through the control endpoint) | processed as a stock command, up to 64 (feature) or 2048 (output) bytes | stalled; the channel reads the interrupt OUT endpoint only (until the identification responder) |
-| `GET_REPORT` | answered with the report id byte only | stalled |
+| `SET_REPORT` on interface 2 (feature or output report through the control endpoint) | processed as a stock command, up to 64 (feature) or 2048 (output) bytes | feature reports go to the stock identification responder; output reports are accepted and ignored, so `OW` frames travel only over the interrupt OUT endpoint |
+| `GET_REPORT` on interfaces other than 2 | answered with the report id byte only | stalled |
+| stock feature commands | 65 commands on the Wooting 80HE, 59 on the Wooting 60HE+ | commands 0, 1, 2, 3 and 19 (version 2.1.2 instead of 2.14.1, zero bytes for the microcontroller and flash ids); the others are answered as unknown or unsupported |
 | control transfers longer than 128 bytes | accepted up to 2048 bytes | stalled before the data stage |
 | report descriptors | stock byte arrays | same fields (checked against the C build field by field); byte encodings differ where items are ordered differently or encoded in their smallest size, for example the boot keyboard's logical maximum 221 is `26 dd 00` where stock writes `25 dd` (which reads as -35) |
 | gamepad hat switch | Input flags `0x02` | `0x42` (Null State), so the centred value 0 is declared as "no direction" |
