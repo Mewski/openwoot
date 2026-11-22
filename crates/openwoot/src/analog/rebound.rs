@@ -1,4 +1,4 @@
-use super::calibration::VALUE_NONE;
+use super::VALUE_NONE;
 
 const PRESS_PERCENT: u32 = 30;
 const BOUNCE_PERCENT: u32 = 10;

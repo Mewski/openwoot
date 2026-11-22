@@ -54,11 +54,11 @@ impl Events {
         self.len == 0
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub(super) const fn clear(&mut self) {
         self.len = 0;
     }
 
-    pub(crate) fn push(&mut self, event: Event) {
+    pub(super) fn push(&mut self, event: Event) {
         if let Some(slot) = self.events.get_mut(self.len) {
             *slot = event;
             self.len += 1;

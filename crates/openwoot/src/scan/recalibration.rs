@@ -1,4 +1,4 @@
-use crate::scan::Mode;
+use super::{Mode, Position};
 
 const HOLD_MS: u32 = 5000;
 const PASS_PAUSE_MS: u32 = 20_000;
@@ -23,7 +23,7 @@ impl Batching {
         batch: u8,
         inputs: usize,
         addresses: usize,
-    ) -> impl Iterator<Item = (u8, u8)> {
+    ) -> impl Iterator<Item = Position> {
         let batch = usize::from(batch);
         let (pairs, columns) = match self {
             Self::InputPairs => (2 * addresses, 0),
@@ -35,27 +35,23 @@ impl Batching {
         let column_members = (0..columns).map(move |input| (input, batch));
         pair_members
             .chain(column_members)
-            .map(|(input, address)| (input as u8, address as u8))
+            .map(|(input, address)| Position::new(input as u8, address as u8))
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Decision {
+pub(super) enum Decision {
     Wait,
     Continue,
     StartBatch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Advance {
+pub(super) enum Advance {
     NextBatch,
     PassComplete,
 }
 
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "independent flags of the recalibration schedule"
-)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Recalibration {
     batching: Batching,
@@ -124,11 +120,11 @@ impl Recalibration {
         }
     }
 
-    pub(crate) fn stop(&mut self) -> bool {
+    pub(super) const fn stop(&mut self) -> bool {
         core::mem::replace(&mut self.running, false)
     }
 
-    pub(crate) fn restart(&mut self, mode: Mode) {
+    pub(super) const fn restart(&mut self, mode: Mode) {
         self.batch = 0;
         self.pass_done = false;
         self.hold = false;
@@ -139,12 +135,12 @@ impl Recalibration {
         };
     }
 
-    pub(crate) fn hold(&mut self, now_ms: u32) {
+    pub(super) const fn hold(&mut self, now_ms: u32) {
         self.hold_stamp_ms = now_ms;
         self.hold = true;
     }
 
-    pub(crate) fn decide(&mut self, now_ms: u32) -> Decision {
+    pub(super) const fn decide(&mut self, now_ms: u32) -> Decision {
         if self.running {
             return Decision::Continue;
         }
@@ -168,7 +164,7 @@ impl Recalibration {
         Decision::StartBatch
     }
 
-    pub(crate) fn advance(
+    pub(super) fn advance(
         &mut self,
         mode: Mode,
         now_ms: u32,
@@ -200,19 +196,32 @@ mod tests {
 
     use super::*;
 
+    fn members(batching: Batching, batch: u8, inputs: usize, addresses: usize) -> Vec<(u8, u8)> {
+        batching
+            .members(batch, inputs, addresses)
+            .map(|position| (position.input(), position.address()))
+            .collect()
+    }
+
     #[test]
     fn input_pairs_cover_both_inputs_of_a_pair_address_by_address() {
-        let members: Vec<_> = Batching::InputPairs.members(1, 5, 3).collect();
-        assert_eq!(members, [(2, 0), (2, 1), (2, 2), (3, 0), (3, 1), (3, 2)]);
-        let last: Vec<_> = Batching::InputPairs.members(2, 5, 3).collect();
-        assert_eq!(last, [(4, 0), (4, 1), (4, 2)]);
+        assert_eq!(
+            members(Batching::InputPairs, 1, 5, 3),
+            [(2, 0), (2, 1), (2, 2), (3, 0), (3, 1), (3, 2)]
+        );
+        assert_eq!(
+            members(Batching::InputPairs, 2, 5, 3),
+            [(4, 0), (4, 1), (4, 2)]
+        );
         assert_eq!(Batching::InputPairs.count(5, 3), 3);
     }
 
     #[test]
     fn an_address_batch_covers_every_input_at_that_address() {
-        let members: Vec<_> = Batching::Addresses.members(7, 4, 16).collect();
-        assert_eq!(members, [(0, 7), (1, 7), (2, 7), (3, 7)]);
+        assert_eq!(
+            members(Batching::Addresses, 7, 4, 16),
+            [(0, 7), (1, 7), (2, 7), (3, 7)]
+        );
         assert_eq!(Batching::Addresses.count(4, 16), 16);
     }
 

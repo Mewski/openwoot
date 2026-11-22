@@ -7,8 +7,6 @@ pub trait Recheck: Default {
 
     fn is_second_conversion(&self) -> bool;
 
-    fn first_input(&self) -> u8;
-
     fn is_deferred(&self, input: u8) -> bool;
 
     fn reset(&mut self);
@@ -33,11 +31,6 @@ impl Recheck for () {
     #[inline(always)]
     fn is_second_conversion(&self) -> bool {
         false
-    }
-
-    #[inline(always)]
-    fn first_input(&self) -> u8 {
-        u8::MAX
     }
 
     #[inline(always)]
@@ -88,11 +81,6 @@ impl<const FIRST_INPUT: u8> Recheck for RecheckFrom<FIRST_INPUT> {
     #[inline(always)]
     fn is_second_conversion(&self) -> bool {
         self.second_parallel
-    }
-
-    #[inline(always)]
-    fn first_input(&self) -> u8 {
-        FIRST_INPUT
     }
 
     #[inline(always)]

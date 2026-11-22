@@ -1,18 +1,18 @@
-pub(crate) const CURVE_POINTS: usize = 4096;
-pub(crate) const CURVE_COUNT: usize = 40;
-pub(crate) const CURVE_VALUE_MAX: u32 = 0x3FFF;
-pub(crate) const CURVE_END_MAX: u32 = 0xF_FF00;
+const POINTS: usize = 4096;
+const COUNT: usize = 40;
 
-const CURVE_STEPS: &[u8; CURVE_COUNT * CURVE_POINTS] =
-    include_bytes!("../../data/travel_curves.txt");
-static CURVES: [[u16; CURVE_POINTS]; CURVE_COUNT] = decode(CURVE_STEPS);
+const STEPS: &[u8; COUNT * POINTS] = include_bytes!("../../data/travel_curves.txt");
+static CURVES: [[u16; POINTS]; COUNT] = decode(STEPS);
 
 #[derive(Clone, Copy, Debug)]
-pub struct Curve(&'static [u16; CURVE_POINTS]);
+pub struct Curve(&'static [u16; POINTS]);
 
 impl Curve {
+    pub(super) const END_MAX: u32 = 0xF_FF00;
+    pub(super) const VALUE_MAX: u32 = 0x3FFF;
+
     #[must_use]
-    pub(crate) fn number(number: u8) -> Self {
+    pub(super) fn number(number: u8) -> Self {
         match CURVES.get(usize::from(number)) {
             Some(points) => Self(points),
             None => Self(&CURVES[0]),
@@ -45,8 +45,8 @@ impl Curve {
     }
 
     #[must_use]
-    pub(crate) fn end_of_travel(self, target: u32) -> u32 {
-        let last = CURVE_POINTS as u32 - 1;
+    pub(super) fn end_of_travel(self, target: u32) -> u32 {
+        let last = POINTS as u32 - 1;
         let mut low = 0_u32;
         let mut high = last;
         loop {
@@ -67,14 +67,14 @@ impl Curve {
         if low == 0 {
             0
         } else if low > last {
-            CURVE_END_MAX
+            Self::END_MAX
         } else {
             let below = u32::from(self.point(high));
             let step = u32::from(self.point(low)).wrapping_sub(below) & 0xFFFF;
             ((step >> 1) + ((target.wrapping_sub(below)) << 8))
                 .checked_div(step)
-                .map_or(CURVE_END_MAX, |position| {
-                    (position + (high << 8)).min(CURVE_END_MAX)
+                .map_or(Self::END_MAX, |position| {
+                    (position + (high << 8)).min(Self::END_MAX)
                 })
         }
     }
@@ -85,10 +85,10 @@ impl Curve {
             first -= 1;
         }
         let mut last = hit;
-        while last + 1 < CURVE_POINTS as u32 && u32::from(self.point(last + 1)) == target {
+        while last + 1 < POINTS as u32 && u32::from(self.point(last + 1)) == target {
             last += 1;
         }
-        ((first + (last - first) * target / CURVE_VALUE_MAX) << 8).min(CURVE_END_MAX)
+        ((first + (last - first) * target / Self::VALUE_MAX) << 8).min(Self::END_MAX)
     }
 }
 
@@ -105,17 +105,17 @@ impl Eq for Curve {}
     clippy::large_stack_arrays,
     reason = "evaluated at compile time, where an index outside the table fails the build"
 )]
-const fn decode(steps: &[u8; CURVE_COUNT * CURVE_POINTS]) -> [[u16; CURVE_POINTS]; CURVE_COUNT] {
-    let mut curves = [[0; CURVE_POINTS]; CURVE_COUNT];
+const fn decode(steps: &[u8; COUNT * POINTS]) -> [[u16; POINTS]; COUNT] {
+    let mut curves = [[0; POINTS]; COUNT];
     let mut curve = 0;
-    while curve < CURVE_COUNT {
-        let line = curve * CURVE_POINTS;
+    while curve < COUNT {
+        let line = curve * POINTS;
         assert!(
-            steps[line + CURVE_POINTS - 1] == b'\n',
+            steps[line + POINTS - 1] == b'\n',
             "one line of steps per curve"
         );
         let mut point = 1;
-        while point < CURVE_POINTS {
+        while point < POINTS {
             let step = steps[line + point - 1];
             assert!(
                 step >= b'A' && step <= b'Z',
@@ -135,14 +135,11 @@ mod tests {
 
     #[test]
     fn every_curve_rises_from_rest_to_full_travel() {
-        for number in 0..CURVE_COUNT as u8 {
+        for number in 0..COUNT as u8 {
             let curve = Curve::number(number);
             assert_eq!(curve.point(0), 0);
-            assert_eq!(
-                u32::from(curve.point(CURVE_POINTS as u32 - 1)),
-                CURVE_VALUE_MAX
-            );
-            for index in 1..CURVE_POINTS as u32 {
+            assert_eq!(u32::from(curve.point(POINTS as u32 - 1)), Curve::VALUE_MAX);
+            for index in 1..POINTS as u32 {
                 assert!(curve.point(index - 1) <= curve.point(index));
             }
         }
@@ -154,17 +151,17 @@ mod tests {
         assert_eq!(curve.interpolate(0x100), 17);
         assert_eq!(curve.interpolate(0x180), 26);
         assert_eq!(curve.interpolate(0x140), 21);
-        assert_eq!(curve.interpolate(CURVE_END_MAX), 0x3FFF);
+        assert_eq!(curve.interpolate(Curve::END_MAX), 0x3FFF);
     }
 
     #[test]
     fn the_end_of_travel_of_the_full_value_is_the_start_of_the_last_plateau() {
         let curve = Curve::number(0);
-        let end = curve.end_of_travel(CURVE_VALUE_MAX);
-        let first = (0..CURVE_POINTS as u32)
-            .find(|&index| u32::from(curve.point(index)) == CURVE_VALUE_MAX)
+        let end = curve.end_of_travel(Curve::VALUE_MAX);
+        let first = (0..POINTS as u32)
+            .find(|&index| u32::from(curve.point(index)) == Curve::VALUE_MAX)
             .unwrap();
-        assert_eq!(end, ((first + (4095 - first)) << 8).min(CURVE_END_MAX));
+        assert_eq!(end, ((first + (4095 - first)) << 8).min(Curve::END_MAX));
         assert_eq!(curve.end_of_travel(0), 0);
     }
 }

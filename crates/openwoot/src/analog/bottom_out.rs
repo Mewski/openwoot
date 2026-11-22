@@ -1,4 +1,4 @@
-pub(crate) const VALUE_NONE: u16 = 0x0FFF;
+pub(super) const VALUE_NONE: u16 = 0x0FFF;
 
 const SAMPLE_INTERVAL_US: u16 = 1000;
 const STROKE_TIMEOUT_US: u16 = 25_000;

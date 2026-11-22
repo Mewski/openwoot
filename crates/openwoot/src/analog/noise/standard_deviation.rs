@@ -29,14 +29,14 @@ impl NoiseStatistics for StdDev {
         }
         let value = f32::from(magnitude);
         self.welford.add(value);
-        let count = self.welford.count;
+        let count = self.welford.count();
         if count == 1 {
             self.average = value;
             return NoiseState::Sampling;
         }
         self.average = value * AVERAGE_NEW + self.average * AVERAGE_KEEP;
         if count > MOVEMENT_SAMPLES {
-            if (self.average - self.welford.mean).abs() > MOVEMENT_LIMIT {
+            if (self.average - self.welford.mean()).abs() > MOVEMENT_LIMIT {
                 self.state = NoiseState::Unstable;
                 return self.state;
             }
@@ -56,7 +56,7 @@ impl NoiseStatistics for StdDev {
     }
 
     fn calibration(&self, noise_band: u16) -> Calibration {
-        let measured = if self.welford.count > 1 {
+        let measured = if self.welford.count() > 1 {
             f64::from((f64::from(self.welford.deviation()) * BAND_PER_DEVIATION) as f32)
                 * NEW_WEIGHT
         } else {
@@ -65,7 +65,7 @@ impl NoiseStatistics for StdDev {
         let noise = (f64::from(f32::from(noise_band)) * (1.0 - NEW_WEIGHT) + measured) as f32;
         Calibration {
             noise_band: libm::ceilf(noise) as u32 as u16,
-            rest_level: (libm::ceilf(self.welford.mean) as u32).wrapping_add(REST_OFFSET) as u16,
+            rest_level: (libm::ceilf(self.welford.mean()) as u32).wrapping_add(REST_OFFSET) as u16,
         }
     }
 }
@@ -100,7 +100,7 @@ mod tests {
     fn a_key_that_starts_to_move_ends_the_window() {
         let (statistics, state) = window((0..1000).map(|index| if index < 100 { 10 } else { 40 }));
         assert_eq!(state, NoiseState::Unstable);
-        assert!(statistics.welford.count < 120);
+        assert!(statistics.welford.count() < 120);
     }
 
     #[test]

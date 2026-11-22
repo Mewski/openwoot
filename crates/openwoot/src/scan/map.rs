@@ -1,4 +1,4 @@
-pub const ADDRESSES_PER_INPUT: usize = 16;
+use super::{ADDRESSES_PER_INPUT, Grid, Position};
 
 const NO_KEY: u8 = 0xFF;
 const COLUMN_BITS: u8 = 5;
@@ -29,56 +29,9 @@ impl MatrixKey {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Position {
-    input: u8,
-    address: u8,
-}
-
-impl Position {
-    #[must_use]
-    pub const fn new(input: u8, address: u8) -> Self {
-        Self {
-            input,
-            address: address % ADDRESSES_PER_INPUT as u8,
-        }
-    }
-
-    #[must_use]
-    pub const fn from_index(index: u8) -> Self {
-        Self::new(index / ADDRESSES_PER_INPUT as u8, index)
-    }
-
-    #[must_use]
-    pub const fn input(self) -> u8 {
-        self.input
-    }
-
-    #[must_use]
-    pub const fn address(self) -> u8 {
-        self.address
-    }
-
-    #[must_use]
-    pub const fn index(self) -> u8 {
-        self.address
-            .wrapping_add((ADDRESSES_PER_INPUT as u8).wrapping_mul(self.input))
-    }
-
-    #[inline(always)]
-    pub(crate) fn row(self) -> usize {
-        usize::from(self.input)
-    }
-
-    #[inline(always)]
-    pub(crate) fn column(self) -> usize {
-        usize::from(self.address) % ADDRESSES_PER_INPUT
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Map<const INPUTS: usize, const ADDRESSES: usize> {
-    codes: [[u8; ADDRESSES_PER_INPUT]; INPUTS],
+    codes: Grid<u8, INPUTS>,
 }
 
 impl<const INPUTS: usize, const ADDRESSES: usize> Map<INPUTS, ADDRESSES> {
@@ -101,15 +54,16 @@ impl<const INPUTS: usize, const ADDRESSES: usize> Map<INPUTS, ADDRESSES> {
             }
             input += 1;
         }
-        Self { codes }
+        Self {
+            codes: Grid::new(codes),
+        }
     }
 
     #[must_use]
     #[inline]
     pub fn key(&self, position: Position) -> Option<MatrixKey> {
         self.codes
-            .get(position.row())
-            .and_then(|codes| codes.get(position.column()))
+            .get(position)
             .and_then(|&code| MatrixKey::from_code(code))
     }
 
@@ -171,12 +125,6 @@ mod tests {
         );
         assert_eq!(MatrixKey::from_code(0xFF), None);
         assert_eq!(MatrixKey { row: 2, column: 4 }.code(), 0x44);
-    }
-
-    #[test]
-    fn the_scan_position_counts_sixteen_addresses_per_input() {
-        assert_eq!(Position::new(5, 14).index(), 94);
-        assert_eq!(Position::from_index(94), Position::new(5, 14));
     }
 
     #[test]

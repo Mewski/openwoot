@@ -1,5 +1,5 @@
 use super::{Calibration, NoiseState, NoiseStatistics, SAMPLES_DONE, Welford};
-use crate::analog::switch::REST_MARGIN;
+use crate::analog::Switch;
 
 const MIN_RESET: u16 = 0x0FFF;
 const BAND_PER_RANGE: f64 = 0.52;
@@ -42,8 +42,8 @@ impl NoiseStatistics for MinMax {
             self.min = magnitude;
         }
         self.welford.add(f32::from(magnitude));
-        let count = self.welford.count;
-        if count <= super::WARMUP_SAMPLES {
+        let count = self.welford.count();
+        if count <= Welford::WARMUP_SAMPLES {
             return NoiseState::Sampling;
         }
         if !self.welford.check_due() {
@@ -72,8 +72,8 @@ impl NoiseStatistics for MinMax {
         let noise = (f64::from(half_range) * NEW_WEIGHT
             + f64::from(f32::from(noise_band)) * (1.0 - NEW_WEIGHT)) as f32;
         let noise_band = libm::ceilf(noise) as u32 as u16;
-        let rest_level =
-            (libm::ceilf(min as f32 + noise) as u32).wrapping_add(u32::from(REST_MARGIN)) as u16;
+        let rest_level = (libm::ceilf(min as f32 + noise) as u32)
+            .wrapping_add(u32::from(Switch::REST_MARGIN)) as u16;
         Calibration {
             rest_level,
             noise_band,
@@ -102,7 +102,7 @@ mod tests {
     fn a_quiet_window_completes_after_a_thousand_samples() {
         let (statistics, state) = window((0..2000).map(|index| 3 + (index % 3) as u16));
         assert_eq!(state, NoiseState::Done);
-        assert_eq!(statistics.welford.count, 1000);
+        assert_eq!(statistics.welford.count(), 1000);
         assert_eq!(statistics.max, 5);
         assert_eq!(statistics.min, 3);
     }
