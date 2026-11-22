@@ -1,4 +1,4 @@
-use openwoot::protocol::UpdateMode;
+use openwoot::protocol::{Restart, UpdateMode};
 
 use crate::{
     pac,
@@ -25,13 +25,6 @@ impl Bootloader {
         Self { pmu, rtc }
     }
 
-    pub fn restart(&mut self, option: u8) -> ! {
-        if option != 0 {
-            self.write_backup(|rtc| write_bits(rtc.bkp2(), u32::from(option)));
-        }
-        reset()
-    }
-
     pub fn take_format_request(&mut self) -> bool {
         if read_bits(self.rtc.bkp1()) != FORMAT_REQUEST {
             return false;
@@ -53,6 +46,15 @@ impl UpdateMode for Bootloader {
             write_bits(rtc.bkp0(), STAY_IN_UPDATE_MODE);
             write_bits(rtc.bkp2(), u32::from(option));
         });
+        reset()
+    }
+}
+
+impl Restart for Bootloader {
+    fn restart(&mut self, option: u8) {
+        if option != 0 {
+            self.write_backup(|rtc| write_bits(rtc.bkp2(), u32::from(option)));
+        }
         reset()
     }
 }
