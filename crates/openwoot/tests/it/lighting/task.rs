@@ -1,0 +1,154 @@
+use embassy_futures::block_on;
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use openwoot::{
+    lighting::{Key, KeyActivity, KeyEvent, KeyEvents, LedMatrix, Lighting},
+    runtime::LightingTask,
+    usb::HostState,
+};
+use openwoot_protocol::lighting::{Effects, Indicators, Settings};
+
+use super::{COLUMNS, GEOMETRY, LENGTH, MAP, PAGES, ROWS, VARIANT, effects::effect};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Call {
+    Initialize,
+    Running(bool),
+    Write(u8, u8, usize),
+}
+
+#[derive(Default)]
+struct Recorder {
+    calls: Vec<Call>,
+    failing_writes: bool,
+}
+
+#[expect(
+    clippy::unused_async_trait_impl,
+    reason = "the recorder completes every call at once"
+)]
+impl LedMatrix for Recorder {
+    type Error = ();
+
+    async fn initialize(&mut self) -> Result<(), ()> {
+        self.calls.push(Call::Initialize);
+        Ok(())
+    }
+
+    async fn set_running(&mut self, running: bool) -> Result<(), ()> {
+        self.calls.push(Call::Running(running));
+        Ok(())
+    }
+
+    async fn write(&mut self, bank: u8, first_register: u8, values: &[u8]) -> Result<(), ()> {
+        self.calls
+            .push(Call::Write(bank, first_register, values.len()));
+        if self.failing_writes { Err(()) } else { Ok(()) }
+    }
+}
+
+type Shared = Mutex<CriticalSectionRawMutex, Lighting<(), ROWS, COLUMNS, PAGES, LENGTH>>;
+
+fn shared(effects: Effects) -> Shared {
+    let mut lighting = Lighting::new(&MAP, &VARIANT, GEOMETRY, (), 0);
+    let white = openwoot_protocol::lighting::Color {
+        red: 255,
+        green: 255,
+        blue: 255,
+        alpha: 255,
+    };
+    lighting.apply_settings(
+        &Settings {
+            brightness: 255,
+            indicators: Indicators {
+                caps_lock: white,
+                scroll_lock: white,
+                num_lock: white,
+                layer_lock: white,
+            },
+            effects,
+        },
+        0,
+    );
+    Mutex::new(lighting)
+}
+
+fn writes(calls: &[Call]) -> usize {
+    calls
+        .iter()
+        .filter(|call| matches!(call, Call::Write(..)))
+        .count()
+}
+
+#[test]
+fn the_leds_wake_with_usb_and_every_page_is_sent_once() {
+    let lighting = shared(Effects::new());
+    let events = KeyEvents::new();
+    let host = HostState::new();
+    let task = LightingTask {
+        lighting: &lighting,
+        events: &events,
+        host: &host,
+    };
+    let mut matrix = Recorder::default();
+    block_on(task.step(&mut matrix, &(), 0, false));
+    assert_eq!(matrix.calls, Vec::new());
+    block_on(task.step(&mut matrix, &(), 1, true));
+    assert_eq!(matrix.calls.first(), Some(&Call::Running(true)));
+    assert_eq!(writes(&matrix.calls), PAGES);
+    assert!(matrix.calls.contains(&Call::Write(1, 0, LENGTH)));
+    matrix.calls.clear();
+    block_on(task.step(&mut matrix, &(), 2, false));
+    assert_eq!(matrix.calls, [Call::Running(false)]);
+}
+
+#[test]
+fn key_presses_reach_the_effects_through_the_event_channel() {
+    let mut effects = Effects::new();
+    effects.push(effect(11, [40, 0, 0, 0])).unwrap();
+    let lighting = shared(effects);
+    let events = KeyEvents::new();
+    let host = HostState::new();
+    let task = LightingTask {
+        lighting: &lighting,
+        events: &events,
+        host: &host,
+    };
+    let mut matrix = Recorder::default();
+    for now_ms in 0..40 {
+        block_on(task.step(&mut matrix, &(), now_ms, true));
+    }
+    let key = Key::new(2, 2);
+    events
+        .try_send(KeyActivity {
+            key,
+            event: KeyEvent::Pressed,
+            at_ms: 40,
+        })
+        .unwrap();
+    block_on(task.step(&mut matrix, &(), 40, true));
+    block_on(task.step(&mut matrix, &(), 56, true));
+    let color = block_on(lighting.lock()).key_color(key);
+    assert_eq!(color.map(|color| color.green), Some(255));
+}
+
+#[test]
+fn a_failed_write_sends_every_page_again() {
+    let lighting = shared(Effects::new());
+    let events = KeyEvents::new();
+    let host = HostState::new();
+    let task = LightingTask {
+        lighting: &lighting,
+        events: &events,
+        host: &host,
+    };
+    let mut matrix = Recorder {
+        failing_writes: true,
+        ..Recorder::default()
+    };
+    block_on(task.step(&mut matrix, &(), 1, true));
+    assert_eq!(writes(&matrix.calls), 1);
+    matrix.failing_writes = false;
+    matrix.calls.clear();
+    block_on(task.step(&mut matrix, &(), 2, true));
+    assert_eq!(writes(&matrix.calls), PAGES);
+}
