@@ -1,3 +1,5 @@
+use embassy_usb::driver;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Mode {
     Xinput,
@@ -53,6 +55,15 @@ impl KeyboardFormat {
         match self {
             Self::NKeyRollover => 0x0250,
             Self::Boot => 0x0251,
+        }
+    }
+}
+
+impl From<driver::Speed> for Speed {
+    fn from(negotiated: driver::Speed) -> Self {
+        match negotiated {
+            driver::Speed::High => Self::High,
+            driver::Speed::Full | driver::Speed::Low => Self::Full,
         }
     }
 }
