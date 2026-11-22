@@ -7,7 +7,7 @@ use core::{
 use embassy_futures::block_on;
 use embassy_sync::mutex::Mutex;
 use openwoot::{
-    keys::{Configurator, Model},
+    profile::{Configurator, Model},
     protocol::Configuration,
     storage::{NorLayout, Partition, Settings},
     usb::Mode,
@@ -16,7 +16,7 @@ use openwoot_image::Region;
 use openwoot_protocol::profile::Slot;
 
 use super::{
-    pipeline::{Bench80, FULL, KEYMAP, PROFILE_KEY, World, capabilities},
+    pipeline::{Bench80, FACTORY, FULL, PROFILE_KEY, World, capabilities},
     stalled::Stalled,
     support::{COLUMNS, KEY_A, ROWS},
 };
@@ -60,8 +60,9 @@ fn typing_goes_on_while_a_profile_switch_waits_for_a_flash_write_that_never_ends
     let world = World::new();
     let model = Mutex::new(block_on(Model::<_, _, ROWS, COLUMNS>::open(
         &world.shared,
+        &world.profile,
         stalled_storage(),
-        KEYMAP,
+        &FACTORY,
         0,
         4,
     )));
@@ -88,7 +89,7 @@ fn typing_goes_on_while_a_profile_switch_waits_for_a_flash_write_that_never_ends
         bench.cycle();
     }
     assert!(poll_once(activation.as_mut()).is_pending());
-    assert_eq!(bench.keys.profiles().active(), 0);
+    assert_eq!(bench.keys.profiles().active(), 1);
 }
 
 #[test]

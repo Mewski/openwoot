@@ -1,9 +1,11 @@
 use embassy_futures::block_on;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use openwoot::{
-    keys::{Configurator, Key, Keyboard, Keys, Model, Shared},
+    diagnostics::{Diagnostics, Hardware},
+    keys::{Key, Keyboard, Keys, Shared, default_settings},
     layout::{DefaultKeymap, Standard},
     lighting::KeyEvents,
+    profile::{self, Configurator, Factory, Model, Preset},
     protocol::Configuration,
     runtime::{KeyNotices, KeyReports, KeyTask, Progress},
     scan::{self, Map, Position, Scanner},
@@ -14,9 +16,12 @@ use openwoot_image::Region;
 use openwoot_protocol::{
     advanced::{self, Behaviour},
     config::Capabilities,
+    diagnostics::{self, Usb},
     gamepad::{self, Control},
+    global,
     heapless::Vec as Bounded,
     keys::{self as config, Action, Distance, Index, Layer},
+    lighting::{Color, Indicators, Rgb},
     profile::Slot,
 };
 
@@ -60,6 +65,50 @@ const LAYERS: [[[Action; COLUMNS]; ROWS]; 1] = [[
 pub(super) const KEYMAP: DefaultKeymap<ROWS, COLUMNS> = DefaultKeymap {
     layers: &LAYERS,
     variant_patches: &[],
+};
+pub(super) const WHITE: Color = Color {
+    red: 255,
+    green: 255,
+    blue: 255,
+    alpha: 255,
+};
+pub(super) const INDICATORS: Indicators = Indicators {
+    caps_lock: WHITE,
+    scroll_lock: WHITE,
+    num_lock: WHITE,
+    layer_lock: WHITE,
+};
+pub(super) const GLOBAL: global::Settings = global::Settings {
+    idle: None,
+    num_lock_inverted: false,
+    release_rebound_filter: false,
+};
+pub(super) static FACTORY: Factory<ROWS, COLUMNS> = Factory {
+    keymap: KEYMAP,
+    presets: &[],
+    fallback: Preset {
+        name: "",
+        color: Rgb {
+            red: 0,
+            green: 0,
+            blue: 0,
+        },
+        keys: default_settings(),
+        lighting: openwoot_protocol::lighting::Settings {
+            brightness: 255,
+            indicators: INDICATORS,
+            effects: Bounded::new(),
+        },
+        colors: [None, None, None, None],
+    },
+    created: 4,
+    global: GLOBAL,
+    face: Face {
+        mode: Mode::NoGamepad,
+        keyboard: openwoot::usb::KeyboardFormat::NKeyRollover,
+        speed: openwoot::usb::Speed::High,
+        gamepad_polling: openwoot::usb::PollingRate::Every1Millisecond,
+    },
 };
 const NONE: u8 = 0xFF;
 const MAP: Map<6, 15> = Map::from_codes([
@@ -188,20 +237,24 @@ impl<'a> Bench80<'a> {
 
 pub(super) struct World {
     pub(super) shared: Shared<Mutual>,
+    pub(super) profile: profile::Shared<Mutual>,
     pub(super) reports: KeyReports<Mutual>,
     pub(super) events: KeyEvents,
     notices: KeyNotices,
     host: HostState,
+    diagnostics: Diagnostics,
 }
 
 impl World {
     pub(super) fn new() -> Self {
         Self {
             shared: Shared::new(),
+            profile: profile::Shared::new(),
             reports: KeyReports::new(),
             events: KeyEvents::new(),
             notices: KeyNotices::new(),
             host: HostState::new(),
+            diagnostics: Diagnostics::new(),
         }
     }
 
@@ -216,11 +269,26 @@ impl World {
                 mode,
                 ..Face::default()
             },
+            diagnostics: &self.diagnostics,
         }
     }
 
     pub(super) fn model(&self) -> Mutex<Mutual, Model<'_, Mutual, Nor, ROWS, COLUMNS>> {
-        Mutex::new(block_on(Model::open(&self.shared, storage(), KEYMAP, 0, 4)))
+        self.model_with(&FACTORY)
+    }
+
+    pub(super) fn model_with(
+        &self,
+        factory: &'static Factory<ROWS, COLUMNS>,
+    ) -> Mutex<Mutual, Model<'_, Mutual, Nor, ROWS, COLUMNS>> {
+        Mutex::new(block_on(Model::open(
+            &self.shared,
+            &self.profile,
+            storage(),
+            factory,
+            0,
+            4,
+        )))
     }
 
     pub(super) fn keyboard(&self) -> Option<Vec<u8>> {
@@ -279,7 +347,7 @@ fn rapid_trigger_from_the_configuration_channel_applies_between_cycles() {
             release: None,
             continuous: false,
         },
-        ..openwoot::keys::default_settings()
+        ..default_settings()
     };
     block_on(configurator.set_key_settings(Slot::new(0), settings)).unwrap();
     let rapid: Vec<bool> = [0, FULL, THREE_QUARTERS, FULL]
@@ -376,6 +444,18 @@ fn a_profile_key_switches_the_profile_through_the_configuration_model() {
     block_on(configurator.activate_profile(Slot::new(requested))).unwrap();
     bench.cycle();
     assert_eq!(bench.keys.profiles().active(), 1);
+    let report = world
+        .diagnostics
+        .report(Usb::default(), Hardware::default());
+    assert_eq!(
+        report.profile,
+        diagnostics::Profile {
+            active: Some(1),
+            requests: 1,
+            switches: 1,
+        }
+    );
+    assert!(report.keys.passes > 0 && report.keys.reports > 0);
     assert_eq!(
         block_on(configurator.profiles()).map(|summary| summary.active),
         Ok(Slot::new(1))
@@ -400,13 +480,13 @@ fn unsaved_changes_are_dropped_by_revert_and_kept_by_save() {
     let mut configurator = Configurator::new(&model, capabilities());
     let changed = config::Settings {
         rapid_trigger_enabled: true,
-        ..openwoot::keys::default_settings()
+        ..default_settings()
     };
     block_on(configurator.set_key_settings(Slot::new(0), changed)).unwrap();
     block_on(configurator.revert()).unwrap();
     assert_eq!(
         block_on(configurator.key_settings(Slot::new(0))),
-        Ok(openwoot::keys::default_settings())
+        Ok(default_settings())
     );
     block_on(configurator.set_key_settings(Slot::new(0), changed)).unwrap();
     block_on(configurator.save()).unwrap();

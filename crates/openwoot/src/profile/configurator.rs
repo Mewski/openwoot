@@ -1,11 +1,13 @@
+use embassy_futures::select::{Either, select};
 use embassy_sync::{blocking_mutex::raw::RawMutex, mutex::Mutex};
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use openwoot_protocol::{
     advanced,
     config::{Capabilities, Rejection},
-    gamepad,
+    device, gamepad, global,
     keys::{self as config, Keymap, Layer, Overrides},
-    profile::{Slot, Summary},
+    lighting::{self, KeyColors},
+    profile::{Info, Slot, Summary},
 };
 
 use super::Model;
@@ -36,11 +38,20 @@ where
         }
     }
 
-    pub async fn serve_profile_keys(&self) -> ! {
-        let shared = self.model.lock().await.shared();
+    pub async fn serve(&self) -> ! {
+        let (keys, shared) = {
+            let model = self.model.lock().await;
+            (model.keys(), model.shared())
+        };
         loop {
-            let profile = shared.profile_request().await;
-            let _ = self.model.lock().await.activate(Slot::new(profile)).await;
+            match select(keys.profile_request(), shared.brightness_saved()).await {
+                Either::First(profile) => {
+                    let _ = self.model.lock().await.activate(Slot::new(profile)).await;
+                }
+                Either::Second(_) => {
+                    let _ = self.model.lock().await.save_brightness().await;
+                }
+            }
         }
     }
 }
@@ -55,12 +66,50 @@ where
         Ok(self.capabilities.clone())
     }
 
+    async fn device_settings(&mut self) -> Result<device::Settings, Rejection> {
+        Ok(self.model.lock().await.device_settings())
+    }
+
+    async fn set_device_settings(&mut self, settings: device::Settings) -> Result<(), Rejection> {
+        self.model.lock().await.set_device_settings(settings);
+        Ok(())
+    }
+
+    async fn global_settings(&mut self) -> Result<global::Settings, Rejection> {
+        Ok(self.model.lock().await.global_settings())
+    }
+
+    async fn set_global_settings(&mut self, settings: global::Settings) -> Result<(), Rejection> {
+        self.model.lock().await.set_global_settings(settings);
+        Ok(())
+    }
+
     async fn profiles(&mut self) -> Result<Summary, Rejection> {
         Ok(self.model.lock().await.summary())
     }
 
+    async fn create_profile(&mut self) -> Result<Slot, Rejection> {
+        self.model.lock().await.create().await
+    }
+
+    async fn delete_profile(&mut self, profile: Slot) -> Result<(), Rejection> {
+        self.model.lock().await.delete(profile).await
+    }
+
     async fn activate_profile(&mut self, profile: Slot) -> Result<(), Rejection> {
         self.model.lock().await.activate(profile).await
+    }
+
+    async fn profile_info(&mut self, profile: Slot) -> Result<Info, Rejection> {
+        self.model.lock().await.info(profile).await
+    }
+
+    async fn set_profile_info(&mut self, profile: Slot, info: Info) -> Result<(), Rejection> {
+        self.model.lock().await.set_info(profile, info).await
+    }
+
+    async fn profile_revision(&mut self, profile: Slot) -> Result<u32, Rejection> {
+        self.model.lock().await.revision(profile).await
     }
 
     async fn key_settings(&mut self, profile: Slot) -> Result<config::Settings, Rejection> {
@@ -153,6 +202,43 @@ where
             .lock()
             .await
             .set_gamepad_settings(profile, settings)
+            .await
+    }
+
+    async fn lighting(&mut self, profile: Slot) -> Result<lighting::Settings, Rejection> {
+        self.model.lock().await.lighting(profile).await
+    }
+
+    async fn set_lighting(
+        &mut self,
+        profile: Slot,
+        settings: lighting::Settings,
+    ) -> Result<(), Rejection> {
+        self.model
+            .lock()
+            .await
+            .set_lighting(profile, settings)
+            .await
+    }
+
+    async fn key_colors(
+        &mut self,
+        profile: Slot,
+        layer: Layer,
+    ) -> Result<Option<KeyColors>, Rejection> {
+        self.model.lock().await.key_colors(profile, layer).await
+    }
+
+    async fn set_key_colors(
+        &mut self,
+        profile: Slot,
+        layer: Layer,
+        colors: Option<KeyColors>,
+    ) -> Result<(), Rejection> {
+        self.model
+            .lock()
+            .await
+            .set_key_colors(profile, layer, colors)
             .await
     }
 

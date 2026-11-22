@@ -1,6 +1,6 @@
 use core::{
     cell::RefCell,
-    sync::atomic::{AtomicU8, Ordering},
+    sync::atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
 use embassy_sync::{
@@ -16,6 +16,7 @@ pub struct Shared<M: RawMutex> {
     profiles: AtomicU8,
     active: AtomicU8,
     requests: Signal<M, u8>,
+    rebound_filter: AtomicBool,
 }
 
 impl<M: RawMutex> Shared<M> {
@@ -27,6 +28,7 @@ impl<M: RawMutex> Shared<M> {
             profiles: AtomicU8::new(1),
             active: AtomicU8::new(0),
             requests: Signal::new(),
+            rebound_filter: AtomicBool::new(false),
         }
     }
 
@@ -35,6 +37,21 @@ impl<M: RawMutex> Shared<M> {
         self.profiles.store(count, Ordering::Relaxed);
         self.active.store(active, Ordering::Relaxed);
         self.mark(Parts::ALL.union(Parts::ACTIVATED));
+    }
+
+    pub fn set_profiles(&self, count: u8, active: u8) {
+        self.profiles.store(count, Ordering::Relaxed);
+        self.active.store(active, Ordering::Relaxed);
+        self.mark(Parts::PROFILES);
+    }
+
+    pub fn set_rebound_filter(&self, enabled: bool) {
+        self.rebound_filter.store(enabled, Ordering::Relaxed);
+    }
+
+    #[must_use]
+    pub fn rebound_filter(&self) -> bool {
+        self.rebound_filter.load(Ordering::Relaxed)
     }
 
     pub fn change<R>(&self, parts: Parts, change: impl FnOnce(&mut Profile) -> R) -> Option<R> {

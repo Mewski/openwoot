@@ -59,6 +59,7 @@ impl Parts {
     pub const KEYMAPS: Self = Self(1 << 1);
     pub const NONE: Self = Self(0);
     pub const OVERRIDES: Self = Self(1 << 2);
+    pub const PROFILES: Self = Self(1 << 7);
     pub const SETTINGS: Self = Self(1 << 0);
 
     #[must_use]

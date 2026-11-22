@@ -1,13 +1,11 @@
 mod actuation;
 mod advanced;
-mod configurator;
 mod configure;
 mod controller;
 mod distance;
 mod engine;
 mod functions;
 mod key;
-mod model;
 mod notice;
 mod output;
 mod profile;
@@ -24,7 +22,6 @@ pub use advanced::{
     ModTap, ModTapState, PAIR_FULL_TRAVEL, PENDING_SLOTS, PairState, Pending, Phase, Side,
     SlotChange, State, Thresholds, ToggleState,
 };
-pub use configurator::Configurator;
 pub use controller::{
     AxisPriority, Gamepad, GamepadInput, combine_axis, follows_travel, gamepad_code,
     gamepad_control, normalize_travel, response_curve, shape_stick,
@@ -33,7 +30,6 @@ pub use distance::travel_of;
 pub use engine::{Keys, Switch};
 pub use functions::{Effects, Functions};
 pub use key::Key;
-pub use model::Model;
 pub use notice::Notice;
 pub use output::{GamepadReport, Keyboard, NOTICE_CAPACITY, Output, follows_travel_action};
 pub use profile::{
