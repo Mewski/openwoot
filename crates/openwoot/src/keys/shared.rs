@@ -10,6 +10,10 @@ use embassy_sync::{
 
 use super::{Parts, Profile};
 
+pub trait ProfileSource {
+    fn read<R>(&self, read: impl FnOnce(&Profile) -> R) -> Option<R>;
+}
+
 pub struct Shared<M: RawMutex> {
     profile: Mutex<M, RefCell<Option<Profile>>>,
     changes: AtomicU8,
@@ -68,11 +72,6 @@ impl<M: RawMutex> Shared<M> {
         result
     }
 
-    pub fn read<R>(&self, read: impl FnOnce(&Profile) -> R) -> Option<R> {
-        self.profile
-            .lock(|cell| cell.try_borrow().ok()?.as_ref().map(read))
-    }
-
     #[must_use]
     pub fn take_changes(&self) -> Parts {
         Parts::from_bits(self.changes.swap(0, Ordering::AcqRel))
@@ -96,6 +95,13 @@ impl<M: RawMutex> Shared<M> {
 
     fn mark(&self, parts: Parts) {
         self.changes.fetch_or(parts.bits(), Ordering::AcqRel);
+    }
+}
+
+impl<M: RawMutex> ProfileSource for Shared<M> {
+    fn read<R>(&self, read: impl FnOnce(&Profile) -> R) -> Option<R> {
+        self.profile
+            .lock(|cell| cell.try_borrow().ok()?.as_ref().map(read))
     }
 }
 

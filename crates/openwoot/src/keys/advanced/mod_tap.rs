@@ -22,7 +22,7 @@ pub enum Decision {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SlotChange {
+pub(crate) enum SlotChange {
     Keep,
     Release(u8),
     Take,
@@ -80,11 +80,6 @@ impl ModTapState {
     #[must_use]
     pub const fn decision(&self) -> Decision {
         self.decision
-    }
-
-    #[must_use]
-    pub const fn slot(&self) -> Option<u8> {
-        self.slot
     }
 
     pub(in crate::keys) const fn set_slot(&mut self, slot: Option<u8>) {

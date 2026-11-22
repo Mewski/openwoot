@@ -2,7 +2,7 @@ use openwoot_protocol::keys::{Action, Function, Layer};
 
 use super::Key;
 
-pub const SPECIALS: usize = 15;
+pub(crate) const SPECIALS: usize = 15;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Special {

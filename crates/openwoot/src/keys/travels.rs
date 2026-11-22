@@ -1,6 +1,6 @@
 use embassy_sync::blocking_mutex::raw::RawMutex;
 
-use super::{Key, Shared, normalize_travel, response_curve};
+use super::{Key, ProfileSource, Shared, normalize_travel, response_curve};
 use crate::{
     lighting::{KeyTravel, TRAVEL_FULL},
     scan::{Map, Travel},

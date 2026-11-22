@@ -18,5 +18,6 @@ pub use axis::{AxisPriority, combine_axis};
 pub use curve::{normalize_travel, response_curve};
 pub use gamepad::Gamepad;
 pub use input::GamepadInput;
-pub use key_code::{follows_travel, gamepad_code, gamepad_control};
+pub use key_code::follows_travel;
+pub(crate) use key_code::gamepad_code;
 pub use stick::shape_stick;

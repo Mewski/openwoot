@@ -30,7 +30,7 @@ pub struct Switch {
 
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "the report format, key reports, detection and the gamepad option are independent switches"
+    reason = "the report format, key reports, gamepad detection and the gamepad option are independent switches"
 )]
 #[derive(Debug)]
 pub struct Keys<F: Functions, const ROWS: usize, const COLUMNS: usize> {
@@ -50,11 +50,9 @@ pub struct Keys<F: Functions, const ROWS: usize, const COLUMNS: usize> {
     mode: Mode,
     boot_format: bool,
     key_reports: bool,
-    detection: bool,
-    player: Option<u8>,
+    gamepad_detection: bool,
+    xinput_player: Option<u8>,
     elapsed_ms: u16,
-    last_pressed: Option<Key>,
-    deepest: u16,
 }
 
 impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMNS> {
@@ -77,21 +75,15 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
             mode: Mode::NoGamepad,
             boot_format: false,
             key_reports: true,
-            detection: false,
-            player: None,
+            gamepad_detection: false,
+            xinput_player: None,
             elapsed_ms: 0,
-            last_pressed: None,
-            deepest: 0,
         }
     }
 
     #[must_use]
     pub const fn functions(&self) -> &F {
         &self.functions
-    }
-
-    pub const fn functions_mut(&mut self) -> &mut F {
-        &mut self.functions
     }
 
     #[must_use]
@@ -132,16 +124,6 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
     #[must_use]
     pub const fn mode(&self) -> Mode {
         self.mode
-    }
-
-    #[must_use]
-    pub const fn last_pressed(&self) -> Option<Key> {
-        self.last_pressed
-    }
-
-    #[must_use]
-    pub const fn deepest_travel(&self) -> u16 {
-        self.deepest
     }
 
     #[must_use]
@@ -199,12 +181,12 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         self.key_reports = key_reports;
     }
 
-    pub const fn set_detection(&mut self, detection: bool) {
-        self.detection = detection;
+    pub const fn set_gamepad_detection(&mut self, gamepad_detection: bool) {
+        self.gamepad_detection = gamepad_detection;
     }
 
-    pub const fn set_player(&mut self, player: Option<u8>) {
-        self.player = player;
+    pub const fn set_xinput_player(&mut self, xinput_player: Option<u8>) {
+        self.xinput_player = xinput_player;
     }
 
     pub const fn set_gamepad_settings(&mut self, settings: Option<gamepad::Settings>) {
@@ -247,12 +229,6 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
     pub fn set_gamepad_binding(&mut self, key: Key, control: Option<Control>) {
         if let Some(record) = self.slot_mut(key) {
             record.gamepad = control;
-        }
-    }
-
-    pub fn set_actuation(&mut self, key: Key, actuation: Actuation) {
-        if let Some(record) = self.slot_mut(key) {
-            record.actuation = actuation;
         }
     }
 
@@ -366,12 +342,10 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
     pub fn begin_pass(&mut self, elapsed_ms: u16) {
         self.output.clear(self.boot_format);
         self.requests.clear();
-        self.last_pressed = None;
-        self.deepest = 0;
         self.elapsed_ms = elapsed_ms;
     }
 
-    pub fn finish_pass(&mut self) -> &Output {
+    fn finish_pass(&mut self) -> &Output {
         self.resolve_pairs();
         self.build_gamepad_report();
         if self.key_reports {
@@ -457,7 +431,6 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         if !self.update_common(key, travel, index) {
             self.emit(key, travel, layer);
         }
-        self.deepest = self.deepest.max(travel);
     }
 
     fn update_press_state(&mut self, key: Key, travel: u16) {
@@ -680,12 +653,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         if travel == 0 {
             record.ignore_until_release = false;
         }
-        let pressed = record.actuation.is_pressed();
-        let deferred = record.defer_output;
-        if pressed {
-            self.last_pressed = Some(key);
-        }
-        if !deferred {
+        if !record.defer_output {
             return false;
         }
         let pair_owns = index.is_some()
@@ -870,13 +838,13 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
     fn build_gamepad_report(&mut self) {
         let settings = self.gamepad_settings.as_ref();
         let report = match self.mode {
-            Mode::Xinput => GamepadReport::Xinput(if self.detection {
-                Gamepad::xinput_detection(self.player)
+            Mode::Xinput => GamepadReport::Xinput(if self.gamepad_detection {
+                Gamepad::xinput_detection(self.xinput_player)
             } else {
                 self.gamepad
                     .xinput_report(self.output.gamepad_input(), settings)
             }),
-            Mode::Gamepad => GamepadReport::Hid(if self.detection {
+            Mode::Gamepad => GamepadReport::Hid(if self.gamepad_detection {
                 Gamepad::hid_detection()
             } else {
                 let mut input = *self.output.gamepad_input();

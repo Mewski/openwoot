@@ -16,27 +16,29 @@ mod special;
 mod travels;
 mod tuning;
 
-pub use actuation::{Actuation, FOLLOW_STEP, PRESS_HYSTERESIS, RELEASE_FLOOR, Trigger, Zone};
+pub use actuation::{Actuation, Trigger, Zone};
 pub use advanced::{
-    Advanced, Behaviour, DEFAULT_BOTTOM_OUT, Decision, DynamicKeystrokeState, Entry, Last, Latch,
-    ModTap, ModTapState, PAIR_FULL_TRAVEL, PENDING_SLOTS, PairState, Pending, Phase, Side,
-    SlotChange, State, Thresholds, ToggleState,
+    Advanced, Behaviour, Decision, DynamicKeystrokeState, Entry, Last, ModTap, ModTapState,
+    PairState, Phase, Side, State, ToggleState,
 };
+pub(crate) use advanced::{Latch, Pending, SlotChange, Thresholds};
+pub(crate) use controller::gamepad_code;
 pub use controller::{
-    AxisPriority, Gamepad, GamepadInput, combine_axis, follows_travel, gamepad_code,
-    gamepad_control, normalize_travel, response_curve, shape_stick,
+    AxisPriority, Gamepad, GamepadInput, combine_axis, follows_travel, normalize_travel,
+    response_curve, shape_stick,
 };
 pub use distance::travel_of;
 pub use engine::{Keys, Switch};
 pub use functions::{Effects, Functions};
 pub use key::Key;
 pub use notice::Notice;
-pub use output::{GamepadReport, Keyboard, NOTICE_CAPACITY, Output, follows_travel_action};
-pub use profile::{
-    ActiveProfile, IDENTITY_CURVE, Keymaps, Parts, Profile, default_gamepad_settings,
-};
+pub use output::{GamepadReport, Keyboard, Output};
+pub(crate) use output::{NOTICE_CAPACITY, follows_travel_action};
+pub use profile::{ActiveProfile, Keymaps, Parts, Profile, default_gamepad_settings};
 pub use rapid_trigger::{RapidTrigger, RapidTriggerOverride};
-pub use shared::Shared;
-pub use special::{Call, SPECIALS, Special};
+pub use shared::{ProfileSource, Shared};
+pub(crate) use special::SPECIALS;
+pub use special::{Call, Special};
 pub use travels::Travels;
-pub use tuning::{DEFAULT_MINIMUM, Tuning, default_settings};
+pub(crate) use tuning::DEFAULT_MINIMUM;
+pub use tuning::{Tuning, default_settings};

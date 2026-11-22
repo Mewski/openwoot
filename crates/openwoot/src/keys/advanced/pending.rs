@@ -1,6 +1,6 @@
 use crate::keys::Key;
 
-pub const PENDING_SLOTS: usize = 5;
+const PENDING_SLOTS: usize = 5;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Slot {
@@ -9,14 +9,14 @@ struct Slot {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Pending {
+pub(crate) struct Pending {
     slots: [Slot; PENDING_SLOTS],
     top: Option<u8>,
 }
 
 impl Pending {
     #[must_use]
-    pub const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             slots: [Slot {
                 in_use: false,
@@ -27,19 +27,19 @@ impl Pending {
     }
 
     #[must_use]
-    pub const fn top(&self) -> Option<u8> {
+    pub(crate) const fn top(&self) -> Option<u8> {
         self.top
     }
 
     #[must_use]
-    pub fn key(&self, slot: u8) -> Option<Key> {
+    pub(crate) fn key(&self, slot: u8) -> Option<Key> {
         self.slots
             .get(usize::from(slot))
             .filter(|slot| slot.in_use)
             .and_then(|slot| slot.key)
     }
 
-    pub fn take(&mut self, key: Key) -> Option<u8> {
+    pub(crate) fn take(&mut self, key: Key) -> Option<u8> {
         let (index, slot) = self
             .slots
             .iter_mut()
@@ -56,7 +56,7 @@ impl Pending {
         Some(index)
     }
 
-    pub fn release(&mut self, slot: u8) {
+    pub(crate) fn release(&mut self, slot: u8) {
         let Some(top) = self.top else {
             return;
         };
@@ -71,7 +71,7 @@ impl Pending {
         }
     }
 
-    pub fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         *self = Self::new();
     }
 }

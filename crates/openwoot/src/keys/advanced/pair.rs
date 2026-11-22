@@ -1,7 +1,6 @@
 use openwoot_protocol::advanced::Resolution;
 
-pub const FULL_TRAVEL: u16 = 0xFAD;
-
+const FULL_TRAVEL: u16 = 0xFAD;
 const SAME_DEPTH: i32 = 159;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -11,7 +11,7 @@ use crate::{
     xinput,
 };
 
-pub const NOTICE_CAPACITY: usize = 64;
+pub(crate) const NOTICE_CAPACITY: usize = 64;
 
 const KEY_STATE_TRAVEL_FULL: u32 = 1023;
 
@@ -210,7 +210,7 @@ fn key_state_code(action: Action) -> (u8, KeyStateKind) {
 const MOUSE_FIRST_CODE: u8 = 4;
 
 #[must_use]
-pub fn follows_travel_action(action: Action) -> bool {
+pub(crate) fn follows_travel_action(action: Action) -> bool {
     matches!(action, Action::Gamepad(control) if follows_travel(control))
 }
 

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::default_settings;
 use crate::{layout::LAYERS, storage::Record};
 
-pub const IDENTITY_CURVE: [CurvePoint; gamepad::CURVE_POINTS] = [
+const IDENTITY_CURVE: [CurvePoint; gamepad::CURVE_POINTS] = [
     CurvePoint {
         travel: 0,
         output: 0,

@@ -1,9 +1,9 @@
 use super::RapidTrigger;
 use crate::lighting::TRAVEL_FULL;
 
-pub const PRESS_HYSTERESIS: u16 = 96;
-pub const RELEASE_FLOOR: u16 = 16;
-pub const FOLLOW_STEP: i32 = 32;
+const PRESS_HYSTERESIS: u16 = 96;
+const RELEASE_FLOOR: u16 = 16;
+const FOLLOW_STEP: i32 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Trigger {
@@ -273,7 +273,7 @@ mod tests {
         );
         assert_eq!(actuation.update(905, 1000, trigger), None);
         assert_eq!(actuation.update(900, 1000, trigger), Some(Zone::Left));
-        assert!(!actuation.is_pressed() && !actuation.is_engaged());
+        assert!(!actuation.is_pressed() && !actuation.engaged);
     }
 
     #[test]

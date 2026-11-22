@@ -4,16 +4,19 @@ mod pair;
 mod pending;
 mod toggle;
 
-pub use dynamic_keystroke::{DEFAULT_BOTTOM_OUT, DynamicKeystrokeState, Phase, Thresholds};
+pub(crate) use dynamic_keystroke::Thresholds;
+pub use dynamic_keystroke::{DynamicKeystrokeState, Phase};
 use heapless::Vec;
-pub use mod_tap::{Decision, ModTap, ModTapState, SlotChange};
+pub(crate) use mod_tap::SlotChange;
+pub use mod_tap::{Decision, ModTap, ModTapState};
 use openwoot_protocol::{
     advanced::{self as config, MAX_ENTRIES, STROKES, Stroke},
     keys::Action,
 };
-pub use pair::{FULL_TRAVEL as PAIR_FULL_TRAVEL, Last, PairState, Side};
-pub use pending::{PENDING_SLOTS, Pending};
-pub use toggle::{Latch, ToggleState};
+pub use pair::{Last, PairState, Side};
+pub(crate) use pending::Pending;
+pub(crate) use toggle::Latch;
+pub use toggle::ToggleState;
 
 use super::{Key, travel_of};
 

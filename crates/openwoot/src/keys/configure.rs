@@ -1,59 +1,70 @@
-use openwoot_protocol::{
-    advanced, gamepad,
-    keys::{self as config, Layer},
-};
+use openwoot_protocol::{advanced, keys::Layer};
 
 use super::{
-    Entry, Functions, Key, Keymaps, Keys, Parts, Profile, RapidTriggerOverride, Switch, Tuning,
+    Entry, Functions, Key, Keys, Parts, ProfileSource, RapidTriggerOverride, Switch, Tuning,
     travel_of,
 };
 use crate::{analog, lighting::TRAVEL_FULL};
 
 impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMNS> {
-    pub fn configure(&mut self, profile: &Profile, parts: Parts) {
+    pub fn configure(&mut self, profile: &impl ProfileSource, parts: Parts) {
         if parts.contains(Parts::ACTIVATED) {
             self.reset_keys();
         }
         if parts.contains(Parts::SETTINGS) {
-            self.configure_settings(&profile.settings);
+            self.configure_settings(profile);
         }
         if parts.contains(Parts::KEYMAPS) {
-            self.configure_keymaps(&profile.keymaps);
+            self.configure_keymaps(profile);
         }
         if parts.contains(Parts::OVERRIDES) {
-            self.configure_overrides(&profile.overrides);
+            self.configure_overrides(profile);
         }
         if parts.contains(Parts::ADVANCED) {
-            self.configure_advanced(&profile.advanced);
+            self.configure_advanced(profile);
         }
         if parts.contains(Parts::GAMEPAD_MAPPING) {
-            self.configure_gamepad_mapping(&profile.gamepad_mapping);
+            self.configure_gamepad_mapping(profile);
         }
-        if parts.contains(Parts::GAMEPAD_SETTINGS) {
-            self.set_gamepad_settings(Some(profile.gamepad_settings));
+        if parts.contains(Parts::GAMEPAD_SETTINGS)
+            && let Some(settings) = profile.read(|profile| profile.gamepad_settings)
+        {
+            self.set_gamepad_settings(Some(settings));
         }
     }
 
-    pub fn configure_settings(&mut self, settings: &config::Settings) {
-        let minimum = self.largest_minimum();
-        self.set_tuning(Tuning::from_config(settings, minimum));
+    fn configure_settings(&mut self, profile: &impl ProfileSource) {
+        if let Some(settings) = profile.read(|profile| profile.settings) {
+            let minimum = self.largest_minimum();
+            self.set_tuning(Tuning::from_config(&settings, minimum));
+        }
     }
 
-    pub fn configure_keymaps(&mut self, keymaps: &Keymaps) {
-        for (layer, keymap) in Layer::ALL.into_iter().zip(&keymaps.0) {
+    fn configure_keymaps(&mut self, profile: &impl ProfileSource) {
+        for (index, layer) in Layer::ALL.into_iter().enumerate() {
             for key in matrix::<ROWS, COLUMNS>() {
-                let action = keymap.get(key.index(COLUMNS)).copied().unwrap_or_default();
-                self.set_action(key, layer, action);
+                let Some(action) = profile.read(|profile| {
+                    profile
+                        .keymaps
+                        .0
+                        .get(index)
+                        .and_then(|keymap| keymap.get(key.index(COLUMNS)).copied())
+                }) else {
+                    return;
+                };
+                self.set_action(key, layer, action.unwrap_or_default());
             }
         }
     }
 
-    pub fn configure_overrides(&mut self, overrides: &config::Overrides) {
+    fn configure_overrides(&mut self, profile: &impl ProfileSource) {
         for key in matrix::<ROWS, COLUMNS>() {
-            let entry = overrides
-                .get(key.index(COLUMNS))
-                .copied()
-                .unwrap_or_default();
+            let Some(entry) =
+                profile.read(|profile| profile.overrides.get(key.index(COLUMNS)).copied())
+            else {
+                return;
+            };
+            let entry = entry.unwrap_or_default();
             let minimum = self.minimum_or_default(key);
             self.set_override(
                 key,
@@ -63,23 +74,42 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         }
     }
 
-    pub fn configure_advanced(&mut self, entries: &advanced::Keys) {
+    fn configure_advanced(&mut self, profile: &impl ProfileSource) {
         let mut converted = heapless::Vec::<Entry, { advanced::MAX_ENTRIES }>::new();
-        let entries = entries.iter().filter_map(|entry| {
-            Entry::from_config(entry, COLUMNS, |key| self.minimum_or_default(key))
-        });
-        for entry in entries {
-            if converted.push(entry).is_err() {
+        for position in 0..advanced::MAX_ENTRIES {
+            let Some(entry) = profile.read(|profile| profile.advanced.get(position).copied())
+            else {
+                return;
+            };
+            let Some(entry) = entry else {
+                break;
+            };
+            if let Some(entry) =
+                Entry::from_config(&entry, COLUMNS, |key| self.minimum_or_default(key))
+                && converted.push(entry).is_err()
+            {
                 break;
             }
         }
         self.set_advanced(converted);
     }
 
-    pub fn configure_gamepad_mapping(&mut self, mapping: &gamepad::Mapping) {
-        self.set_gamepad_exclusive(mapping.exclusive);
+    fn configure_gamepad_mapping(&mut self, profile: &impl ProfileSource) {
+        let Some(exclusive) = profile.read(|profile| profile.gamepad_mapping.exclusive) else {
+            return;
+        };
+        self.set_gamepad_exclusive(exclusive);
         for key in matrix::<ROWS, COLUMNS>() {
-            let control = mapping.bindings.get(key.index(COLUMNS)).copied().flatten();
+            let Some(control) = profile.read(|profile| {
+                profile
+                    .gamepad_mapping
+                    .bindings
+                    .get(key.index(COLUMNS))
+                    .copied()
+                    .flatten()
+            }) else {
+                return;
+            };
             self.set_gamepad_binding(key, control);
         }
     }
@@ -127,4 +157,99 @@ fn matrix<const ROWS: usize, const COLUMNS: usize>() -> impl Iterator<Item = Key
             ))
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use core::cell::Cell;
+
+    use openwoot_protocol::{
+        advanced::Behaviour,
+        gamepad::Control,
+        keys::{Action, Distance, Index, Override},
+    };
+
+    use super::*;
+    use crate::{
+        keys::{DEFAULT_MINIMUM, Profile},
+        layout::LAYERS,
+    };
+
+    const ROWS: usize = 2;
+    const COLUMNS: usize = 3;
+    const KEYS: usize = ROWS * COLUMNS;
+
+    struct Counted {
+        profile: Profile,
+        reads: Cell<usize>,
+        largest: Cell<usize>,
+    }
+
+    impl ProfileSource for Counted {
+        fn read<R>(&self, read: impl FnOnce(&Profile) -> R) -> Option<R> {
+            self.reads.set(self.reads.get() + 1);
+            self.largest.set(self.largest.get().max(size_of::<R>()));
+            Some(read(&self.profile))
+        }
+    }
+
+    fn full_profile() -> Profile {
+        let mut profile = Profile::empty();
+        for (layer, keymap) in (0u8..).zip(profile.keymaps.0.iter_mut()) {
+            keymap.extend(
+                (0u8..)
+                    .take(KEYS)
+                    .map(|key| Action::Keyboard(layer * 16 + key)),
+            );
+        }
+        profile.overrides.extend(core::iter::repeat_n(
+            Override {
+                actuation: Some(Distance::from_fraction(0x8000)),
+                ..Override::default()
+            },
+            KEYS,
+        ));
+        profile.advanced.extend((0u8..2).map(|key| advanced::Key {
+            key: Index::new(key),
+            layer: Layer::Base,
+            behaviour: Behaviour::Toggle(Action::Keyboard(0x04)),
+        }));
+        profile
+            .gamepad_mapping
+            .bindings
+            .extend(core::iter::repeat_n(Some(Control::ButtonA), KEYS));
+        profile
+    }
+
+    #[test]
+    fn configuring_keys_copies_at_most_one_entry_per_critical_section() {
+        let source = Counted {
+            profile: full_profile(),
+            reads: Cell::new(0),
+            largest: Cell::new(0),
+        };
+        let mut keys = Keys::<(), ROWS, COLUMNS>::new(());
+        for key in matrix::<ROWS, COLUMNS>() {
+            keys.set_switch(
+                key,
+                Switch {
+                    minimum: DEFAULT_MINIMUM,
+                    travel_limit: TRAVEL_FULL,
+                },
+            );
+        }
+        keys.configure(&source, Parts::ALL.union(Parts::ACTIVATED));
+
+        let entries = LAYERS * KEYS + KEYS + source.profile.advanced.len() + KEYS;
+        assert!(source.reads.get() >= entries);
+        assert!(source.largest.get() <= size_of::<Option<advanced::Key>>());
+        assert_eq!(
+            keys.action(Key::new(1, 2), Layer::Three),
+            Action::Keyboard(0x35)
+        );
+        assert_eq!(
+            keys.gamepad_settings(),
+            Some(&source.profile.gamepad_settings)
+        );
+    }
 }

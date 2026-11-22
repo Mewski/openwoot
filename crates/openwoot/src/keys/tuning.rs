@@ -2,7 +2,7 @@ use openwoot_protocol::keys::{self as config, Distance, TapDuration};
 
 use super::{RapidTrigger, travel_of};
 
-pub const DEFAULT_MINIMUM: u16 = 112;
+pub(crate) const DEFAULT_MINIMUM: u16 = 112;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tuning {

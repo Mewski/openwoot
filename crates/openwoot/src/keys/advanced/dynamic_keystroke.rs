@@ -4,8 +4,7 @@ use openwoot_protocol::advanced::{STROKES, Stroke, StrokeEvent};
 use super::{Application, Applications};
 use crate::keys::follows_travel_action;
 
-pub const DEFAULT_BOTTOM_OUT: u16 = 3693;
-
+const DEFAULT_BOTTOM_OUT: u16 = 3693;
 const BOTTOM_GAP: u16 = 112;
 const RELEASE_HYSTERESIS: u16 = 80;
 const RELEASE_FLOOR: u16 = 1;
@@ -48,7 +47,7 @@ pub struct DynamicKeystrokeState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Thresholds {
+pub(crate) struct Thresholds {
     pub actuation: u16,
     pub bottom_out: u16,
     pub release: u16,
@@ -134,7 +133,7 @@ impl Queue {
 
 impl Thresholds {
     #[must_use]
-    pub fn new(actuation: u16, bottom_out: Option<u16>, travel_limit: u16) -> Self {
+    pub(crate) fn new(actuation: u16, bottom_out: Option<u16>, travel_limit: u16) -> Self {
         let bottom = bottom_out.unwrap_or(DEFAULT_BOTTOM_OUT).min(travel_limit);
         let gap = actuation.wrapping_add(BOTTOM_GAP);
         let bottom_out = if i32::from(actuation) + i32::from(BOTTOM_GAP) < i32::from(bottom) {

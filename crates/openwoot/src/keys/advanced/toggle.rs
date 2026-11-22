@@ -7,7 +7,7 @@ use crate::lighting::TRAVEL_FULL;
 const TAP_MAX_MS: u16 = 199;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Latch {
+pub(crate) enum Latch {
     On,
     Off,
 }
@@ -23,11 +23,6 @@ impl ToggleState {
     #[must_use]
     pub const fn is_latched(&self) -> bool {
         self.latched
-    }
-
-    #[must_use]
-    pub const fn hold_ms(&self) -> u16 {
-        self.hold_ms
     }
 
     pub(in crate::keys) const fn input(&mut self, pressed: bool, changed: bool) -> Option<Latch> {

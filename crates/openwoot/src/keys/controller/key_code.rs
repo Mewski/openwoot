@@ -1,7 +1,7 @@
 use openwoot_protocol::gamepad::Control;
 
 #[must_use]
-pub const fn gamepad_code(control: Control) -> u8 {
+pub(crate) const fn gamepad_code(control: Control) -> u8 {
     match control {
         Control::ButtonA => 120,
         Control::ButtonB => 121,
@@ -43,49 +43,6 @@ pub const fn gamepad_code(control: Control) -> u8 {
 }
 
 #[must_use]
-pub const fn gamepad_control(code: u8) -> Option<Control> {
-    Some(match code {
-        120 => Control::ButtonA,
-        121 => Control::ButtonB,
-        122 => Control::ButtonX,
-        123 => Control::ButtonY,
-        124 => Control::Start,
-        125 => Control::Back,
-        126 => Control::DpadUp,
-        127 => Control::DpadDown,
-        128 => Control::DpadLeft,
-        129 => Control::DpadRight,
-        130 => Control::LeftBumper,
-        131 => Control::RightBumper,
-        132 => Control::Guide,
-        133 => Control::LeftStickUp,
-        134 => Control::LeftStickDown,
-        135 => Control::LeftStickLeft,
-        136 => Control::LeftStickRight,
-        137 => Control::RightStickUp,
-        138 => Control::RightStickDown,
-        139 => Control::RightStickLeft,
-        140 => Control::RightStickRight,
-        141 => Control::LeftStickPress,
-        142 => Control::RightStickPress,
-        143 => Control::LeftTrigger,
-        144 => Control::RightTrigger,
-        145 => Control::Accelerator,
-        146 => Control::Rudder,
-        147 => Control::Trigger,
-        148 => Control::RxNegative,
-        149 => Control::RxPositive,
-        150 => Control::RyNegative,
-        151 => Control::RyPositive,
-        152 => Control::HatUp,
-        153 => Control::HatDown,
-        154 => Control::HatLeft,
-        155 => Control::HatRight,
-        _ => return None,
-    })
-}
-
-#[must_use]
 pub const fn follows_travel(control: Control) -> bool {
     !matches!(
         control,
@@ -110,6 +67,48 @@ pub const fn follows_travel(control: Control) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn gamepad_control(code: u8) -> Option<Control> {
+        Some(match code {
+            120 => Control::ButtonA,
+            121 => Control::ButtonB,
+            122 => Control::ButtonX,
+            123 => Control::ButtonY,
+            124 => Control::Start,
+            125 => Control::Back,
+            126 => Control::DpadUp,
+            127 => Control::DpadDown,
+            128 => Control::DpadLeft,
+            129 => Control::DpadRight,
+            130 => Control::LeftBumper,
+            131 => Control::RightBumper,
+            132 => Control::Guide,
+            133 => Control::LeftStickUp,
+            134 => Control::LeftStickDown,
+            135 => Control::LeftStickLeft,
+            136 => Control::LeftStickRight,
+            137 => Control::RightStickUp,
+            138 => Control::RightStickDown,
+            139 => Control::RightStickLeft,
+            140 => Control::RightStickRight,
+            141 => Control::LeftStickPress,
+            142 => Control::RightStickPress,
+            143 => Control::LeftTrigger,
+            144 => Control::RightTrigger,
+            145 => Control::Accelerator,
+            146 => Control::Rudder,
+            147 => Control::Trigger,
+            148 => Control::RxNegative,
+            149 => Control::RxPositive,
+            150 => Control::RyNegative,
+            151 => Control::RyPositive,
+            152 => Control::HatUp,
+            153 => Control::HatDown,
+            154 => Control::HatLeft,
+            155 => Control::HatRight,
+            _ => return None,
+        })
+    }
 
     #[test]
     fn every_code_from_120_to_155_names_one_control() {
