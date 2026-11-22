@@ -3,6 +3,7 @@
 
 mod basepri;
 mod descriptor;
+pub mod diagnostics;
 mod dma;
 #[cfg(target_os = "none")]
 pub mod executor;

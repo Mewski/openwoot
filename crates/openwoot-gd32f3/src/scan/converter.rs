@@ -223,6 +223,11 @@ impl<const INPUTS: usize> scan::Converter for Converter<INPUTS> {
     }
 }
 
+#[must_use]
+pub const fn overruns() -> Option<u32> {
+    None
+}
+
 fn address_levels(port: u8, pins: [u8; ADDRESS_LINES]) -> [Levels; ADDRESSES] {
     core::array::from_fn(|address| {
         Levels::new(

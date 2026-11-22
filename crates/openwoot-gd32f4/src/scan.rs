@@ -7,5 +7,5 @@ mod wiring;
 
 pub use adc::SampleTime;
 pub use conversion::{Conversion, InterruptHandler};
-pub use converter::Converter;
+pub use converter::{Converter, overruns};
 pub use wiring::{AnalogInput, Peripherals, Wiring};

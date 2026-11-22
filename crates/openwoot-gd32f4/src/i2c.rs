@@ -10,6 +10,7 @@ use embedded_hal_async::i2c::{
     self as hal_i2c, ErrorType, NoAcknowledgeSource, Operation, SevenBitAddress,
 };
 pub use error::Error;
+use openwoot::diagnostics::{Bus, Transfers};
 pub use pins::{ClockPin, DataPin};
 use registers::{
     APB1EN_I2C0EN, CTL0_ACKEN, CTL0_I2CEN, CTL0_SMBEN, CTL0_SRESET, CTL0_START, CTL1_DMAON,
@@ -28,6 +29,8 @@ use crate::{
 
 const TRANSFER_TIMEOUT: Duration = Duration::from_millis(10);
 const MAX_TRANSFER: usize = 0xFFFF;
+
+static TRANSFERS: Transfers = Transfers::new();
 
 #[derive(Debug)]
 pub struct I2c {
@@ -113,6 +116,11 @@ impl I2c {
     }
 }
 
+#[must_use]
+pub fn transfers() -> Bus {
+    TRANSFERS.report()
+}
+
 impl ErrorType for I2c {
     type Error = Error;
 }
@@ -144,6 +152,7 @@ impl hal_i2c::I2c for I2c {
             Ok(result) => result,
             Err(_) => Err(Error::Timeout),
         };
+        TRANSFERS.record(&result);
         if result.is_err() {
             self.recover();
         }

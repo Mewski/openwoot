@@ -7,7 +7,10 @@
 )]
 
 use cortex_m::peripheral::NVIC;
-use openwoot::scan::{self, Sample};
+use openwoot::{
+    diagnostics::Counter,
+    scan::{self, Sample},
+};
 
 use super::{
     Conversion, InterruptHandler, Peripherals, Wiring,
@@ -24,6 +27,8 @@ use crate::{
 };
 
 const ADDRESSES: usize = 1 << ADDRESS_LINES;
+
+static OVERRUNS: Counter = Counter::new();
 
 #[derive(Debug)]
 pub struct Converter<const INPUTS: usize> {
@@ -115,6 +120,7 @@ impl<const INPUTS: usize> scan::Converter for Converter<INPUTS> {
     fn acknowledge() {
         adc::acknowledge();
         if adc::take_overflow() {
+            OVERRUNS.increment();
             adc::restart_transport(transport::restart);
         }
     }
@@ -213,7 +219,9 @@ impl<const INPUTS: usize> scan::Converter for Converter<INPUTS> {
     }
 
     fn recover(&mut self) {
-        adc::take_overflow();
+        if adc::take_overflow() {
+            OVERRUNS.increment();
+        }
         adc::restart_transport(transport::restart);
     }
 
@@ -221,6 +229,11 @@ impl<const INPUTS: usize> scan::Converter for Converter<INPUTS> {
     fn micros(&self) -> u16 {
         time::microseconds()
     }
+}
+
+#[must_use]
+pub fn overruns() -> Option<u32> {
+    Some(OVERRUNS.value())
 }
 
 fn address_levels(port: u8, pins: [u8; ADDRESS_LINES]) -> [Levels; ADDRESSES] {

@@ -8,6 +8,7 @@ use core::hint::spin_loop;
 pub use device::Device;
 use embedded_hal::spi::{ErrorKind, ErrorType};
 use embedded_hal_async::spi::SpiBus;
+use openwoot::diagnostics::{Bus, BusError, Transfers};
 pub use pins::{ClockPin, DataInPin, DataOutPin};
 use registers::{CTL0_SPIEN, I2SCTL_I2SSEL, STAT_TRANS, control};
 pub use transfer::InterruptHandler;
@@ -21,6 +22,8 @@ use crate::{
 
 const APB1EN_SPI1EN: u32 = 1 << 14;
 const MAX_TRANSFER: usize = 0xFFFF;
+
+static TRANSFERS: Transfers = Transfers::new();
 
 #[derive(Debug)]
 pub struct Spi {
@@ -73,9 +76,22 @@ impl Spi {
     }
 }
 
+#[must_use]
+pub fn transfers() -> Bus {
+    TRANSFERS.report()
+}
+
 impl embedded_hal::spi::Error for Error {
     fn kind(&self) -> ErrorKind {
         ErrorKind::Other
+    }
+}
+
+impl From<Error> for BusError {
+    fn from(error: Error) -> Self {
+        match error {
+            Error::Transfer => Self::Dma,
+        }
     }
 }
 

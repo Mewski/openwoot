@@ -1,4 +1,5 @@
 use embedded_hal_async::i2c::{self as hal_i2c, ErrorKind, NoAcknowledgeSource};
+use openwoot::diagnostics::BusError;
 
 pub(super) const STAT0_ERRORS: u32 = STAT0_BERR | STAT0_LOSTARB | STAT0_AERR | STAT0_OUERR;
 
@@ -55,6 +56,20 @@ impl hal_i2c::Error for Error {
             Self::Timeout | Self::Dma | Self::Read | Self::TooLong(_) | Self::TooManyWrites => {
                 ErrorKind::Other
             }
+        }
+    }
+}
+
+impl From<Error> for BusError {
+    fn from(error: Error) -> Self {
+        match error {
+            Error::Timeout => Self::Timeout,
+            Error::Bus => Self::Bus,
+            Error::ArbitrationLoss => Self::ArbitrationLoss,
+            Error::NoAcknowledge(_) => Self::NoAcknowledge,
+            Error::Overrun => Self::Overrun,
+            Error::Dma => Self::Dma,
+            Error::Read | Error::TooLong(_) | Error::TooManyWrites => Self::Other,
         }
     }
 }

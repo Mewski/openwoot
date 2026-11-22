@@ -3,7 +3,7 @@ use core::convert::Infallible;
 use embedded_hal::{digital::OutputPin, spi::ErrorType};
 use embedded_hal_async::spi::{Operation, SpiBus, SpiDevice};
 
-use super::{Error, Spi};
+use super::{Error, Spi, TRANSFERS};
 use crate::rcu::Hertz;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
@@ -61,6 +61,7 @@ impl<ChipSelect: OutputPin<Error = Infallible>> SpiDevice for Device<ChipSelect>
         }
         self.bus.idle();
         drop(selected);
+        TRANSFERS.record(&result);
         result
     }
 }
