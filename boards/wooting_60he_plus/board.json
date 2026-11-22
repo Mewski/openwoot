@@ -1,6 +1,0 @@
-{
-  "name": "Wooting 60HE+",
-  "usb": { "vendor_id": "0x31E3", "product_id_base": "0x1320" },
-  "image": { "base": "0x08007000", "end": "0x080FD000", "stack_top": "0x20018000", "vectors": 76 },
-  "update": { "supported": false, "reason": "the update mode of this board has not been examined" }
-}
