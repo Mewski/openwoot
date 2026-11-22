@@ -7,9 +7,10 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+heapless = { workspace = true }
 postcard = { workspace = true }
 postcard-rpc = { workspace = true }
-postcard-schema = { workspace = true }
+postcard-schema = { workspace = true, features = ["heapless-v0_9"] }
 serde = { workspace = true }
 thiserror = { workspace = true }
 

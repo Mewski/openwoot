@@ -7,7 +7,10 @@ use super::{
     requests::Queued,
     serial::{LEGACY_LEN, SerialNumber},
 };
-use crate::usb::{Face, KeyboardFormat, PollingRate, Speed};
+use crate::{
+    storage::{FLASH_IDS_LEN, MCU_ID_LEN},
+    usb::{Face, KeyboardFormat, PollingRate, Speed},
+};
 
 const VERSION: [u8; 3] = [2, 1, 2];
 const DEVICE_SETTINGS_LEN: usize = 7;
@@ -16,20 +19,23 @@ const FORCE_FULL_SPEED: u8 = 1 << 3;
 const SIX_KEY_ROLLOVER: u8 = 1 << 4;
 const USB_MODE_SHIFT: u8 = 1;
 const GAMEPAD_POLLING_SHIFT: u8 = 3;
-const MCU_ID_LEN: usize = 12;
-const FLASH_IDS_LEN: usize = 10;
 const SERIAL_BLANK: i16 = -2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StockIdentity {
     pub serial: Option<&'static str>,
     pub face: Face,
+    pub layout: u8,
+    pub mcu_id: [u8; MCU_ID_LEN],
+    pub flash_ids: [u8; FLASH_IDS_LEN],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Responder {
     serial: Option<SerialNumber>,
     device_settings: [u8; DEVICE_SETTINGS_LEN],
+    mcu_id: [u8; MCU_ID_LEN],
+    flash_ids: [u8; FLASH_IDS_LEN],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,7 +50,9 @@ impl Responder {
     pub(crate) fn new(identity: StockIdentity) -> Self {
         Self {
             serial: identity.serial.and_then(SerialNumber::parse),
-            device_settings: device_settings(identity.face),
+            device_settings: device_settings(identity.face, identity.layout),
+            mcu_id: identity.mcu_id,
+            flash_ids: identity.flash_ids,
         }
     }
 
@@ -89,7 +97,7 @@ impl Responder {
                 reply(command, Status::Success, &legacy, report)
             }
             (Some(SerialSelector::McuId), _) => {
-                reply(command, Status::Success, &[0; MCU_ID_LEN], report)
+                reply(command, Status::Success, &self.mcu_id, report)
             }
             (Some(SerialSelector::Message), Some(serial)) => {
                 reply(command, Status::Success, serial.encode().as_bytes(), report)
@@ -98,7 +106,7 @@ impl Responder {
                 reply(command, Status::Error, &SERIAL_BLANK.to_le_bytes(), report)
             }
             (Some(SerialSelector::FlashIds), _) => {
-                reply(command, Status::Success, &[0; FLASH_IDS_LEN], report)
+                reply(command, Status::Success, &self.flash_ids, report)
             }
             (None, _) => reply(command, Status::Error, &[], report),
         }
@@ -117,7 +125,7 @@ fn reply<'a>(command: u8, status: Status, payload: &[u8], report: &'a mut [u8]) 
     }
 }
 
-fn device_settings(face: Face) -> [u8; DEVICE_SETTINGS_LEN] {
+fn device_settings(face: Face, layout: u8) -> [u8; DEVICE_SETTINGS_LEN] {
     let speed = match face.speed {
         Speed::Full => FORCE_FULL_SPEED,
         Speed::High => 0,
@@ -138,7 +146,7 @@ fn device_settings(face: Face) -> [u8; DEVICE_SETTINGS_LEN] {
         0,
         0,
         READ_UNPROTECTED,
-        0,
+        layout,
         (usb_mode << USB_MODE_SHIFT) | (polling << GAMEPAD_POLLING_SHIFT),
     ]
 }

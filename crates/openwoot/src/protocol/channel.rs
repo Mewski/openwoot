@@ -4,7 +4,7 @@ use embassy_futures::select::{Either, select};
 use embassy_usb::driver::{EndpointError, EndpointIn, EndpointOut};
 use openwoot_protocol::MAX_REPORT_LEN;
 
-use super::{Answer, FeatureRequests, Handler};
+use super::{Answer, Configuration, FeatureRequests, Handler};
 use crate::Keyboard;
 
 pub struct Channel<Output, Input> {
@@ -24,9 +24,9 @@ impl<Output: EndpointOut, Input: EndpointIn> Channel<Output, Input> {
         }
     }
 
-    pub async fn run<Board: Keyboard>(
+    pub async fn run<Board: Keyboard, C: Configuration>(
         &mut self,
-        handler: &mut Handler,
+        handler: &mut Handler<C>,
         requests: &FeatureRequests,
         keyboard: &mut Board,
     ) -> ! {
@@ -36,9 +36,9 @@ impl<Output: EndpointOut, Input: EndpointIn> Channel<Output, Input> {
         }
     }
 
-    pub async fn serve<Board: Keyboard>(
+    pub async fn serve<Board: Keyboard, C: Configuration>(
         &mut self,
-        handler: &mut Handler,
+        handler: &mut Handler<C>,
         requests: &FeatureRequests,
         keyboard: &mut Board,
     ) -> Result<(), EndpointError> {
@@ -61,7 +61,7 @@ impl<Output: EndpointOut, Input: EndpointIn> Channel<Output, Input> {
             }
         };
         let request = request.get(..len).unwrap_or_default();
-        let answer = handler.respond(request, response);
+        let answer = handler.respond(request, response).await;
         deliver(input, answer, keyboard).await
     }
 }

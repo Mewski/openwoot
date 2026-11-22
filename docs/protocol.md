@@ -114,12 +114,73 @@ The host sends requests with 8-byte keys and 2-byte sequence numbers (`openwoot_
 
 ### Endpoints
 
+Every endpoint is declared once in `openwoot_protocol` (`endpoint.rs`, collected in `ENDPOINT_LIST`). `Done` stands for `Result<(), Rejection>`; every other configuration response is `Result<T, Rejection>` with the type shown.
+
 | Endpoint | Path | Request | Response |
 | --- | --- | --- | --- |
 | `GetVersion` | `openwoot/version` | `()` | `Version { protocol: u16, firmware: FirmwareVersion { major: u16, minor: u16, patch: u16 } }` |
 | `EnterUpdateMode` | `openwoot/update-mode` | `()` | `()`; after sending it the firmware hands over to the factory bootloader (`Keyboard::enter_update_mode` with option byte 0), which stays in update mode for one start |
+| `GetCapabilities` | `openwoot/capabilities` | `()` | `config::Capabilities` |
+| `GetDeviceSettings`, `SetDeviceSettings` | `openwoot/device`, `…/set` | `()`, `device::Settings` | `device::Settings`, `Done` |
+| `GetLayout`, `SetLayout` | `openwoot/layout`, `…/set` | `()`, `device::Layout` | `device::Layout`, `Done` |
+| `GetGlobalSettings`, `SetGlobalSettings` | `openwoot/global`, `…/set` | `()`, `config::GlobalSettings` | `config::GlobalSettings`, `Done` |
+| `GetProfiles` | `openwoot/profiles` | `()` | `profile::Summary { count, active }` |
+| `CreateProfile` | `openwoot/profiles/create` | `()` | `profile::Slot` of the new profile |
+| `DeleteProfile`, `ActivateProfile` | `openwoot/profiles/delete`, `…/activate` | `profile::Slot` | `Done` |
+| `GetProfileInfo`, `SetProfileInfo` | `openwoot/profile/info`, `…/set` | `Slot`, `Change<profile::Info>` | `profile::Info`, `Done` |
+| `GetProfileRevision` | `openwoot/profile/revision` | `Slot` | `u32` |
+| `GetKeySettings`, `SetKeySettings` | `openwoot/profile/keys`, `…/set` | `Slot`, `Change<keys::Settings>` | `keys::Settings`, `Done` |
+| `GetKeymap`, `SetKeymap` | `openwoot/profile/keymap`, `…/set` | `LayerRef`, `LayerChange<keys::Keymap>` | `keys::Keymap`, `Done` |
+| `GetKeyOverrides`, `SetKeyOverrides` | `openwoot/profile/overrides`, `…/set` | `Slot`, `Change<keys::Overrides>` | `keys::Overrides`, `Done` |
+| `GetAdvancedKeys`, `SetAdvancedKeys` | `openwoot/profile/advanced`, `…/set` | `Slot`, `Change<advanced::Keys>` | `advanced::Keys`, `Done` |
+| `GetGamepadMapping`, `SetGamepadMapping` | `openwoot/profile/gamepad/mapping`, `…/set` | `Slot`, `Change<gamepad::Mapping>` | `gamepad::Mapping`, `Done` |
+| `GetGamepadSettings`, `SetGamepadSettings` | `openwoot/profile/gamepad`, `…/set` | `Slot`, `Change<gamepad::Settings>` | `gamepad::Settings`, `Done` |
+| `GetLighting`, `SetLighting` | `openwoot/profile/lighting`, `…/set` | `Slot`, `Change<lighting::Settings>` | `lighting::Settings`, `Done` |
+| `GetKeyColors`, `SetKeyColors` | `openwoot/profile/colors`, `…/set` | `LayerRef`, `LayerChange<Option<lighting::KeyColors>>` | `Option<lighting::KeyColors>`, `Done` |
+| `GetLightbar`, `SetLightbar` | `openwoot/profile/lightbar`, `…/set` | `Slot`, `Change<lightbar::Settings>` | `lightbar::Settings`, `Done` |
+| `GetGlobalLightbar`, `SetGlobalLightbar` | `openwoot/lightbar`, `…/set` | `()`, `lightbar::Entries` | `lightbar::Entries`, `Done` |
+| `GetHostSignals`, `SetHostSignals` | `openwoot/signals`, `…/set` | `()`, `lightbar::HostSignals` | `lightbar::HostSignalIds`, `Done` |
+| `GetSwitches`, `SetSwitches` | `openwoot/switches`, `…/set` | `()`, `switches::Settings` | `switches::Settings`, `Done` |
+| `GetSwitchModels` | `openwoot/switches/models` | `()` | `switches::Models` |
+| `Save`, `Revert`, `FactoryReset` | `openwoot/save`, `openwoot/revert`, `openwoot/factory-reset` | `()` | `Done` |
 
-`PROTOCOL_VERSION` is 1. The types behind a path never change: a changed request or response type gets a new path (`openwoot/version/2`), so old and new hosts and firmware recognise each other's endpoints by key.
+`PROTOCOL_VERSION` is 1. The types behind a path never change: a changed request or response type gets a new path (`openwoot/profile/keymap/2`), so old and new hosts and firmware recognise each other's endpoints by key. A key is a hash of the path and the schema of the type (field names and type names included), so a test (`endpoint_keys_are_pinned_so_a_changed_type_needs_a_new_path`) pins the request and response key of every endpoint: a change of any type behind a path fails it. Capacities of `heapless::Vec` and `heapless::String` are not part of a schema; raising one is compatible for hosts that never send more than the old capacity, lowering one needs a new path.
+
+### Configuration model
+
+The configuration is a set of typed parts, each a `no_std` serde type in `openwoot_protocol`, sized by `heapless` capacities so that the largest value of every part fits one frame (tested). Storage keeps its own records of the same types; the C firmware's `settings.proto` was the inventory of what exists, not the format.
+
+| Part | Type | Holds |
+| --- | --- | --- |
+| capabilities | `config::Capabilities` | key matrix rows and columns, number of profile slots, layouts the board can have, light-bar LEDs (0 = none), host signals, switch models, edition |
+| device | `device::Settings` | USB mode (`Xinput`, `Gamepad`, `NoGamepad`), keyboard report (`NKeyRollover`, `Boot`), speed (`High`, `Full`), gamepad polling (4 ms, 1 ms, 125 µs); converted to `usb::Face` by `From`; takes effect at the next start |
+| layout | `device::Layout` | `Ansi`, `Iso`, `Jis`; must be one of `Capabilities::layouts` |
+| global | `config::GlobalSettings` | idle dimming (`lighting::Idle`: dim after, off after, off enabled; `None` = never), Num Lock indicator inverted, release-rebound filter |
+| profile info | `profile::Info` | name (up to 32 bytes of UTF-8), colour |
+| key settings | `keys::Settings` | profile-wide actuation point, rapid trigger (enabled, press and release sensitivity, continuous), tap duration (1, 20, 40 ms), scan mode (single or parallel), keyboard keys in the gamepad modes |
+| keymap | `keys::Keymap` | one `keys::Action` per key of one layer (`Base`, `One`, `Two`, `Three`) |
+| overrides | `keys::Overrides` | per key: actuation point or the profile's, rapid trigger `Profile`, `Off`, `On` (profile parameters) or `With(RapidTrigger)` |
+| advanced keys | `advanced::Keys` | up to 40 entries `{ key, layer, behaviour }`: dynamic keystroke (four strokes, each an action with press / bottom-out / lift / release events `Nothing`, `Press`, `Release`, `Tap`, and the bottom-out point), mod-tap (tap and hold action, hold time in ms, interrupt `Auto`, `Ignore`, `Hold`, `Tap`), toggle (action), depth priority and SOCD with the other key and the resolution `Both`, `Neither`, `First`, `Second`, `LastPressed` |
+| gamepad mapping | `gamepad::Mapping` | per key an optional `gamepad::Control` (buttons, d-pad, sticks by direction, triggers, the further HID axes, hat), keys with a control exclusive to the gamepad |
+| gamepad settings | `gamepad::Settings` | four-point response curve (first point: dead zone, last: saturation), circular or square normalisation, single-direction axes, left-stick up bias in percent |
+| lighting | `lighting::Settings` | brightness, lock-indicator colours (Caps, Scroll, Num, layer lock), up to 6 effect layers (`lighting::Effect`: rainbow wave, scanner, breathing, hue cycle, key ripple, reactive fade, level meter, analog spotlight, analog glow, analog RGB fill, key test, simplex noise, polar gradient) |
+| key colours | `Option<lighting::KeyColors>` | per layer one `Rgb` per key; `None` = no own map on that layer (on the base layer: unlit) |
+| light bar | `lightbar::Settings` | enabled, up to 4 entries (optional condition of up to two groups of two terms: trigger on a signal change, or comparison of a signal with a signal or constant, optional hold time; effect meter, profile indicator, mirror, blink, solid, custom), use the global entries, brightness |
+| global light bar | `lightbar::Entries` | up to 4 entries drawn before every profile's entries |
+| host signals | `lightbar::HostSignals` | values `{ id, value }` of host-defined signals (up to 20); `GetHostSignals` lists the ids the light bar refers to |
+| switches | `switches::Settings` | switch model and travel offset (0.05 mm) per key and a default; `GetSwitchModels` lists each model's travel and group |
+
+Keys are addressed by `keys::Index`, `row * key_columns + column` of the board's key matrix; per-key lists hold exactly `key_rows * key_columns` entries. Distances (`keys::Distance`) are fractions of the full travel of the key's switch in 1/65535. Colours with transparency (`lighting::Color`) carry an alpha of 0 to 255 (255 opaque).
+
+Actions (`keys::Action`): `None`, `Keyboard(usage)` (usages `0x04`..`0xdd` and the modifiers `0xe0`..`0xe7`), `Consumer(usage)` (`0x0001`..`0x02a2`), `System` (power down, sleep, wake up), `Mouse` (left, right, middle, back, forward), `Gamepad(control)`, `Layer(layer)` (momentary, not the base layer), `Function` (brightness up and down, profile, next profile, toggle mode profile, toggle key disable, layer lock).
+
+Semantics:
+
+- A `Set*` request applies at once: to the running keyboard when it addresses the active profile, otherwise to that profile. Nothing is stored until `Save`, which writes every change since the last save; `Revert` drops the unsaved changes; `FactoryReset` returns every setting and profile to the board's factory defaults (stored at once), the C firmware's factory reset.
+- The firmware validates every request that carries a value against `Capabilities` before it reaches the keyboard (`config::Validate`) and answers `Err(Rejection::Invalid(..))` without changing anything. `Rejection` also reports a missing profile, a profile that cannot be deleted, the profile limit, a locked keyboard (switches), a storage error, and `Unsupported` for parts the keyboard does not have.
+- Firmware side: `protocol::Handler` decodes, validates and hands each request to `protocol::Configuration`, a trait with one async method per part; every method answers `Unsupported` unless implemented, and `()` implements none (`Handler::new`). Storage, keys and lighting implement it together (`Handler::with_configuration`) without changes to the handler.
+
+Differences from the C firmware's configuration: one profile namespace of `Capabilities::profiles` slots instead of built-in profiles 0..3 plus the host namespace `lp` 0..9 (the `lp` selection, its `al` files and the uninterpreted `lbm`/`glbm` files and profile icon string are not kept); key colours as 8-bit RGB per key instead of RGB565 in two halves; distances in one 16-bit encoding instead of the 8-bit and 14-bit encodings; mod-tap hold time in ms instead of 10 ms steps; light-bar meters and profile indicators draw on light-bar ranges only (C accepted key rectangles and drew nothing); effect kinds 12 and 13 (never drawn by C) and the legacy single-effect form do not exist; the legacy per-key rapid-trigger file and the rapid-trigger groups are one per-key override list; the switch profile is per key instead of groups of up to 10 keys. Validation replaces the C firmware's silent clamping and "known issue" behaviours: values C would clamp or divide by are refused.
 
 ### Stock identification responder
 
@@ -137,11 +198,11 @@ report id | d1 da | command | status | payload length (u16, little endian) | pay
 | 1, version | none | `02 01 02`: version 2.1.2, see below |
 | 2, reset to update mode | `a0`: option bits for the bootloader (bit 0 high speed, bit 1 ignore the key combination, bit 2 no lighting) | none; the channel calls `Keyboard::enter_update_mode(a0)`, which writes `0x504` and `a0` to the backup registers and resets, as stock |
 | 3, serial number, selector 0 | `arg` = 0 | 11 bytes: supplier (u16), year, week, product (u16), revision (u16), product id (u16, at most `0xfffe`), stage; all zero without a serial number |
-| 3, selector 1 | `arg` = 1 | 12 zero bytes (stock: the unique id of the microcontroller, not read yet) |
+| 3, selector 1 | `arg` = 1 | 12 bytes: the 96-bit unique id of the microcontroller (`StockIdentity::mcu_id`, read by `hal::flash::unique_id`) |
 | 3, selector 2 | `arg` = 2 | the protobuf message `SerialNumber` (fields 1 to 7 always, 9 edition, 10 PCB design, 11 minor revision when present), encoded as the stock firmware encodes it; without a serial number status `0xff` with the 16-bit error -2 (`fe ff`, no device information) |
-| 3, selector 3 | `arg` = 3 | 10 zero bytes (stock: the ids of the settings flash, not read yet) |
+| 3, selector 3 | `arg` = 3 | 10 bytes: manufacturer and device id of the settings flash (command `0x90`) and its 8-byte unique id (command `0x4b`), `StockIdentity::flash_ids`; zero if the chip does not answer |
 | 3, other selectors | | status `0xff`, no payload |
-| 19, device settings | none | 7 bytes: byte 0 bit 3 full speed forced (`usb::Speed::Full`), bit 4 boot keyboard report; bytes 1 to 3 zero; byte 4 `0x11` (flash read-out allowed); byte 5 layout 0; byte 6 bits 2..1 USB mode (`usb::Mode`: 0 XInput, 1 gamepad, 2 none) and bits 4..3 gamepad polling (0 4 ms, 1 1 ms, 2 125 µs) |
+| 19, device settings | none | 7 bytes: byte 0 bit 3 full speed forced (`usb::Speed::Full`), bit 4 boot keyboard report; bytes 1 to 3 zero; byte 4 `0x11` (flash read-out allowed); byte 5 the physical layout (`StockIdentity::layout`: Wooting 80HE device-information record, Wooting 60HE+ bit 0 of the user option byte); byte 6 bits 2..1 USB mode (`usb::Mode`: 0 XInput, 1 gamepad, 2 none) and bits 4..3 gamepad polling (0 4 ms, 1 1 ms, 2 125 µs) |
 | every other command | | no payload; status `0x66` (unknown) for numbers below 38 and above 88, `0xaa` (unsupported) for 38 to 88, the stock rule for commands without a handler |
 
 A request with another magic gets status `0xff` (under the magic `d1 da`), and a fourth waiting command status `0x77`, both at once as stock does.
@@ -165,7 +226,7 @@ Stock output-report commands (`d1 da` in an output report on `0x03` or through `
 | configuration channel OUT endpoint | not re-armed until the command is processed | one packet of the next transfer may arrive before the current one is processed (the channel's request/response pairing is the flow control) |
 | `SET_REPORT` on interface 2 (feature or output report through the control endpoint) | processed as a stock command, up to 64 (feature) or 2048 (output) bytes | feature reports go to the stock identification responder; output reports are accepted and ignored, so `OW` frames travel only over the interrupt OUT endpoint |
 | `GET_REPORT` on interfaces other than 2 | answered with the report id byte only | stalled |
-| stock feature commands | 65 commands on the Wooting 80HE, 59 on the Wooting 60HE+ | commands 0, 1, 2, 3 and 19 (version 2.1.2 instead of 2.14.1, zero bytes for the microcontroller and flash ids); the others are answered as unknown or unsupported |
+| stock feature commands | 65 commands on the Wooting 80HE, 59 on the Wooting 60HE+ | commands 0, 1, 2, 3 and 19 (version 2.1.2 instead of 2.14.1); the others are answered as unknown or unsupported |
 | control transfers longer than 128 bytes | accepted up to 2048 bytes | stalled before the data stage |
 | report descriptors | stock byte arrays | same fields (checked against the C build field by field); byte encodings differ where items are ordered differently or encoded in their smallest size, for example the boot keyboard's logical maximum 221 is `26 dd 00` where stock writes `25 dd` (which reads as -35) |
 | gamepad hat switch | Input flags `0x02` | `0x42` (Null State), so the centred value 0 is declared as "no direction" |
