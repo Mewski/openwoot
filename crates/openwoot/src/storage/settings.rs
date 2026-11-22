@@ -14,7 +14,7 @@ use sequential_storage::{
 
 use super::{
     partition::{Partition, PartitionError},
-    record::{Encoding, KEY_LEN, Key, Record, Scope, Stored, VERSION_LEN},
+    record::{Encoder, Encoding, KEY_LEN, Key, Record, Scope, Stored, VERSION_LEN},
 };
 use crate::diagnostics::Diagnostics;
 
@@ -63,7 +63,16 @@ struct Buffer([u8; BUFFER_LEN]);
 
 impl<F: MultiwriteNorFlash> Settings<F> {
     #[must_use]
-    pub const fn with_diagnostics(mut self, diagnostics: &'static Diagnostics) -> Self {
+    pub const fn new() -> Self {
+        Self {
+            map: None,
+            len: 0,
+            buffer: Buffer([0; BUFFER_LEN]),
+            diagnostics: None,
+        }
+    }
+
+    pub const fn with_diagnostics(&mut self, diagnostics: &'static Diagnostics) -> &mut Self {
         self.diagnostics = Some(diagnostics);
         self
     }
@@ -100,22 +109,44 @@ impl<F: MultiwriteNorFlash> Settings<F> {
         visited
     }
 
-    pub fn release(self) -> Option<Partition<F>> {
-        self.map.map(|map| map.destroy().0)
+    pub async fn load_with<T>(
+        &mut self,
+        key: Key,
+        read: impl FnOnce(Stored<'_>) -> T,
+    ) -> Result<Option<T>, Error> {
+        let loaded = self.fetch_with(key, read).await;
+        if let Some(diagnostics) = self.diagnostics {
+            diagnostics.storage_loaded(&loaded);
+        }
+        loaded
     }
 
-    pub(super) fn new(partition: Partition<F>) -> Result<Self, Error> {
+    pub async fn store_with(
+        &mut self,
+        key: Key,
+        version: u16,
+        encode: impl Fn(&mut [u8]) -> Option<usize>,
+    ) -> Result<(), Error> {
+        let stored = self.write_with(key, Encoder { version, encode }).await;
+        if let Some(diagnostics) = self.diagnostics {
+            diagnostics.storage_stored(&stored);
+        }
+        stored
+    }
+
+    pub fn release(&mut self) -> Option<Partition<F>> {
+        self.map.take().map(|map| map.destroy().0)
+    }
+
+    pub(super) fn attach(&mut self, partition: Partition<F>) -> Result<(), Error> {
         let len = partition.len();
         let pages = usize::try_from(len).unwrap_or(usize::MAX) / F::ERASE_SIZE;
         if pages > MAX_PAGES {
             return Err(Error::Layout);
         }
-        Ok(Self {
-            map: Some(MapStorage::new(partition, config(len)?, cache())),
-            len,
-            buffer: Buffer([0; BUFFER_LEN]),
-            diagnostics: None,
-        })
+        self.map = Some(MapStorage::new(partition, config(len)?, cache()));
+        self.len = len;
+        Ok(())
     }
 
     pub(super) async fn erase(&mut self) -> Result<(), Error> {
@@ -126,14 +157,10 @@ impl<F: MultiwriteNorFlash> Settings<F> {
     }
 
     async fn fetch<R: Record>(&mut self, scope: Scope) -> Result<Option<R>, Error> {
-        let Self { map, buffer, .. } = self;
-        let stored = map
-            .as_mut()
-            .ok_or(Error::Internal)?
-            .fetch_item::<Stored<'_>>(&mut buffer.0, &Key::of::<R>(scope))
-            .await
-            .map_err(Error::from_store)?;
-        Ok(stored.and_then(|stored| stored.decode()))
+        Ok(self
+            .fetch_with(Key::of::<R>(scope), |stored| stored.decode())
+            .await?
+            .flatten())
     }
 
     async fn write<R: Record>(&mut self, scope: Scope, record: &R) -> Result<(), Error> {
@@ -154,6 +181,34 @@ impl<F: MultiwriteNorFlash> Settings<F> {
             .map_err(Error::from_store)
     }
 
+    async fn fetch_with<T>(
+        &mut self,
+        key: Key,
+        read: impl FnOnce(Stored<'_>) -> T,
+    ) -> Result<Option<T>, Error> {
+        let Self { map, buffer, .. } = self;
+        let stored = map
+            .as_mut()
+            .ok_or(Error::Internal)?
+            .fetch_item::<Stored<'_>>(&mut buffer.0, &key)
+            .await
+            .map_err(Error::from_store)?;
+        Ok(stored.map(read))
+    }
+
+    async fn write_with<E: Fn(&mut [u8]) -> Option<usize>>(
+        &mut self,
+        key: Key,
+        encoder: Encoder<E>,
+    ) -> Result<(), Error> {
+        let Self { map, buffer, .. } = self;
+        map.as_mut()
+            .ok_or(Error::Internal)?
+            .store_item(&mut buffer.0, &key, &encoder)
+            .await
+            .map_err(Error::from_store)
+    }
+
     async fn walk(&mut self, mut visit: impl FnMut(Key, Stored<'_>)) -> Result<(), Error> {
         let Self { map, buffer, .. } = self;
         let mut items = map
@@ -170,6 +225,12 @@ impl<F: MultiwriteNorFlash> Settings<F> {
             visit(key, stored);
         }
         Ok(())
+    }
+}
+
+impl<F: MultiwriteNorFlash> Default for Settings<F> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

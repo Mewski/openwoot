@@ -17,7 +17,7 @@ use openwoot_protocol::{
     config::Rejection,
     device, global,
     heapless::Vec,
-    keys::{Action, Distance, Layer, RapidTrigger, ScanMode, TapDuration},
+    keys::{Action, Distance, Keymap, Layer, RapidTrigger, ScanMode, TapDuration},
     lighting::{
         Color, Effect, HueRange, Idle, Indicators, KeyColors, RainbowWave, ReactiveColoring,
         ReactiveFade, Rgb, Settings as LightingSettings,
@@ -76,6 +76,8 @@ static PRESETS: [Preset; 2] = [
         name: "Typing Profile",
         color: BLUE,
         keys: TYPING,
+        actuation_points: &[],
+        advanced: &[],
         lighting: LightingSettings {
             brightness: 255,
             indicators: INDICATORS,
@@ -94,6 +96,7 @@ static PRESETS: [Preset; 2] = [
             ]),
         },
         colors: [Some(&BLUE_KEYS), None, None, None],
+        lightbar_brightness: None,
     },
     Preset {
         name: "Rapid Profile",
@@ -102,12 +105,15 @@ static PRESETS: [Preset; 2] = [
             rapid_trigger_enabled: true,
             ..TYPING
         },
+        actuation_points: &[],
+        advanced: &[],
         lighting: LightingSettings {
             brightness: 128,
             indicators: INDICATORS,
             effects: Vec::new(),
         },
         colors: [None, None, None, None],
+        lightbar_brightness: Some(90),
     },
 ];
 static FACTORY: Factory<ROWS, COLUMNS> = Factory {
@@ -120,12 +126,15 @@ static FACTORY: Factory<ROWS, COLUMNS> = Factory {
         name: "",
         color: BLACK,
         keys: TYPING,
+        actuation_points: &[],
+        advanced: &[],
         lighting: LightingSettings {
             brightness: 255,
             indicators: INDICATORS,
             effects: Vec::new(),
         },
         colors: [None, None, None, None],
+        lightbar_brightness: None,
     },
     created: 2,
     global: global::Settings {
@@ -137,6 +146,7 @@ static FACTORY: Factory<ROWS, COLUMNS> = Factory {
         num_lock_inverted: false,
         release_rebound_filter: false,
     },
+    lightbar: openwoot_protocol::lightbar::Entries::new(),
     face: Face {
         mode: Mode::NoGamepad,
         keyboard: KeyboardFormat::NKeyRollover,
@@ -200,7 +210,7 @@ impl Leds {
     }
 }
 
-fn storage() -> Option<Settings<Nor>> {
+fn storage() -> Settings<Nor> {
     let layout = NorLayout {
         capacity: 6 * SECTOR,
         settings: Region {
@@ -209,20 +219,21 @@ fn storage() -> Option<Settings<Nor>> {
         },
         device_info: None,
     };
-    block_on(Settings::open(
-        Partition::new(Nor::new(6), layout.settings_region()),
-        false,
-    ))
-    .ok()
-    .map(|(settings, _)| settings)
+    let mut settings = Settings::new();
+    let opened =
+        block_on(settings.open(Partition::new(Nor::new(6), layout.settings_region()), false));
+    assert!(opened.is_ok(), "{opened:?}");
+    settings
 }
 
 fn open<'a>(
     keys: &'a keys::Shared<Mutual>,
     shared: &'a profile::Shared<Mutual>,
-    storage: Option<Settings<Nor>>,
+    storage: Option<&'a mut Settings<Nor>>,
 ) -> ProfileModel<'a> {
-    block_on(Model::open(keys, shared, storage, &FACTORY, 0, 4))
+    let mut model = Model::new(keys, shared, storage, &FACTORY, 0, 4);
+    block_on(model.load());
+    model
 }
 
 #[test]
@@ -276,7 +287,8 @@ fn factory_profiles_light_the_leds_once_the_host_configures_the_keyboard() {
 fn a_fresh_keyboard_has_the_factory_profiles_with_their_names_and_lighting() {
     let keys = keys::Shared::new();
     let shared = profile::Shared::new();
-    let mut model = open(&keys, &shared, storage());
+    let mut settings = storage();
+    let mut model = open(&keys, &shared, Some(&mut settings));
     assert_eq!(model.summary().count, 2);
     assert_eq!(
         block_on(model.info(Slot::new(1))).map(|info| info.name),
@@ -286,10 +298,12 @@ fn a_fresh_keyboard_has_the_factory_profiles_with_their_names_and_lighting() {
         block_on(model.lighting(Slot::new(1))).map(|settings| settings.brightness),
         Ok(128)
     );
+    let mut colors = None;
     assert_eq!(
-        block_on(model.key_colors(Slot::new(0), Layer::Base)),
-        Ok(Some(BLUE_KEYS.clone()))
+        block_on(model.key_colors(Slot::new(0), Layer::Base, &mut colors)),
+        Ok(())
     );
+    assert_eq!(colors, Some(BLUE_KEYS.clone()));
     assert_eq!(
         block_on(model.settings(Slot::new(1))).map(|settings| settings.rapid_trigger_enabled),
         Ok(true)
@@ -309,7 +323,8 @@ fn a_fresh_keyboard_has_the_factory_profiles_with_their_names_and_lighting() {
 fn profiles_are_created_up_to_the_capacity_and_only_the_last_one_is_deleted() {
     let keys = keys::Shared::new();
     let shared = profile::Shared::new();
-    let mut model = open(&keys, &shared, storage());
+    let mut settings = storage();
+    let mut model = open(&keys, &shared, Some(&mut settings));
     assert_eq!(block_on(model.create()), Ok(Slot::new(2)));
     assert_eq!(block_on(model.create()), Ok(Slot::new(3)));
     assert_eq!(block_on(model.create()), Err(Rejection::ProfileLimit));
@@ -333,7 +348,8 @@ fn profiles_are_created_up_to_the_capacity_and_only_the_last_one_is_deleted() {
 fn lighting_and_colours_apply_at_once_and_stay_after_save() {
     let keys = keys::Shared::new();
     let shared = profile::Shared::new();
-    let mut model = open(&keys, &shared, storage());
+    let mut settings = storage();
+    let mut model = open(&keys, &shared, Some(&mut settings));
     let _ = shared.take_changes();
     let dim = LightingSettings {
         brightness: 40,
@@ -353,15 +369,14 @@ fn lighting_and_colours_apply_at_once_and_stay_after_save() {
     let revision = block_on(model.revision(Slot::new(0))).unwrap();
     block_on(model.set_lighting(Slot::new(0), dim.clone())).unwrap();
     let red = Vec::from_array([from_rgb565(0xF800); ROWS * COLUMNS]);
-    block_on(model.set_key_colors(Slot::new(0), Layer::One, Some(red.clone()))).unwrap();
+    block_on(model.set_key_colors(Slot::new(0), Layer::One, Some(&red))).unwrap();
     block_on(model.save()).unwrap();
     assert_eq!(block_on(model.revision(Slot::new(0))), Ok(revision + 1));
     block_on(model.revert());
     assert_eq!(block_on(model.lighting(Slot::new(0))), Ok(dim));
-    assert_eq!(
-        block_on(model.key_colors(Slot::new(0), Layer::One)),
-        Ok(Some(red))
-    );
+    let mut colors = None;
+    block_on(model.key_colors(Slot::new(0), Layer::One, &mut colors)).unwrap();
+    assert_eq!(colors, Some(red));
     let named = Info {
         name: "Mine".try_into().unwrap(),
         color: BLUE,
@@ -374,7 +389,8 @@ fn lighting_and_colours_apply_at_once_and_stay_after_save() {
 fn a_profile_switch_saves_the_changes_of_the_profile_it_leaves() {
     let keys = keys::Shared::new();
     let shared = profile::Shared::new();
-    let mut model = open(&keys, &shared, storage());
+    let mut settings = storage();
+    let mut model = open(&keys, &shared, Some(&mut settings));
     block_on(model.set_lighting(
         Slot::new(0),
         LightingSettings {
@@ -403,7 +419,8 @@ fn a_profile_switch_saves_the_changes_of_the_profile_it_leaves() {
 fn global_settings_reach_the_lighting_and_the_scan_at_once() {
     let keys = keys::Shared::new();
     let shared = profile::Shared::new();
-    let mut model = open(&keys, &shared, storage());
+    let mut settings = storage();
+    let mut model = open(&keys, &shared, Some(&mut settings));
     let _ = shared.take_changes();
     let settings = global::Settings {
         idle: None,
@@ -428,7 +445,8 @@ fn global_settings_reach_the_lighting_and_the_scan_at_once() {
 fn brightness_keys_store_the_level_in_the_active_profile() {
     let keys = keys::Shared::new();
     let shared = profile::Shared::new();
-    let mut model = open(&keys, &shared, storage());
+    let mut settings = storage();
+    let mut model = open(&keys, &shared, Some(&mut settings));
     shared.save_brightness(90);
     assert_eq!(block_on(shared.brightness_saved()), 90);
     block_on(model.save_brightness()).unwrap();
@@ -436,5 +454,37 @@ fn brightness_keys_store_the_level_in_the_active_profile() {
     assert_eq!(
         block_on(model.lighting(Slot::new(0))).map(|settings| settings.brightness),
         Ok(90)
+    );
+}
+
+#[test]
+fn single_layers_of_an_inactive_profile_change_without_touching_the_others() {
+    let keys = keys::Shared::new();
+    let shared = profile::Shared::new();
+    let mut settings = storage();
+    let mut model = open(&keys, &shared, Some(&mut settings));
+    let inactive = Slot::new(1);
+    let red = Vec::from_array([from_rgb565(0xF800); ROWS * COLUMNS]);
+    block_on(model.set_key_colors(inactive, Layer::Two, Some(&red))).unwrap();
+    let mut colors = None;
+    block_on(model.key_colors(inactive, Layer::Two, &mut colors)).unwrap();
+    assert_eq!(colors, Some(red));
+    block_on(model.key_colors(inactive, Layer::Base, &mut colors)).unwrap();
+    assert_eq!(colors, None);
+    let typed = Vec::from_array([Action::Keyboard(0x05); ROWS * COLUMNS]);
+    block_on(model.set_keymap(inactive, Layer::One, &typed)).unwrap();
+    let mut keymap = Keymap::new();
+    block_on(model.keymap(inactive, Layer::One, &mut keymap)).unwrap();
+    assert_eq!(keymap, typed);
+    block_on(model.keymap(inactive, Layer::Base, &mut keymap)).unwrap();
+    assert_eq!(keymap.as_slice(), LAYERS[0].as_flattened());
+    block_on(model.activate(inactive)).unwrap();
+    assert_eq!(
+        keys.read(|profile| profile.keymaps.0[1].clone()),
+        Some(typed)
+    );
+    assert_eq!(
+        shared.read(|appearance| appearance.colors.0[2].is_some()),
+        Some(true)
     );
 }

@@ -1,6 +1,8 @@
 use heapless::String;
 use openwoot_protocol::{
-    global, keys,
+    advanced, global,
+    keys::{self, Distance, Index, Override, Overrides},
+    lightbar,
     lighting::{KeyColors, Rgb, Settings},
     profile::{Info, NAME_LEN},
 };
@@ -8,6 +10,7 @@ use openwoot_protocol::{
 use super::{Appearance, Colors};
 use crate::{
     layout::{DefaultKeymap, LAYERS},
+    lighting::lightbar_profile,
     usb::Face,
 };
 
@@ -18,6 +21,7 @@ pub struct Factory<const ROWS: usize, const COLUMNS: usize> {
     pub fallback: Preset,
     pub created: u8,
     pub global: global::Settings,
+    pub lightbar: lightbar::Entries,
     pub face: Face,
 }
 
@@ -26,8 +30,11 @@ pub struct Preset {
     pub name: &'static str,
     pub color: Rgb,
     pub keys: keys::Settings,
+    pub actuation_points: &'static [(Index, Distance)],
+    pub advanced: &'static [advanced::Key],
     pub lighting: Settings,
     pub colors: [Option<&'static KeyColors>; LAYERS],
+    pub lightbar_brightness: Option<u8>,
 }
 
 impl<const ROWS: usize, const COLUMNS: usize> Factory<ROWS, COLUMNS> {
@@ -59,7 +66,29 @@ impl Preset {
         Appearance {
             settings: self.lighting.clone(),
             colors: Colors(self.colors.map(Option::<&KeyColors>::cloned)),
+            lightbar: self.lightbar(),
         }
+    }
+
+    #[must_use]
+    pub const fn lightbar(&self) -> lightbar::Settings {
+        lightbar_profile(self.lightbar_brightness)
+    }
+
+    #[must_use]
+    pub fn overrides(&self, keys: usize) -> Overrides {
+        let mut overrides: Overrides = core::iter::repeat_n(Override::default(), keys).collect();
+        for (key, actuation) in self.actuation_points {
+            if let Some(entry) = overrides.get_mut(usize::from(key.get())) {
+                entry.actuation = Some(*actuation);
+            }
+        }
+        overrides
+    }
+
+    #[must_use]
+    pub fn advanced_keys(&self) -> advanced::Keys {
+        self.advanced.iter().copied().collect()
     }
 }
 
@@ -89,13 +118,25 @@ mod tests {
     };
     static BASE: KeyColors = Vec::from_array([BLUE; 2]);
 
-    static PRESETS: [Preset; 1] = [preset("Typing Profile", 255)];
+    static PRESETS: [Preset; 1] = [preset(
+        "Typing Profile",
+        255,
+        &[(Index::new(1), Distance::from_fraction(26 * 257))],
+        Some(127),
+    )];
 
-    const fn preset(name: &'static str, brightness: u8) -> Preset {
+    const fn preset(
+        name: &'static str,
+        brightness: u8,
+        actuation_points: &'static [(Index, Distance)],
+        lightbar_brightness: Option<u8>,
+    ) -> Preset {
         Preset {
             name,
             color: BLUE,
             keys: default_settings(),
+            actuation_points,
+            advanced: &[],
             lighting: Settings {
                 brightness,
                 indicators: Indicators {
@@ -107,6 +148,7 @@ mod tests {
                 effects: Vec::new(),
             },
             colors: [Some(&BASE), None, None, None],
+            lightbar_brightness,
         }
     }
 
@@ -118,13 +160,14 @@ mod tests {
                 variant_patches: &[],
             },
             presets: &PRESETS,
-            fallback: preset("", 10),
+            fallback: preset("", 10, &[], None),
             created: 1,
             global: global::Settings {
                 idle: None,
                 num_lock_inverted: false,
                 release_rebound_filter: false,
             },
+            lightbar: lightbar::Entries::new(),
             face: Face::default(),
         };
         assert_eq!(factory.preset(0).info().name.as_str(), "Typing Profile");
@@ -133,11 +176,32 @@ mod tests {
         assert_eq!(appearance.colors.0.len(), LAYERS);
         assert_eq!(appearance.colors.0[0].as_ref(), Some(&BASE));
         assert_eq!(appearance.colors.0[1], None);
+        assert_eq!(appearance.lightbar.brightness, Some(127));
+        assert!(appearance.lightbar.enabled && appearance.lightbar.use_global);
+        assert_eq!(factory.preset(3).lightbar().brightness, None);
+        let overrides = factory.preset(0).overrides(2);
+        assert_eq!(overrides[0].actuation, None);
+        assert_eq!(
+            overrides[1].actuation,
+            Some(Distance::from_fraction(26 * 257))
+        );
+        assert!(
+            factory
+                .preset(3)
+                .overrides(2)
+                .iter()
+                .all(|entry| entry.actuation.is_none())
+        );
     }
 
     #[test]
     fn a_long_name_is_cut_to_the_name_capacity() {
-        let long = preset("a name that is much longer than thirty-two bytes", 0);
+        let long = preset(
+            "a name that is much longer than thirty-two bytes",
+            0,
+            &[],
+            None,
+        );
         assert_eq!(long.info().name.len(), NAME_LEN);
     }
 }

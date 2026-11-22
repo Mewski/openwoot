@@ -1,4 +1,4 @@
-use openwoot_protocol::{device, global, lighting, profile::Info};
+use openwoot_protocol::{device, global, lightbar, lighting, profile::Info};
 use serde::{Deserialize, Serialize};
 
 use super::Colors;
@@ -42,5 +42,15 @@ impl Record for device::Settings {
 
 impl Record for Count {
     const ITEM: u8 = 0x13;
+    const VERSION: u16 = 1;
+}
+
+impl Record for lightbar::Settings {
+    const ITEM: u8 = 0x24;
+    const VERSION: u16 = 1;
+}
+
+impl Record for lightbar::Entries {
+    const ITEM: u8 = 0x14;
     const VERSION: u16 = 1;
 }

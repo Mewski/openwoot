@@ -13,17 +13,18 @@ use super::{
 };
 
 #[derive(Debug)]
-pub struct Storage<F: MultiwriteNorFlash> {
-    pub settings: Option<Settings<F>>,
+pub struct Storage<'s, F: MultiwriteNorFlash> {
+    pub settings: Option<&'s mut Settings<F>>,
     pub opened: Result<Opened, Error>,
     pub device_info: Option<DeviceInfo>,
     pub layout_variant: u8,
     pub nor_identity: Option<NorIdentity>,
 }
 
-impl<D: SpiDevice> Storage<SpiNor<D>> {
+impl<'s, D: SpiDevice> Storage<'s, SpiNor<D>> {
     pub async fn open(
         mut nor: SpiNor<D>,
+        cell: &'s mut Settings<SpiNor<D>>,
         settings: SettingsRegion,
         device_info: impl DeviceInfoSource,
         layout_variant: impl LayoutVariantSource,
@@ -38,11 +39,10 @@ impl<D: SpiDevice> Storage<SpiNor<D>> {
         };
         let device_info = device_info.read(&mut nor).await.ok();
         let layout_variant = layout_variant.variant(device_info.as_ref());
-        let (settings, opened) =
-            match Settings::open(Partition::new(nor, settings), format_requested).await {
-                Ok((settings, opened)) => (Some(settings), Ok(opened)),
-                Err(error) => (None, Err(error)),
-            };
+        let opened = cell
+            .open(Partition::new(nor, settings), format_requested)
+            .await;
+        let settings = opened.is_ok().then_some(cell);
         Self {
             settings,
             opened,

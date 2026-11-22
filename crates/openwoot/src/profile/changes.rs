@@ -1,24 +1,26 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Changes(u8);
+pub struct Changes(u16);
 
 impl Changes {
     pub const ACTIVATED: Self = Self(1 << 4);
     pub const COLORS: Self = Self(1 << 1);
     pub const DEVICE: Self = Self(1 << 6);
-    pub const DEVICE_WIDE: Self = Self(Self::GLOBAL.0 | Self::DEVICE.0);
+    pub const DEVICE_WIDE: Self = Self(Self::GLOBAL.0 | Self::DEVICE.0 | Self::GLOBAL_LIGHTBAR.0);
     pub const GLOBAL: Self = Self(1 << 2);
+    pub const GLOBAL_LIGHTBAR: Self = Self(1 << 8);
     pub const INFO: Self = Self(1 << 5);
+    pub const LIGHTBAR: Self = Self(1 << 7);
     pub const LIGHTING: Self = Self(1 << 0);
     pub const NONE: Self = Self(0);
     pub const SCAN: Self = Self(1 << 3);
 
     #[must_use]
-    pub const fn from_bits(bits: u8) -> Self {
+    pub const fn from_bits(bits: u16) -> Self {
         Self(bits)
     }
 
     #[must_use]
-    pub const fn bits(self) -> u8 {
+    pub const fn bits(self) -> u16 {
         self.0
     }
 
@@ -64,8 +66,17 @@ mod tests {
 
     #[test]
     fn device_wide_changes_split_from_the_profile_changes() {
-        let changes = Changes::LIGHTING.union(Changes::GLOBAL);
-        assert_eq!(changes.intersection(Changes::DEVICE_WIDE), Changes::GLOBAL);
-        assert_eq!(changes.without(Changes::DEVICE_WIDE), Changes::LIGHTING);
+        let changes = Changes::LIGHTING
+            .union(Changes::GLOBAL)
+            .union(Changes::GLOBAL_LIGHTBAR)
+            .union(Changes::LIGHTBAR);
+        assert_eq!(
+            changes.intersection(Changes::DEVICE_WIDE),
+            Changes::GLOBAL.union(Changes::GLOBAL_LIGHTBAR)
+        );
+        assert_eq!(
+            changes.without(Changes::DEVICE_WIDE),
+            Changes::LIGHTING.union(Changes::LIGHTBAR)
+        );
     }
 }

@@ -33,19 +33,20 @@ impl Record for Format {
 
 impl<F: MultiwriteNorFlash> Settings<F> {
     pub async fn open(
+        &mut self,
         partition: Partition<F>,
         format_requested: bool,
-    ) -> Result<(Self, Opened), Error> {
-        let mut settings = Self::new(partition)?;
+    ) -> Result<Opened, Error> {
+        self.attach(partition)?;
         if format_requested {
-            settings.format().await?;
-            return Ok((settings, Opened::Formatted(FormatReason::Requested)));
+            self.format().await?;
+            return Ok(Opened::Formatted(FormatReason::Requested));
         }
-        match settings.load::<Format>(Scope::Global).await {
-            Ok(Some(format)) if format == CURRENT_FORMAT => Ok((settings, Opened::Kept)),
+        match self.load::<Format>(Scope::Global).await {
+            Ok(Some(format)) if format == CURRENT_FORMAT => Ok(Opened::Kept),
             Ok(_) | Err(Error::Corrupted | Error::Encoding | Error::Internal) => {
-                settings.format().await?;
-                Ok((settings, Opened::Formatted(FormatReason::Unrecognised)))
+                self.format().await?;
+                Ok(Opened::Formatted(FormatReason::Unrecognised))
             }
             Err(error) => Err(error),
         }

@@ -1,24 +1,35 @@
+use core::{
+    future::Future,
+    pin::{Pin, pin},
+};
+
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use openwoot_protocol::{
     advanced,
     config::Rejection,
     device, gamepad, global,
-    keys::{self as config, Keymap, Layer, Overrides, ScanMode},
+    keys::{self as config, Keymap, Layer, Override, Overrides, ScanMode},
+    lightbar,
     lighting::{self, KeyColors},
     profile::{Info, Slot, Summary},
 };
+use serde::{Serialize, de::DeserializeOwned};
 
-use super::{Appearance, Changes, Colors, Count, Factory, Revision, Shared};
+use super::{Appearance, Changes, Colors, Count, Factory, Preset, Revision, Shared};
 use crate::{
-    keys::{self, ActiveProfile, Keymaps, Parts, Profile, default_gamepad_settings},
-    storage::{Key, Record, Scope, Settings},
+    keys::{
+        self, ActiveProfile, Key as Position, Keymaps, Parts, Profile, default_gamepad_settings,
+    },
+    layout::LAYERS,
+    lighting::ProfileState,
+    storage::{Key, Record, Scope, Settings, Stored},
 };
 
 pub struct Model<'a, M: RawMutex, F: MultiwriteNorFlash, const ROWS: usize, const COLUMNS: usize> {
     keys: &'a keys::Shared<M>,
     shared: &'a Shared<M>,
-    storage: Option<Settings<F>>,
+    storage: Option<&'a mut Settings<F>>,
     factory: &'static Factory<ROWS, COLUMNS>,
     variant: u8,
     capacity: u8,
@@ -26,6 +37,7 @@ pub struct Model<'a, M: RawMutex, F: MultiwriteNorFlash, const ROWS: usize, cons
     active: u8,
     info: Info,
     global: global::Settings,
+    global_lightbar: lightbar::Entries,
     device: device::Settings,
     unsaved_keys: Parts,
     unsaved: Changes,
@@ -36,16 +48,17 @@ where
     M: RawMutex,
     F: MultiwriteNorFlash,
 {
-    pub async fn open(
+    #[must_use]
+    pub fn new(
         keys: &'a keys::Shared<M>,
         shared: &'a Shared<M>,
-        storage: Option<Settings<F>>,
+        storage: Option<&'a mut Settings<F>>,
         factory: &'static Factory<ROWS, COLUMNS>,
         variant: u8,
         capacity: u8,
     ) -> Self {
         let capacity = capacity.max(1);
-        let mut model = Self {
+        Self {
             keys,
             shared,
             storage,
@@ -56,18 +69,22 @@ where
             active: 0,
             info: factory.preset(0).info(),
             global: factory.global,
+            global_lightbar: lightbar::Entries::new(),
             device: device::Settings::from(factory.face),
             unsaved_keys: Parts::NONE,
             unsaved: Changes::NONE,
-        };
-        model.load_device_wide().await;
-        let stored = model
-            .load::<ActiveProfile>(Scope::Global)
-            .await
-            .map_or(0, |active| active.0);
-        model.active = if stored < model.count { stored } else { 0 };
-        model.publish().await;
-        model
+        }
+    }
+
+    pub async fn load(&mut self) {
+        self.load_device_wide().await;
+        let stored = load(&mut self.storage, Scope::Global, |active: ActiveProfile| {
+            active.0
+        })
+        .await
+        .unwrap_or(0);
+        self.active = if stored < self.count { stored } else { 0 };
+        self.publish().await;
     }
 
     #[must_use]
@@ -101,7 +118,12 @@ where
         let saved = self.save().await;
         self.active = profile.get();
         self.publish().await;
-        let stored = self.store(Scope::Global, &ActiveProfile(self.active)).await;
+        let stored = store(
+            &mut self.storage,
+            Scope::Global,
+            &ActiveProfile(self.active),
+        )
+        .await;
         saved.and(stored)
     }
 
@@ -112,8 +134,9 @@ where
         let slot = self.count;
         self.remove_profile(slot).await?;
         self.count += 1;
-        self.store(Scope::Global, &Count(self.count)).await?;
+        store(&mut self.storage, Scope::Global, &Count(self.count)).await?;
         self.keys.set_profiles(self.count, self.active);
+        self.publish_profile_state();
         Ok(Slot::new(slot))
     }
 
@@ -129,62 +152,60 @@ where
         }
         self.remove_profile(slot).await?;
         self.count = slot;
-        self.store(Scope::Global, &Count(self.count)).await?;
+        store(&mut self.storage, Scope::Global, &Count(self.count)).await?;
         if self.active >= self.count {
             self.activate(Slot::new(self.count - 1)).await
         } else {
             self.keys.set_profiles(self.count, self.active);
+            self.publish_profile_state();
             Ok(())
         }
     }
 
     pub async fn save(&mut self) -> Result<(), Rejection> {
-        let scope = Scope::Profile(self.active);
         let keys = self.unsaved_keys;
         let unsaved = self.unsaved;
         if keys.contains(Parts::SETTINGS) {
-            let part = self.active_keys(|profile| profile.settings)?;
-            self.store(scope, &part).await?;
+            self.store_keys(|profile| &profile.settings).await?;
         }
         if keys.contains(Parts::KEYMAPS) {
-            let part = self.active_keys(|profile| profile.keymaps.clone())?;
-            self.store(scope, &part).await?;
+            self.store_keys(|profile| &profile.keymaps).await?;
         }
         if keys.contains(Parts::OVERRIDES) {
-            let part = self.active_keys(|profile| profile.overrides.clone())?;
-            self.store(scope, &part).await?;
+            self.store_keys(|profile| &profile.overrides).await?;
         }
         if keys.contains(Parts::ADVANCED) {
-            let part = self.active_keys(|profile| profile.advanced.clone())?;
-            self.store(scope, &part).await?;
+            self.store_keys(|profile| &profile.advanced).await?;
         }
         if keys.contains(Parts::GAMEPAD_MAPPING) {
-            let part = self.active_keys(|profile| profile.gamepad_mapping.clone())?;
-            self.store(scope, &part).await?;
+            self.store_keys(|profile| &profile.gamepad_mapping).await?;
         }
         if keys.contains(Parts::GAMEPAD_SETTINGS) {
-            let part = self.active_keys(|profile| profile.gamepad_settings)?;
-            self.store(scope, &part).await?;
+            self.store_keys(|profile| &profile.gamepad_settings).await?;
         }
         if unsaved.contains(Changes::LIGHTING) {
-            let part = self.active_appearance(|appearance| appearance.settings.clone())?;
-            self.store(scope, &part).await?;
+            self.store_appearance(|appearance| &appearance.settings)
+                .await?;
         }
         if unsaved.contains(Changes::COLORS) {
-            let part = self.active_appearance(|appearance| appearance.colors.clone())?;
-            self.store(scope, &part).await?;
+            self.store_appearance(|appearance| &appearance.colors)
+                .await?;
+        }
+        if unsaved.contains(Changes::LIGHTBAR) {
+            self.store_appearance(|appearance| &appearance.lightbar)
+                .await?;
         }
         if unsaved.contains(Changes::INFO) {
-            let info = self.info.clone();
-            self.store(scope, &info).await?;
+            store(&mut self.storage, Scope::Profile(self.active), &self.info).await?;
         }
         if unsaved.contains(Changes::GLOBAL) {
-            let global = self.global;
-            self.store(Scope::Global, &global).await?;
+            store(&mut self.storage, Scope::Global, &self.global).await?;
         }
         if unsaved.contains(Changes::DEVICE) {
-            let device = self.device;
-            self.store(Scope::Global, &device).await?;
+            store(&mut self.storage, Scope::Global, &self.device).await?;
+        }
+        if unsaved.contains(Changes::GLOBAL_LIGHTBAR) {
+            store(&mut self.storage, Scope::Global, &self.global_lightbar).await?;
         }
         if !keys.is_empty() || !unsaved.without(Changes::DEVICE_WIDE).is_empty() {
             self.bump_revision(self.active).await?;
@@ -195,31 +216,26 @@ where
     }
 
     pub async fn revert(&mut self) {
-        self.global = self.factory.global;
-        self.device = device::Settings::from(self.factory.face);
         self.load_device_wide().await;
         self.publish().await;
     }
 
     pub async fn factory_reset(&mut self) -> Result<(), Rejection> {
         if let Some(storage) = self.storage.as_mut() {
-            storage
-                .factory_reset()
-                .await
-                .map_err(|_| Rejection::Storage)?;
+            let erased: Pin<&mut dyn Future<Output = Result<(), crate::storage::Error>>> =
+                pin!(storage.factory_reset());
+            erased.await.map_err(|_| Rejection::Storage)?;
         }
         self.count = self.factory.created.clamp(1, self.capacity);
         self.active = 0;
-        self.global = self.factory.global;
-        self.device = device::Settings::from(self.factory.face);
-        self.apply_global();
+        self.load_device_wide().await;
         self.publish().await;
         Ok(())
     }
 
     pub async fn save_brightness(&mut self) -> Result<(), Rejection> {
-        let settings = self.active_appearance(|appearance| appearance.settings.clone())?;
-        self.store(Scope::Profile(self.active), &settings).await?;
+        self.store_appearance(|appearance| &appearance.settings)
+            .await?;
         self.bump_revision(self.active).await
     }
 
@@ -259,24 +275,33 @@ where
         }
         self.info = info;
         self.unsaved = self.unsaved.union(Changes::INFO);
+        self.publish_profile_state();
         Ok(())
     }
 
     pub async fn revision(&mut self, profile: Slot) -> Result<u32, Rejection> {
         self.check(profile)?;
-        Ok(self
-            .load::<Revision>(Scope::Profile(profile.get()))
-            .await
-            .unwrap_or_default()
-            .0)
+        Ok(load(
+            &mut self.storage,
+            Scope::Profile(profile.get()),
+            |revision: Revision| revision.0,
+        )
+        .await
+        .unwrap_or_default())
     }
 
     pub async fn lighting(&mut self, profile: Slot) -> Result<lighting::Settings, Rejection> {
         self.check(profile)?;
         if profile.get() == self.active {
-            return self.active_appearance(|appearance| appearance.settings.clone());
+            return Ok(self.shared.edit(|appearance| appearance.settings.clone()));
         }
-        Ok(self.lighting_of(profile.get()).await)
+        let stored = load(
+            &mut self.storage,
+            Scope::Profile(profile.get()),
+            |settings: lighting::Settings| settings,
+        )
+        .await;
+        Ok(stored.unwrap_or_else(|| self.factory.preset(profile.get()).lighting.clone()))
     }
 
     pub async fn set_lighting(
@@ -301,39 +326,144 @@ where
         &mut self,
         profile: Slot,
         layer: Layer,
-    ) -> Result<Option<KeyColors>, Rejection> {
+        colors: &mut Option<KeyColors>,
+    ) -> Result<(), Rejection> {
         self.check(profile)?;
+        let index = usize::from(layer.number());
         if profile.get() == self.active {
-            return self.active_appearance(|appearance| appearance.colors.layer(layer).cloned());
+            self.shared.edit(|appearance| {
+                if let Some(active) = appearance.colors.0.get(index) {
+                    colors.clone_from(active);
+                }
+            });
+            return Ok(());
         }
-        Ok(self.colors_of(profile.get()).await.layer(layer).cloned())
+        let found = load_stored::<_, Colors, _>(
+            &mut self.storage,
+            Scope::Profile(profile.get()),
+            |stored| {
+                decode_sequence(stored, Colors::VERSION, |stored_index, stored_colors| {
+                    if stored_index == index {
+                        *colors = stored_colors;
+                    }
+                })
+            },
+        )
+        .await;
+        if found != Some(true) {
+            *colors = self
+                .factory
+                .preset(profile.get())
+                .colors
+                .get(index)
+                .copied()
+                .flatten()
+                .cloned();
+        }
+        Ok(())
     }
 
     pub async fn set_key_colors(
         &mut self,
         profile: Slot,
         layer: Layer,
-        colors: Option<KeyColors>,
+        colors: Option<&KeyColors>,
     ) -> Result<(), Rejection> {
         self.check(profile)?;
-        if profile.get() != self.active {
-            let mut stored = self.colors_of(profile.get()).await;
-            stored.set(layer, colors);
-            return self.store_part(profile.get(), &stored).await;
+        if profile.get() == self.active {
+            self.shared
+                .change(Changes::COLORS, |appearance| {
+                    appearance.colors.set(layer, colors.cloned());
+                })
+                .ok_or(Rejection::Storage)?;
+            self.unsaved = self.unsaved.union(Changes::COLORS);
+            return Ok(());
         }
-        self.shared
-            .change(Changes::COLORS, |appearance| {
-                appearance.colors.set(layer, colors);
+        let slot = profile.get();
+        let preset = self.factory.preset(slot);
+        let mut stored = Colors::default();
+        let found = load_stored::<_, Colors, _>(&mut self.storage, Scope::Profile(slot), |raw| {
+            decode_sequence(raw, Colors::VERSION, |index, layer_colors| {
+                if let Some(target) = stored.0.get_mut(index) {
+                    *target = layer_colors;
+                }
             })
-            .ok_or(Rejection::Storage)?;
-        self.unsaved = self.unsaved.union(Changes::COLORS);
+        })
+        .await;
+        if found != Some(true) {
+            for (target, colors) in stored.0.iter_mut().zip(preset.colors) {
+                *target = colors.cloned();
+            }
+        }
+        if let Some(target) = stored.0.get_mut(usize::from(layer.number())) {
+            *target = colors.cloned();
+        }
+        self.store_part(slot, &stored).await
+    }
+
+    pub async fn lightbar(
+        &mut self,
+        profile: Slot,
+        settings: &mut lightbar::Settings,
+    ) -> Result<(), Rejection> {
+        self.check(profile)?;
+        if profile.get() == self.active {
+            self.shared
+                .edit(|appearance| settings.clone_from(&appearance.lightbar));
+            return Ok(());
+        }
+        let found = load(
+            &mut self.storage,
+            Scope::Profile(profile.get()),
+            |stored: lightbar::Settings| *settings = stored,
+        )
+        .await;
+        if found.is_none() {
+            *settings = self.factory.preset(profile.get()).lightbar();
+        }
         Ok(())
     }
 
+    pub async fn set_lightbar(
+        &mut self,
+        profile: Slot,
+        settings: &lightbar::Settings,
+    ) -> Result<(), Rejection> {
+        self.check(profile)?;
+        if profile.get() != self.active {
+            return self.store_part(profile.get(), settings).await;
+        }
+        self.shared
+            .change(Changes::LIGHTBAR, |appearance| {
+                appearance.lightbar.clone_from(settings);
+            })
+            .ok_or(Rejection::Storage)?;
+        self.unsaved = self.unsaved.union(Changes::LIGHTBAR);
+        Ok(())
+    }
+
+    #[must_use]
+    pub const fn global_lightbar(&self) -> &lightbar::Entries {
+        &self.global_lightbar
+    }
+
+    pub fn set_global_lightbar(&mut self, entries: &lightbar::Entries) {
+        self.global_lightbar.clone_from(entries);
+        self.shared.set_global_lightbar(&self.global_lightbar);
+        self.unsaved = self.unsaved.union(Changes::GLOBAL_LIGHTBAR);
+    }
+
     pub async fn settings(&mut self, profile: Slot) -> Result<config::Settings, Rejection> {
-        let defaults = self.factory.preset(profile.get()).keys;
-        self.get(profile, |profile| profile.settings, || defaults)
-            .await
+        let mut settings = self.factory.preset(profile.get()).keys;
+        self.fill(
+            profile,
+            &mut settings,
+            |profile| &profile.settings,
+            |stored, settings| *settings = stored,
+            |_| {},
+        )
+        .await?;
+        Ok(settings)
     }
 
     pub async fn set_settings(
@@ -342,8 +472,8 @@ where
         settings: config::Settings,
     ) -> Result<(), Rejection> {
         let active = profile.get() == self.active;
-        self.set(profile, Parts::SETTINGS, settings, |profile, settings| {
-            profile.settings = settings;
+        self.set(profile, Parts::SETTINGS, &settings, |profile| {
+            &mut profile.settings
         })
         .await?;
         if active {
@@ -353,36 +483,93 @@ where
         Ok(())
     }
 
-    pub async fn keymap(&mut self, profile: Slot, layer: Layer) -> Result<Keymap, Rejection> {
-        let keymaps = self.keymaps(profile).await?;
-        Ok(keymaps
-            .0
-            .get(usize::from(layer.number()))
-            .cloned()
-            .unwrap_or_default())
+    pub async fn keymap(
+        &mut self,
+        profile: Slot,
+        layer: Layer,
+        keymap: &mut Keymap,
+    ) -> Result<(), Rejection> {
+        self.check(profile)?;
+        let index = usize::from(layer.number());
+        if profile.get() == self.active {
+            self.keys.edit(|profile| {
+                if let Some(active) = profile.keymaps.0.get(index) {
+                    keymap.clone_from(active);
+                }
+            });
+            return Ok(());
+        }
+        let found = load_stored::<_, Keymaps, _>(
+            &mut self.storage,
+            Scope::Profile(profile.get()),
+            |stored| {
+                decode_sequence(stored, Keymaps::VERSION, |stored_index, stored_layer| {
+                    if stored_index == index {
+                        *keymap = stored_layer;
+                    }
+                })
+            },
+        )
+        .await;
+        if found != Some(true) {
+            self.default_keymap(layer, keymap);
+        }
+        Ok(())
     }
 
     pub async fn set_keymap(
         &mut self,
         profile: Slot,
         layer: Layer,
-        keymap: Keymap,
+        keymap: &Keymap,
     ) -> Result<(), Rejection> {
-        let mut keymaps = self.keymaps(profile).await?;
-        if let Some(slot) = keymaps.0.get_mut(usize::from(layer.number())) {
-            *slot = keymap;
+        self.check(profile)?;
+        let index = usize::from(layer.number());
+        if profile.get() == self.active {
+            self.keys
+                .change(Parts::KEYMAPS, |profile| {
+                    if let Some(target) = profile.keymaps.0.get_mut(index) {
+                        target.clone_from(keymap);
+                    }
+                })
+                .ok_or(Rejection::Storage)?;
+            self.unsaved_keys = self.unsaved_keys.union(Parts::KEYMAPS);
+            return Ok(());
         }
-        self.set(profile, Parts::KEYMAPS, keymaps, |profile, keymaps| {
-            profile.keymaps = keymaps;
-        })
-        .await
+        let slot = profile.get();
+        let mut keymaps = Keymaps::default();
+        let found =
+            load_stored::<_, Keymaps, _>(&mut self.storage, Scope::Profile(slot), |stored| {
+                decode_sequence(stored, Keymaps::VERSION, |stored_index, stored_layer| {
+                    if let Some(target) = keymaps.0.get_mut(stored_index) {
+                        *target = stored_layer;
+                    }
+                })
+            })
+            .await;
+        if found != Some(true) {
+            for (layer, target) in Layer::ALL.into_iter().zip(keymaps.0.iter_mut()) {
+                self.default_keymap(layer, target);
+            }
+        }
+        if let Some(target) = keymaps.0.get_mut(index) {
+            target.clone_from(keymap);
+        }
+        self.store_part(slot, &keymaps).await
     }
 
-    pub async fn overrides(&mut self, profile: Slot) -> Result<Overrides, Rejection> {
-        self.get(
+    pub async fn overrides(
+        &mut self,
+        profile: Slot,
+        overrides: &mut Overrides,
+    ) -> Result<(), Rejection> {
+        let preset = self.factory.preset(profile.get());
+        self.fill(
             profile,
-            |profile| profile.overrides.clone(),
-            || core::iter::repeat_n(config::Override::default(), ROWS * COLUMNS).collect(),
+            overrides,
+            |profile| &profile.overrides,
+            |stored, overrides| *overrides = stored,
+            |overrides| fill_overrides(overrides, preset, ROWS * COLUMNS),
         )
         .await
     }
@@ -390,24 +577,29 @@ where
     pub async fn set_overrides(
         &mut self,
         profile: Slot,
-        overrides: Overrides,
+        overrides: &Overrides,
     ) -> Result<(), Rejection> {
-        self.set(
-            profile,
-            Parts::OVERRIDES,
-            overrides,
-            |profile, overrides| {
-                profile.overrides = overrides;
-            },
-        )
+        self.set(profile, Parts::OVERRIDES, overrides, |profile| {
+            &mut profile.overrides
+        })
         .await
     }
 
-    pub async fn advanced(&mut self, profile: Slot) -> Result<advanced::Keys, Rejection> {
-        self.get(
+    pub async fn advanced(
+        &mut self,
+        profile: Slot,
+        keys: &mut advanced::Keys,
+    ) -> Result<(), Rejection> {
+        let preset = self.factory.preset(profile.get());
+        self.fill(
             profile,
-            |profile| profile.advanced.clone(),
-            heapless::Vec::new,
+            keys,
+            |profile| &profile.advanced,
+            |stored, keys| *keys = stored,
+            |keys| {
+                keys.clear();
+                keys.extend(preset.advanced.iter().copied());
+            },
         )
         .await
     }
@@ -415,21 +607,30 @@ where
     pub async fn set_advanced(
         &mut self,
         profile: Slot,
-        keys: advanced::Keys,
+        keys: &advanced::Keys,
     ) -> Result<(), Rejection> {
-        self.set(profile, Parts::ADVANCED, keys, |profile, keys| {
-            profile.advanced = keys;
+        self.set(profile, Parts::ADVANCED, keys, |profile| {
+            &mut profile.advanced
         })
         .await
     }
 
-    pub async fn gamepad_mapping(&mut self, profile: Slot) -> Result<gamepad::Mapping, Rejection> {
-        self.get(
+    pub async fn gamepad_mapping(
+        &mut self,
+        profile: Slot,
+        mapping: &mut gamepad::Mapping,
+    ) -> Result<(), Rejection> {
+        self.fill(
             profile,
-            |profile| profile.gamepad_mapping.clone(),
-            || gamepad::Mapping {
-                bindings: core::iter::repeat_n(None, ROWS * COLUMNS).collect(),
-                exclusive: false,
+            mapping,
+            |profile| &profile.gamepad_mapping,
+            |stored, mapping| *mapping = stored,
+            |mapping| {
+                mapping.bindings.clear();
+                mapping
+                    .bindings
+                    .extend(core::iter::repeat_n(None, ROWS * COLUMNS));
+                mapping.exclusive = false;
             },
         )
         .await
@@ -438,16 +639,11 @@ where
     pub async fn set_gamepad_mapping(
         &mut self,
         profile: Slot,
-        mapping: gamepad::Mapping,
+        mapping: &gamepad::Mapping,
     ) -> Result<(), Rejection> {
-        self.set(
-            profile,
-            Parts::GAMEPAD_MAPPING,
-            mapping,
-            |profile, mapping| {
-                profile.gamepad_mapping = mapping;
-            },
-        )
+        self.set(profile, Parts::GAMEPAD_MAPPING, mapping, |profile| {
+            &mut profile.gamepad_mapping
+        })
         .await
     }
 
@@ -455,12 +651,16 @@ where
         &mut self,
         profile: Slot,
     ) -> Result<gamepad::Settings, Rejection> {
-        self.get(
+        let mut settings = default_gamepad_settings();
+        self.fill(
             profile,
-            |profile| profile.gamepad_settings,
-            default_gamepad_settings,
+            &mut settings,
+            |profile| &profile.gamepad_settings,
+            |stored, settings| *settings = stored,
+            |_| {},
         )
-        .await
+        .await?;
+        Ok(settings)
     }
 
     pub async fn set_gamepad_settings(
@@ -468,47 +668,162 @@ where
         profile: Slot,
         settings: gamepad::Settings,
     ) -> Result<(), Rejection> {
-        self.set(
-            profile,
-            Parts::GAMEPAD_SETTINGS,
-            settings,
-            |profile, settings| profile.gamepad_settings = settings,
-        )
+        self.set(profile, Parts::GAMEPAD_SETTINGS, &settings, |profile| {
+            &mut profile.gamepad_settings
+        })
         .await
-    }
-
-    async fn keymaps(&mut self, profile: Slot) -> Result<Keymaps, Rejection> {
-        let defaults = self.default_keymaps();
-        self.get(profile, |profile| profile.keymaps.clone(), || defaults)
-            .await
     }
 
     async fn publish(&mut self) {
         let slot = self.active;
-        let profile = self.keys_of(slot).await;
-        let fast_scan = profile.settings.scan_mode == ScanMode::Parallel;
-        self.keys.publish(profile, self.count, slot);
-        let settings = self.lighting_of(slot).await;
-        let colors = self.colors_of(slot).await;
-        self.shared
-            .publish(Appearance { settings, colors }, fast_scan);
+        let scope = Scope::Profile(slot);
+        let (keys, shared) = (self.keys, self.shared);
+        let key_count = ROWS * COLUMNS;
+        self.reset_keys(slot);
+        load(&mut self.storage, scope, |settings: config::Settings| {
+            keys.edit(|profile| profile.settings = settings);
+        })
+        .await;
+        load_stored::<_, Keymaps, _>(&mut self.storage, scope, |stored| {
+            let mut valid = true;
+            let complete = decode_sequence(stored, Keymaps::VERSION, |_, layer: Keymap| {
+                valid &= layer.len() == key_count;
+            });
+            if complete && valid {
+                decode_sequence(stored, Keymaps::VERSION, |index, layer| {
+                    keys.edit(|profile| {
+                        if let Some(target) = profile.keymaps.0.get_mut(index) {
+                            *target = layer;
+                        }
+                    });
+                });
+            }
+        })
+        .await;
+        load(&mut self.storage, scope, |overrides: Overrides| {
+            if overrides.len() == key_count {
+                keys.edit(|profile| profile.overrides = overrides);
+            }
+        })
+        .await;
+        load(&mut self.storage, scope, |advanced: advanced::Keys| {
+            keys.edit(|profile| profile.advanced = advanced);
+        })
+        .await;
+        load(&mut self.storage, scope, |mapping: gamepad::Mapping| {
+            if mapping.bindings.len() == key_count {
+                keys.edit(|profile| profile.gamepad_mapping = mapping);
+            }
+        })
+        .await;
+        load(&mut self.storage, scope, |settings: gamepad::Settings| {
+            keys.edit(|profile| profile.gamepad_settings = settings);
+        })
+        .await;
+        let fast_scan = keys.edit(|profile| profile.settings.scan_mode == ScanMode::Parallel);
+        keys.activate(self.count, slot);
+        self.reset_appearance(slot);
+        load(&mut self.storage, scope, |settings: lighting::Settings| {
+            shared.edit(|appearance| appearance.settings = settings);
+        })
+        .await;
+        load_stored::<_, Colors, _>(&mut self.storage, scope, |stored| {
+            if decode_sequence(stored, Colors::VERSION, |_, _: Option<KeyColors>| {}) {
+                decode_sequence(stored, Colors::VERSION, |index, layer| {
+                    shared.edit(|appearance| {
+                        if let Some(target) = appearance.colors.0.get_mut(index) {
+                            *target = layer;
+                        }
+                    });
+                });
+            }
+        })
+        .await;
+        load(&mut self.storage, scope, |lightbar: lightbar::Settings| {
+            shared.edit(|appearance| appearance.lightbar = lightbar);
+        })
+        .await;
+        shared.activate(fast_scan);
         self.info = self.info_of(slot).await;
         self.unsaved_keys = Parts::NONE;
         self.unsaved = self.unsaved.intersection(Changes::DEVICE_WIDE);
+        self.publish_profile_state();
+    }
+
+    fn reset_keys(&self, slot: u8) {
+        let preset = self.factory.preset(slot);
+        let key_count = ROWS * COLUMNS;
+        self.keys.edit(|profile| {
+            profile.settings = preset.keys;
+            for (layer, target) in Layer::ALL.into_iter().zip(profile.keymaps.0.iter_mut()) {
+                self.default_keymap(layer, target);
+            }
+            fill_overrides(&mut profile.overrides, preset, key_count);
+            profile.advanced.clear();
+            profile.advanced.extend(preset.advanced.iter().copied());
+            profile.gamepad_mapping.bindings.clear();
+            profile
+                .gamepad_mapping
+                .bindings
+                .extend(core::iter::repeat_n(None, key_count));
+            profile.gamepad_mapping.exclusive = false;
+            profile.gamepad_settings = default_gamepad_settings();
+        });
+    }
+
+    fn reset_appearance(&self, slot: u8) {
+        let preset = self.factory.preset(slot);
+        self.shared.edit(|appearance| {
+            appearance.settings.clone_from(&preset.lighting);
+            for (target, colors) in appearance.colors.0.iter_mut().zip(preset.colors) {
+                match (target.as_mut(), colors) {
+                    (Some(target), Some(colors)) => target.clone_from(colors),
+                    (_, colors) => *target = colors.cloned(),
+                }
+            }
+            appearance.lightbar = preset.lightbar();
+        });
+    }
+
+    fn publish_profile_state(&self) {
+        self.shared.set_profile_state(ProfileState {
+            slot: self.active,
+            count: self.count,
+            color: self.info.color,
+        });
     }
 
     async fn load_device_wide(&mut self) {
-        if let Some(count) = self.load::<Count>(Scope::Global).await {
-            self.count = count.0.clamp(1, self.capacity);
+        self.count = self.factory.created.clamp(1, self.capacity);
+        self.global = self.factory.global;
+        self.device = device::Settings::from(self.factory.face);
+        self.global_lightbar.clone_from(&self.factory.lightbar);
+        let capacity = self.capacity;
+        if let Some(count) = load(&mut self.storage, Scope::Global, |count: Count| {
+            count.0.clamp(1, capacity)
+        })
+        .await
+        {
+            self.count = count;
         }
-        if let Some(global) = self.load(Scope::Global).await {
+        if let Some(global) = load(&mut self.storage, Scope::Global, |global| global).await {
             self.global = global;
         }
-        if let Some(device) = self.load(Scope::Global).await {
+        if let Some(device) = load(&mut self.storage, Scope::Global, |device| device).await {
             self.device = device;
         }
+        let entries = &mut self.global_lightbar;
+        load(
+            &mut self.storage,
+            Scope::Global,
+            |stored: lightbar::Entries| {
+                *entries = stored;
+            },
+        )
+        .await;
         self.unsaved = Changes::NONE;
         self.apply_global();
+        self.shared.set_global_lightbar(&self.global_lightbar);
     }
 
     fn apply_global(&self) {
@@ -517,114 +832,95 @@ where
             .set_rebound_filter(self.global.release_rebound_filter);
     }
 
-    async fn keys_of(&mut self, slot: u8) -> Profile {
-        let mut profile = Profile::defaults(&self.factory.keymap, self.variant);
-        profile.settings = self.factory.preset(slot).keys;
-        let scope = Scope::Profile(slot);
-        let keys = ROWS * COLUMNS;
-        if let Some(settings) = self.load(scope).await {
-            profile.settings = settings;
-        }
-        if let Some(keymaps) = self
-            .load::<Keymaps>(scope)
-            .await
-            .filter(|keymaps| keymaps.0.iter().all(|keymap| keymap.len() == keys))
-        {
-            profile.keymaps = keymaps;
-        }
-        if let Some(overrides) = self
-            .load::<Overrides>(scope)
-            .await
-            .filter(|overrides| overrides.len() == keys)
-        {
-            profile.overrides = overrides;
-        }
-        if let Some(advanced) = self.load(scope).await {
-            profile.advanced = advanced;
-        }
-        if let Some(mapping) = self
-            .load::<gamepad::Mapping>(scope)
-            .await
-            .filter(|mapping| mapping.bindings.len() == keys)
-        {
-            profile.gamepad_mapping = mapping;
-        }
-        if let Some(settings) = self.load(scope).await {
-            profile.gamepad_settings = settings;
-        }
-        profile
-    }
-
-    async fn lighting_of(&mut self, slot: u8) -> lighting::Settings {
-        match self.load(Scope::Profile(slot)).await {
-            Some(settings) => settings,
-            None => self.factory.preset(slot).lighting.clone(),
-        }
-    }
-
-    async fn colors_of(&mut self, slot: u8) -> Colors {
-        match self.load(Scope::Profile(slot)).await {
-            Some(colors) => colors,
-            None => Colors(
-                self.factory
-                    .preset(slot)
-                    .colors
-                    .map(Option::<&KeyColors>::cloned),
-            ),
-        }
-    }
-
     async fn info_of(&mut self, slot: u8) -> Info {
-        match self.load(Scope::Profile(slot)).await {
+        match load(&mut self.storage, Scope::Profile(slot), |info: Info| info).await {
             Some(info) => info,
             None => self.factory.preset(slot).info(),
         }
     }
 
-    fn default_keymaps(&self) -> Keymaps {
-        Keymaps(Layer::ALL.map(|layer| self.factory.keymap.keymap(layer, self.variant)))
-    }
-
-    async fn get<T: Record>(
+    async fn fill<T: Record, P: Clone>(
         &mut self,
         profile: Slot,
-        from_active: impl FnOnce(&Profile) -> T,
-        default: impl FnOnce() -> T,
-    ) -> Result<T, Rejection> {
+        part: &mut P,
+        from_active: impl FnOnce(&Profile) -> &P,
+        from_stored: impl FnOnce(T, &mut P),
+        default: impl FnOnce(&mut P),
+    ) -> Result<(), Rejection> {
         self.check(profile)?;
         if profile.get() == self.active {
-            return self.active_keys(from_active);
+            self.keys
+                .edit(|profile| part.clone_from(from_active(profile)));
+            return Ok(());
         }
-        Ok(self
-            .load(Scope::Profile(profile.get()))
-            .await
-            .unwrap_or_else(default))
+        let found = load(
+            &mut self.storage,
+            Scope::Profile(profile.get()),
+            |stored: T| from_stored(stored, part),
+        )
+        .await;
+        if found.is_none() {
+            default(part);
+        }
+        Ok(())
     }
 
-    async fn set<T: Record>(
+    async fn set<T: Record + Clone>(
         &mut self,
         profile: Slot,
         parts: Parts,
-        value: T,
-        into_active: impl FnOnce(&mut Profile, T),
+        value: &T,
+        into_active: impl FnOnce(&mut Profile) -> &mut T,
     ) -> Result<(), Rejection> {
         self.check(profile)?;
         if profile.get() != self.active {
-            return self.store_part(profile.get(), &value).await;
+            return self.store_part(profile.get(), value).await;
         }
         self.keys
-            .change(parts, |profile| into_active(profile, value))
+            .change(parts, |profile| into_active(profile).clone_from(value))
             .ok_or(Rejection::Storage)?;
         self.unsaved_keys = self.unsaved_keys.union(parts);
         Ok(())
     }
 
-    fn active_keys<T>(&self, part: impl FnOnce(&Profile) -> T) -> Result<T, Rejection> {
-        self.keys.read(part).ok_or(Rejection::Storage)
+    fn default_keymap(&self, layer: Layer, keymap: &mut Keymap) {
+        keymap.clear();
+        for row in 0..ROWS {
+            for column in 0..COLUMNS {
+                let (Ok(row), Ok(column)) = (u8::try_from(row), u8::try_from(column)) else {
+                    continue;
+                };
+                let action =
+                    self.factory
+                        .keymap
+                        .action(layer, Position::new(row, column), self.variant);
+                if keymap.push(action).is_err() {
+                    return;
+                }
+            }
+        }
     }
 
-    fn active_appearance<T>(&self, part: impl FnOnce(&Appearance) -> T) -> Result<T, Rejection> {
-        self.shared.read(part).ok_or(Rejection::Storage)
+    async fn store_keys<T: Record>(
+        &mut self,
+        part: impl Fn(&Profile) -> &T,
+    ) -> Result<(), Rejection> {
+        let keys = self.keys;
+        store_with::<_, T>(&mut self.storage, Scope::Profile(self.active), |body| {
+            keys.edit(|profile| encode(part(profile), body))
+        })
+        .await
+    }
+
+    async fn store_appearance<T: Record>(
+        &mut self,
+        part: impl Fn(&Appearance) -> &T,
+    ) -> Result<(), Rejection> {
+        let shared = self.shared;
+        store_with::<_, T>(&mut self.storage, Scope::Profile(self.active), |body| {
+            shared.edit(|appearance| encode(part(appearance), body))
+        })
+        .await
     }
 
     const fn check(&self, profile: Slot) -> Result<(), Rejection> {
@@ -636,15 +932,21 @@ where
     }
 
     async fn store_part<T: Record>(&mut self, slot: u8, value: &T) -> Result<(), Rejection> {
-        self.store(Scope::Profile(slot), value).await?;
+        store(&mut self.storage, Scope::Profile(slot), value).await?;
         self.bump_revision(slot).await
     }
 
     async fn bump_revision(&mut self, slot: u8) -> Result<(), Rejection> {
         let scope = Scope::Profile(slot);
-        let revision = self.load::<Revision>(scope).await.unwrap_or_default();
-        self.store(scope, &Revision(revision.0.wrapping_add(1)))
+        let revision = load(&mut self.storage, scope, |revision: Revision| revision.0)
             .await
+            .unwrap_or_default();
+        store(
+            &mut self.storage,
+            scope,
+            &Revision(revision.wrapping_add(1)),
+        )
+        .await
     }
 
     async fn remove_profile(&mut self, slot: u8) -> Result<(), Rejection> {
@@ -663,24 +965,11 @@ where
             Key::of::<Colors>(scope),
             Key::of::<Info>(scope),
             Key::of::<Revision>(scope),
+            Key::of::<lightbar::Settings>(scope),
         ] {
             storage.remove(key).await.map_err(|_| Rejection::Storage)?;
         }
         Ok(())
-    }
-
-    async fn load<T: Record>(&mut self, scope: Scope) -> Option<T> {
-        self.storage.as_mut()?.load::<T>(scope).await.ok().flatten()
-    }
-
-    async fn store<T: Record>(&mut self, scope: Scope, value: &T) -> Result<(), Rejection> {
-        let Some(storage) = self.storage.as_mut() else {
-            return Err(Rejection::Storage);
-        };
-        storage
-            .store(scope, value)
-            .await
-            .map_err(|_| Rejection::Storage)
     }
 }
 
@@ -695,5 +984,133 @@ impl<M: RawMutex, F: MultiwriteNorFlash, const ROWS: usize, const COLUMNS: usize
             .field("unsaved_keys", &self.unsaved_keys)
             .field("unsaved", &self.unsaved)
             .finish_non_exhaustive()
+    }
+}
+
+async fn load<F: MultiwriteNorFlash, T: Record, R>(
+    storage: &mut Option<&mut Settings<F>>,
+    scope: Scope,
+    read: impl FnOnce(T) -> R,
+) -> Option<R> {
+    storage
+        .as_mut()?
+        .load_with(Key::of::<T>(scope), |stored| stored.decode::<T>().map(read))
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+}
+
+async fn store<F: MultiwriteNorFlash, T: Record>(
+    storage: &mut Option<&mut Settings<F>>,
+    scope: Scope,
+    value: &T,
+) -> Result<(), Rejection> {
+    store_with::<F, T>(storage, scope, |body| encode(value, body)).await
+}
+
+async fn store_with<F: MultiwriteNorFlash, T: Record>(
+    storage: &mut Option<&mut Settings<F>>,
+    scope: Scope,
+    encode: impl Fn(&mut [u8]) -> Option<usize>,
+) -> Result<(), Rejection> {
+    let Some(storage) = storage.as_mut() else {
+        return Err(Rejection::Storage);
+    };
+    storage
+        .store_with(Key::of::<T>(scope), T::VERSION, encode)
+        .await
+        .map_err(|_| Rejection::Storage)
+}
+
+fn encode(value: &impl Serialize, body: &mut [u8]) -> Option<usize> {
+    postcard::to_slice(value, body)
+        .ok()
+        .map(|encoded| encoded.len())
+}
+
+async fn load_stored<F: MultiwriteNorFlash, T: Record, R>(
+    storage: &mut Option<&mut Settings<F>>,
+    scope: Scope,
+    read: impl FnOnce(Stored<'_>) -> R,
+) -> Option<R> {
+    storage
+        .as_mut()?
+        .load_with(Key::of::<T>(scope), read)
+        .await
+        .ok()
+        .flatten()
+}
+
+fn decode_sequence<T: DeserializeOwned>(
+    stored: Stored<'_>,
+    version: u16,
+    mut item: impl FnMut(usize, T),
+) -> bool {
+    if stored.version != version {
+        return false;
+    }
+    let mut rest = stored.body;
+    for index in 0..LAYERS {
+        let Ok((value, remaining)) = postcard::take_from_bytes::<T>(rest) else {
+            return false;
+        };
+        item(index, value);
+        rest = remaining;
+    }
+    true
+}
+
+fn fill_overrides(overrides: &mut Overrides, preset: &Preset, key_count: usize) {
+    overrides.clear();
+    overrides.extend(core::iter::repeat_n(Override::default(), key_count));
+    for (key, actuation) in preset.actuation_points {
+        if let Some(entry) = overrides.get_mut(usize::from(key.get())) {
+            entry.actuation = Some(*actuation);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use openwoot_protocol::keys::Action;
+
+    use super::*;
+
+    #[test]
+    fn keymap_layers_decode_one_by_one_like_the_whole_record() {
+        let mut keymaps = Keymaps::default();
+        for (index, keymap) in keymaps.0.iter_mut().enumerate() {
+            keymap
+                .extend((0..3).map(|key| Action::Keyboard(u8::try_from(index * 3 + key).unwrap())));
+        }
+        let mut body = [0; 64];
+        let len = encode(&keymaps, &mut body).unwrap();
+        let stored = Stored {
+            version: Keymaps::VERSION,
+            body: &body[..len],
+        };
+        let mut layers = Keymaps::default();
+        assert!(decode_sequence(
+            stored,
+            Keymaps::VERSION,
+            |index, keymap| layers.0[index] = keymap
+        ));
+        assert_eq!(layers, keymaps);
+        assert_eq!(stored.decode::<Keymaps>(), Some(keymaps));
+        let truncated = Stored {
+            version: Keymaps::VERSION,
+            body: &body[..len - 1],
+        };
+        assert!(!decode_sequence(
+            truncated,
+            Keymaps::VERSION,
+            |_, _: Keymap| {}
+        ));
+        let newer = Stored {
+            version: Keymaps::VERSION + 1,
+            ..stored
+        };
+        assert!(!decode_sequence(newer, Keymaps::VERSION, |_, _: Keymap| {}));
     }
 }

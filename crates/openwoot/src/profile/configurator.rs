@@ -6,6 +6,7 @@ use openwoot_protocol::{
     config::{Capabilities, Rejection},
     device, gamepad, global,
     keys::{self as config, Keymap, Layer, Overrides},
+    lightbar,
     lighting::{self, KeyColors},
     profile::{Info, Slot, Summary},
 };
@@ -52,6 +53,22 @@ where
                     let _ = self.model.lock().await.save_brightness().await;
                 }
             }
+        }
+    }
+
+    const fn require_lightbar(&self) -> Result<(), Rejection> {
+        if self.capabilities.lightbar_leds == 0 {
+            Err(Rejection::Unsupported)
+        } else {
+            Ok(())
+        }
+    }
+
+    const fn require_host_signals(&self) -> Result<(), Rejection> {
+        if self.capabilities.host_signals {
+            Ok(())
+        } else {
+            Err(Rejection::Unsupported)
         }
     }
 }
@@ -128,15 +145,20 @@ where
             .await
     }
 
-    async fn keymap(&mut self, profile: Slot, layer: Layer) -> Result<Keymap, Rejection> {
-        self.model.lock().await.keymap(profile, layer).await
+    async fn keymap(
+        &mut self,
+        profile: Slot,
+        layer: Layer,
+        keymap: &mut Keymap,
+    ) -> Result<(), Rejection> {
+        self.model.lock().await.keymap(profile, layer, keymap).await
     }
 
     async fn set_keymap(
         &mut self,
         profile: Slot,
         layer: Layer,
-        keymap: Keymap,
+        keymap: &Keymap,
     ) -> Result<(), Rejection> {
         self.model
             .lock()
@@ -145,14 +167,18 @@ where
             .await
     }
 
-    async fn key_overrides(&mut self, profile: Slot) -> Result<Overrides, Rejection> {
-        self.model.lock().await.overrides(profile).await
+    async fn key_overrides(
+        &mut self,
+        profile: Slot,
+        overrides: &mut Overrides,
+    ) -> Result<(), Rejection> {
+        self.model.lock().await.overrides(profile, overrides).await
     }
 
     async fn set_key_overrides(
         &mut self,
         profile: Slot,
-        overrides: Overrides,
+        overrides: &Overrides,
     ) -> Result<(), Rejection> {
         self.model
             .lock()
@@ -161,26 +187,38 @@ where
             .await
     }
 
-    async fn advanced_keys(&mut self, profile: Slot) -> Result<advanced::Keys, Rejection> {
-        self.model.lock().await.advanced(profile).await
+    async fn advanced_keys(
+        &mut self,
+        profile: Slot,
+        keys: &mut advanced::Keys,
+    ) -> Result<(), Rejection> {
+        self.model.lock().await.advanced(profile, keys).await
     }
 
     async fn set_advanced_keys(
         &mut self,
         profile: Slot,
-        keys: advanced::Keys,
+        keys: &advanced::Keys,
     ) -> Result<(), Rejection> {
         self.model.lock().await.set_advanced(profile, keys).await
     }
 
-    async fn gamepad_mapping(&mut self, profile: Slot) -> Result<gamepad::Mapping, Rejection> {
-        self.model.lock().await.gamepad_mapping(profile).await
+    async fn gamepad_mapping(
+        &mut self,
+        profile: Slot,
+        mapping: &mut gamepad::Mapping,
+    ) -> Result<(), Rejection> {
+        self.model
+            .lock()
+            .await
+            .gamepad_mapping(profile, mapping)
+            .await
     }
 
     async fn set_gamepad_mapping(
         &mut self,
         profile: Slot,
-        mapping: gamepad::Mapping,
+        mapping: &gamepad::Mapping,
     ) -> Result<(), Rejection> {
         self.model
             .lock()
@@ -225,21 +263,73 @@ where
         &mut self,
         profile: Slot,
         layer: Layer,
-    ) -> Result<Option<KeyColors>, Rejection> {
-        self.model.lock().await.key_colors(profile, layer).await
+        colors: &mut Option<KeyColors>,
+    ) -> Result<(), Rejection> {
+        self.model
+            .lock()
+            .await
+            .key_colors(profile, layer, colors)
+            .await
     }
 
     async fn set_key_colors(
         &mut self,
         profile: Slot,
         layer: Layer,
-        colors: Option<KeyColors>,
+        colors: Option<&KeyColors>,
     ) -> Result<(), Rejection> {
         self.model
             .lock()
             .await
             .set_key_colors(profile, layer, colors)
             .await
+    }
+
+    async fn lightbar(
+        &mut self,
+        profile: Slot,
+        settings: &mut lightbar::Settings,
+    ) -> Result<(), Rejection> {
+        self.require_lightbar()?;
+        self.model.lock().await.lightbar(profile, settings).await
+    }
+
+    async fn set_lightbar(
+        &mut self,
+        profile: Slot,
+        settings: &lightbar::Settings,
+    ) -> Result<(), Rejection> {
+        self.require_lightbar()?;
+        self.model
+            .lock()
+            .await
+            .set_lightbar(profile, settings)
+            .await
+    }
+
+    async fn global_lightbar(&mut self, entries: &mut lightbar::Entries) -> Result<(), Rejection> {
+        self.require_lightbar()?;
+        entries.clone_from(self.model.lock().await.global_lightbar());
+        Ok(())
+    }
+
+    async fn set_global_lightbar(&mut self, entries: &lightbar::Entries) -> Result<(), Rejection> {
+        self.require_lightbar()?;
+        self.model.lock().await.set_global_lightbar(entries);
+        Ok(())
+    }
+
+    async fn host_signals(&mut self) -> Result<lightbar::HostSignalIds, Rejection> {
+        self.require_host_signals()?;
+        let shared = self.model.lock().await.shared();
+        Ok(shared.host_signals().ids())
+    }
+
+    async fn set_host_signals(&mut self, signals: lightbar::HostSignals) -> Result<(), Rejection> {
+        self.require_host_signals()?;
+        let shared = self.model.lock().await.shared();
+        shared.host_signals().set(&signals);
+        Ok(())
     }
 
     async fn save(&mut self) -> Result<(), Rejection> {

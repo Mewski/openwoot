@@ -1,22 +1,25 @@
 use core::{
     cell::{Cell, RefCell},
-    sync::atomic::{AtomicBool, AtomicU8, Ordering},
+    sync::atomic::{AtomicBool, AtomicU16, Ordering},
 };
 
 use embassy_sync::{
     blocking_mutex::{Mutex, raw::RawMutex},
     signal::Signal,
 };
-use openwoot_protocol::{global, keys::Layer, lighting::KeyColors};
+use openwoot_protocol::{global, keys::Layer, lightbar, lighting::KeyColors};
 
 use super::{Appearance, Changes};
-use crate::lighting::{Lightbar, Lighting, Signals};
+use crate::lighting::{HostExchange, Lightbar, Lighting, ProfileState, Signals};
 
 pub struct Shared<M: RawMutex> {
     appearance: Mutex<M, RefCell<Option<Appearance>>>,
     global: Mutex<M, Cell<Option<global::Settings>>>,
+    global_lightbar: Mutex<M, RefCell<lightbar::Entries>>,
+    profile_state: Mutex<M, Cell<Option<ProfileState>>>,
+    host_signals: HostExchange<M>,
     fast_scan: AtomicBool,
-    changes: AtomicU8,
+    changes: AtomicU16,
     brightness: Signal<M, u8>,
 }
 
@@ -26,21 +29,28 @@ impl<M: RawMutex> Shared<M> {
         Self {
             appearance: Mutex::new(RefCell::new(None)),
             global: Mutex::new(Cell::new(None)),
+            global_lightbar: Mutex::new(RefCell::new(lightbar::Entries::new())),
+            profile_state: Mutex::new(Cell::new(None)),
+            host_signals: HostExchange::new(),
             fast_scan: AtomicBool::new(false),
-            changes: AtomicU8::new(0),
+            changes: AtomicU16::new(0),
             brightness: Signal::new(),
         }
     }
 
-    pub fn publish(&self, appearance: Appearance, fast_scan: bool) {
+    pub fn edit<R>(&self, edit: impl FnOnce(&mut Appearance) -> R) -> R {
         self.appearance
-            .lock(|cell| *cell.borrow_mut() = Some(appearance));
+            .lock(|cell| edit(cell.borrow_mut().get_or_insert_with(Appearance::empty)))
+    }
+
+    pub fn activate(&self, fast_scan: bool) {
         self.fast_scan.store(fast_scan, Ordering::Relaxed);
         self.mark(
             Changes::LIGHTING
                 .union(Changes::COLORS)
                 .union(Changes::SCAN)
-                .union(Changes::ACTIVATED),
+                .union(Changes::ACTIVATED)
+                .union(Changes::LIGHTBAR),
         );
     }
 
@@ -68,6 +78,26 @@ impl<M: RawMutex> Shared<M> {
         self.mark(Changes::GLOBAL);
     }
 
+    pub fn set_global_lightbar(&self, entries: &lightbar::Entries) {
+        self.global_lightbar
+            .lock(|cell| cell.borrow_mut().clone_from(entries));
+        self.mark(Changes::LIGHTBAR);
+    }
+
+    #[must_use]
+    pub fn global_lightbar(&self) -> lightbar::Entries {
+        self.global_lightbar.lock(|cell| cell.borrow().clone())
+    }
+
+    pub fn set_profile_state(&self, state: ProfileState) {
+        self.profile_state.lock(|cell| cell.set(Some(state)));
+    }
+
+    #[must_use]
+    pub const fn host_signals(&self) -> &HostExchange<M> {
+        &self.host_signals
+    }
+
     pub fn set_fast_scan(&self, fast_scan: bool) {
         if self.fast_scan.swap(fast_scan, Ordering::Relaxed) != fast_scan {
             self.mark(Changes::SCAN);
@@ -92,10 +122,8 @@ impl<M: RawMutex> Shared<M> {
     ) where
         H: Lightbar + Signals,
     {
+        self.host_signals.sync(lighting.hooks_mut());
         let changes = self.take_changes();
-        if changes.is_empty() {
-            return;
-        }
         if changes.contains(Changes::GLOBAL)
             && let Some(global) = self.global.lock(Cell::get)
         {
@@ -117,6 +145,18 @@ impl<M: RawMutex> Shared<M> {
             for layer in [Layer::One, Layer::Two, Layer::Three] {
                 lighting.set_layer_colors(layer.number(), colors.layer(layer));
             }
+        }
+        if changes.contains(Changes::LIGHTBAR)
+            && let Some(settings) = self.read(|appearance| appearance.lightbar.clone())
+        {
+            let global = self.global_lightbar();
+            let key_brightness = lighting.brightness();
+            lighting
+                .hooks_mut()
+                .configure(&settings, &global, key_brightness);
+        }
+        if let Some(state) = self.profile_state.lock(Cell::take) {
+            lighting.hooks_mut().profile_changed(state);
         }
         if changes.contains(Changes::ACTIVATED) {
             lighting.show_layer(0);
