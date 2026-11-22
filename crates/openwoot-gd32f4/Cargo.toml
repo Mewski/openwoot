@@ -1,0 +1,20 @@
+[package]
+name = "openwoot-gd32f4"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[package.metadata.openwoot]
+target = "thumbv7em-none-eabihf"
+
+[dependencies]
+gd32f425-pac = { workspace = true }
+openwoot-image = { workspace = true }
+
+[target.'cfg(target_os = "none")'.dependencies]
+gd32f425-pac = { workspace = true, features = ["rt"] }
+
+[lints]
+workspace = true
