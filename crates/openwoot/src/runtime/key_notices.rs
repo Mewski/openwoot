@@ -95,8 +95,14 @@ impl KeyNotices {
     {
         match notice {
             Notice::Key { key, event } => lighting.key_event(key, event, now_ms),
-            Notice::ShowLayer(layer) => lighting.show_layer(layer),
-            Notice::Locks(locks) => lighting.update_lock_indicators(locks, now_ms),
+            Notice::ShowLayer(layer) => {
+                lighting.show_layer(layer);
+                lighting.hooks_mut().layer_changed(layer);
+            }
+            Notice::Locks(locks) => {
+                lighting.update_lock_indicators(locks, now_ms);
+                lighting.hooks_mut().locks_changed(locks);
+            }
             Notice::Brightness { increase, held } => {
                 let repeat = held.then_some(Repeat {
                     increase,

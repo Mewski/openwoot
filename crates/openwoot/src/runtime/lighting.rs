@@ -5,6 +5,7 @@ use embassy_time::{Duration, Instant, Timer};
 use super::KeyNotices;
 use crate::{
     diagnostics::Diagnostics,
+    keys::Key,
     lighting::{self, KeyEvent, KeyEvents, KeyTravel, LedMatrix, Lightbar, OutputChange, Signals},
     profile,
     usb::HostState,
@@ -64,11 +65,15 @@ where
         self.profile.apply(&mut lighting, now_ms);
         while let Ok(activity) = self.events.try_receive() {
             lighting.key_event(activity.key, activity.event, activity.at_ms);
+            lighting.hooks_mut().key_event(activity.key, activity.event);
             if activity.event == KeyEvent::Pressed {
                 lighting.reset_idle_timer(now_ms);
             }
         }
         self.notices.apply(&mut lighting, now_ms);
+        let hooks = lighting.hooks_mut();
+        hooks.travel_changed(deepest_travel::<ROWS, COLUMNS>(input));
+        hooks.tick(now_ms);
         if let Some(level) = lighting.take_brightness_save(now_ms) {
             self.profile.save_brightness(level);
         }
@@ -108,4 +113,18 @@ where
 
 fn now_ms() -> u32 {
     u32::try_from(Instant::now().as_millis() & u64::from(u32::MAX)).unwrap_or_default()
+}
+
+fn deepest_travel<const ROWS: usize, const COLUMNS: usize>(input: &impl KeyTravel) -> u16 {
+    (0..ROWS)
+        .flat_map(|row| (0..COLUMNS).map(move |column| (row, column)))
+        .filter_map(|(row, column)| {
+            Some(Key::new(
+                u8::try_from(row).ok()?,
+                u8::try_from(column).ok()?,
+            ))
+        })
+        .map(|key| input.travel(key))
+        .max()
+        .unwrap_or(0)
 }

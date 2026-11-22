@@ -118,3 +118,23 @@ fn the_rebound_filter_reports_a_bounce_after_a_release_as_no_travel() {
         ReboundState::Rebound
     );
 }
+
+#[test]
+fn a_single_input_cycle_of_the_80he_map_samples_every_key_in_513_microseconds() {
+    const CONVERSION_NS: u32 = 375;
+    let mut scanner = scanner();
+    let travel = Travel::new();
+    let now_ms = settled(&mut scanner, &travel);
+    let conversions = u32::try_from(cycle(&mut scanner, &travel, now_ms)).unwrap();
+    let delays_us: u32 = scanner
+        .converter()
+        .operations
+        .iter()
+        .map(|operation| match *operation {
+            Operation::TriggerAt(delay) | Operation::TriggerAfter(delay) => u32::from(delay),
+            _ => 0,
+        })
+        .sum();
+    assert_eq!((conversions, delays_us), (85, 481));
+    assert_eq!(delays_us * 1000 + conversions * CONVERSION_NS, 512_875);
+}

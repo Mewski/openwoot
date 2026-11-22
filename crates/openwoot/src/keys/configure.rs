@@ -64,12 +64,15 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
     }
 
     pub fn configure_advanced(&mut self, entries: &advanced::Keys) {
-        let converted: heapless::Vec<Entry, { advanced::MAX_ENTRIES }> = entries
-            .iter()
-            .filter_map(|entry| {
-                Entry::from_config(entry, COLUMNS, |key| self.minimum_or_default(key))
-            })
-            .collect();
+        let mut converted = heapless::Vec::<Entry, { advanced::MAX_ENTRIES }>::new();
+        let entries = entries.iter().filter_map(|entry| {
+            Entry::from_config(entry, COLUMNS, |key| self.minimum_or_default(key))
+        });
+        for entry in entries {
+            if converted.push(entry).is_err() {
+                break;
+            }
+        }
         self.set_advanced(converted);
     }
 

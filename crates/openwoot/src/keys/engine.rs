@@ -257,9 +257,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
     }
 
     pub fn set_advanced(&mut self, entries: impl IntoIterator<Item = Entry>) {
-        let latched: Vec<Key, { openwoot_protocol::advanced::MAX_ENTRIES }> =
-            self.advanced.latched_toggles().collect();
-        for key in latched {
+        for key in self.advanced.latched_toggles() {
             self.output.notify(Notice::Toggle {
                 key,
                 latched: false,
@@ -272,22 +270,14 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
             record.advanced = [None; LAYERS];
             record.active = [false; LAYERS];
         }
-        let bindings: Vec<(Key, u8, u8), { 2 * openwoot_protocol::advanced::MAX_ENTRIES }> = self
-            .advanced
-            .entries()
-            .iter()
-            .zip(0..)
-            .flat_map(|(entry, index)| {
-                core::iter::once((entry.key, entry.layer, index)).chain(
-                    entry
-                        .behaviour
-                        .other()
-                        .map(|other| (other, entry.layer, index)),
-                )
-            })
-            .collect();
-        for (key, layer, index) in bindings {
-            self.bind(key, layer, index);
+        for index in 0..=u8::MAX {
+            let Some(&entry) = self.advanced.entry(index) else {
+                break;
+            };
+            self.bind(entry.key, entry.layer, index);
+            if let Some(other) = entry.behaviour.other() {
+                self.bind(other, entry.layer, index);
+            }
         }
     }
 

@@ -16,7 +16,7 @@ use openwoot_image::Region;
 use openwoot_protocol::profile::Slot;
 
 use super::{
-    pipeline::{Bench80, FACTORY, FULL, PROFILE_KEY, World, capabilities},
+    pipeline::{Bench80, FACTORY, FULL, PROFILE_KEY, World, capabilities, storage},
     stalled::Stalled,
     support::{COLUMNS, KEY_A, ROWS},
 };
@@ -34,21 +34,17 @@ const LAYOUT: NorLayout = NorLayout {
     device_info: None,
 };
 
-fn stalled_storage() -> Option<Settings<Stalled<Nor>>> {
-    let formatted = block_on(Settings::open(
-        Partition::new(Nor::new(6), LAYOUT.settings_region()),
-        false,
-    ))
-    .ok()?
-    .0
-    .release()?
-    .release();
-    block_on(Settings::open(
+fn stalled_storage() -> Settings<Stalled<Nor>> {
+    let formatted = storage()
+        .release()
+        .map_or_else(|| Nor::new(6), Partition::release);
+    let mut settings = Settings::new();
+    let opened = block_on(settings.open(
         Partition::new(Stalled(formatted), LAYOUT.settings_region()),
         false,
-    ))
-    .ok()
-    .map(|(settings, _)| settings)
+    ));
+    assert!(opened.is_ok(), "{opened:?}");
+    settings
 }
 
 fn poll_once<F: Future>(future: core::pin::Pin<&mut F>) -> Poll<F::Output> {
@@ -58,14 +54,17 @@ fn poll_once<F: Future>(future: core::pin::Pin<&mut F>) -> Poll<F::Output> {
 #[test]
 fn typing_goes_on_while_a_profile_switch_waits_for_a_flash_write_that_never_ends() {
     let world = World::new();
-    let model = Mutex::new(block_on(Model::<_, _, ROWS, COLUMNS>::open(
+    let mut settings = stalled_storage();
+    let mut opened = Model::<_, _, ROWS, COLUMNS>::new(
         &world.shared,
         &world.profile,
-        stalled_storage(),
+        Some(&mut settings),
         &FACTORY,
         0,
         4,
-    )));
+    );
+    block_on(opened.load());
+    let model = Mutex::new(opened);
     let mut configurator = Configurator::new(&model, capabilities());
     let mut bench = Bench80::new(world.task(Mode::NoGamepad));
     bench.press(PROFILE_KEY, FULL);
@@ -95,7 +94,8 @@ fn typing_goes_on_while_a_profile_switch_waits_for_a_flash_write_that_never_ends
 #[test]
 fn typing_goes_on_while_lighting_never_takes_its_events_and_notices() {
     let world = World::new();
-    let _model = world.model();
+    let mut settings = storage();
+    let _model = world.model(&mut settings);
     let mut bench = Bench80::new(world.task(Mode::NoGamepad));
     for _ in 0..40 {
         bench.press(KEY_A, FULL);
@@ -111,7 +111,8 @@ fn typing_goes_on_while_lighting_never_takes_its_events_and_notices() {
 #[test]
 fn a_scan_cycle_that_never_ends_is_recovered_and_typing_resumes() {
     let world = World::new();
-    let _model = world.model();
+    let mut settings = storage();
+    let _model = world.model(&mut settings);
     let mut bench = Bench80::new(world.task(Mode::NoGamepad));
     bench.scan.with(|scanner| scanner.prepare(1000));
     assert!(bench.scan.start());

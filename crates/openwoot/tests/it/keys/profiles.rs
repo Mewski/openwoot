@@ -17,7 +17,7 @@ use openwoot_protocol::{
 };
 
 use super::{
-    pipeline::{Bench80, FULL, GLOBAL, INDICATORS, PROFILE_KEY, World, capabilities},
+    pipeline::{Bench80, FULL, GLOBAL, INDICATORS, PROFILE_KEY, World, capabilities, storage},
     support::{COLUMNS, KEY_A, ROWS},
 };
 use crate::lighting::{GEOMETRY, MAP, VARIANT};
@@ -88,6 +88,8 @@ static PRESETS: [Preset; 2] = [
         name: "Typing Profile",
         color: BLACK,
         keys: TYPING,
+        actuation_points: &[],
+        advanced: &[],
         lighting: Settings {
             brightness: 255,
             indicators: INDICATORS,
@@ -98,17 +100,21 @@ static PRESETS: [Preset; 2] = [
             })]),
         },
         colors: [None, None, None, None],
+        lightbar_brightness: None,
     },
     Preset {
         name: "Rapid Profile",
         color: RED,
         keys: RAPID,
+        actuation_points: &[],
+        advanced: &[],
         lighting: Settings {
             brightness: 100,
             indicators: INDICATORS,
             effects: Vec::new(),
         },
         colors: [Some(&RED_KEYS), None, None, None],
+        lightbar_brightness: None,
     },
 ];
 static MODE_FACTORY: Factory<ROWS, COLUMNS> = Factory {
@@ -121,15 +127,19 @@ static MODE_FACTORY: Factory<ROWS, COLUMNS> = Factory {
         name: "",
         color: BLACK,
         keys: TYPING,
+        actuation_points: &[],
+        advanced: &[],
         lighting: Settings {
             brightness: 255,
             indicators: INDICATORS,
             effects: Vec::new(),
         },
         colors: [None, None, None, None],
+        lightbar_brightness: None,
     },
     created: 2,
     global: GLOBAL,
+    lightbar: openwoot_protocol::lightbar::Entries::new(),
     face: Face {
         mode: Mode::NoGamepad,
         keyboard: openwoot::usb::KeyboardFormat::NKeyRollover,
@@ -143,7 +153,8 @@ type Lights = Lighting<(), ROWS, COLUMNS, { crate::lighting::PAGES }, { crate::l
 #[test]
 fn the_mode_key_toggles_typing_and_rapid_and_applies_their_keys_and_lighting() {
     let world = World::new();
-    let model = world.model_with(&MODE_FACTORY);
+    let mut settings = storage();
+    let model = world.model_with(&MODE_FACTORY, &mut settings);
     let mut configurator = Configurator::new(&model, capabilities());
     let mut bench = Bench80::new(world.task(Mode::NoGamepad));
     let mut lighting = Lights::new(&MAP, &VARIANT, GEOMETRY, (), 0);

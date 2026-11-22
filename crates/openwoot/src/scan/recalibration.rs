@@ -25,14 +25,13 @@ impl Batching {
         addresses: usize,
     ) -> impl Iterator<Item = Position> {
         let batch = usize::from(batch);
-        let (pairs, columns) = match self {
-            Self::InputPairs => (2 * addresses, 0),
-            Self::Addresses => (0, inputs),
+        let (pair_inputs, column_inputs) = match self {
+            Self::InputPairs => (2 * batch..(2 * batch + 2).min(inputs), 0..0),
+            Self::Addresses => (0..0, 0..inputs),
         };
-        let pair_members = (0..pairs)
-            .map(move |member| (2 * batch + member / addresses, member % addresses))
-            .take_while(move |&(input, _)| input < inputs);
-        let column_members = (0..columns).map(move |input| (input, batch));
+        let pair_members =
+            pair_inputs.flat_map(move |input| (0..addresses).map(move |address| (input, address)));
+        let column_members = column_inputs.map(move |input| (input, batch));
         pair_members
             .chain(column_members)
             .map(|(input, address)| Position::new(input as u8, address as u8))
@@ -223,6 +222,14 @@ mod tests {
             [(0, 7), (1, 7), (2, 7), (3, 7)]
         );
         assert_eq!(Batching::Addresses.count(4, 16), 16);
+    }
+
+    #[test]
+    fn batches_beyond_the_inputs_or_without_addresses_are_empty() {
+        let none: [(u8, u8); 0] = [];
+        assert_eq!(members(Batching::InputPairs, 3, 5, 3), none);
+        assert_eq!(members(Batching::InputPairs, 0, 5, 0), none);
+        assert_eq!(members(Batching::Addresses, 0, 0, 16), none);
     }
 
     #[test]

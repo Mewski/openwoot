@@ -38,12 +38,12 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Shared<S, INPUTS, 
     }
 
     #[must_use]
-    pub fn install(&self, scanner: Scanner<S, INPUTS, ADDRESSES>) -> bool {
+    pub fn install(&self, scanner: impl FnOnce() -> Scanner<S, INPUTS, ADDRESSES>) -> bool {
         if self.is_running() {
             return false;
         }
         self.scanner.try_lock().is_some_and(|mut slot| {
-            *slot = Some(scanner);
+            *slot = Some(scanner());
             true
         })
     }

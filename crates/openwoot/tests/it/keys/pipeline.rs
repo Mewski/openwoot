@@ -94,15 +94,19 @@ pub(super) static FACTORY: Factory<ROWS, COLUMNS> = Factory {
             blue: 0,
         },
         keys: default_settings(),
+        actuation_points: &[],
+        advanced: &[],
         lighting: openwoot_protocol::lighting::Settings {
             brightness: 255,
             indicators: INDICATORS,
             effects: Bounded::new(),
         },
         colors: [None, None, None, None],
+        lightbar_brightness: None,
     },
     created: 4,
     global: GLOBAL,
+    lightbar: openwoot_protocol::lightbar::Entries::new(),
     face: Face {
         mode: Mode::NoGamepad,
         keyboard: openwoot::usb::KeyboardFormat::NKeyRollover,
@@ -162,7 +166,7 @@ pub(super) fn capabilities() -> Capabilities {
     }
 }
 
-fn storage() -> Option<Settings<Nor>> {
+pub(super) fn storage() -> Settings<Nor> {
     let layout = NorLayout {
         capacity: 6 * SECTOR,
         settings: Region {
@@ -172,9 +176,10 @@ fn storage() -> Option<Settings<Nor>> {
         device_info: None,
     };
     let partition = Partition::new(Nor::new(6), layout.settings_region());
-    block_on(Settings::open(partition, false))
-        .ok()
-        .map(|(settings, _)| settings)
+    let mut settings = Settings::new();
+    let opened = block_on(settings.open(partition, false));
+    assert!(opened.is_ok(), "{opened:?}");
+    settings
 }
 
 pub(super) struct Bench80<'a> {
@@ -188,7 +193,7 @@ pub(super) struct Bench80<'a> {
 impl<'a> Bench80<'a> {
     pub(super) fn new(task: KeyTask<'a, Mutual>) -> Self {
         let scan = Scan::new();
-        assert!(scan.install(Scanner::new(Simulated::default(), MAP, [0, 1, 2, 3, 4, 5])));
+        assert!(scan.install(|| Scanner::new(Simulated::default(), MAP, [0, 1, 2, 3, 4, 5])));
         let mut keys = Keys::new(Standard);
         keys.set_mode(task.face.mode);
         let mut bench = Self {
@@ -216,10 +221,15 @@ impl<'a> Bench80<'a> {
     }
 
     pub(super) fn cycle(&mut self) {
+        self.cycle_with(|_| {});
+    }
+
+    pub(super) fn cycle_with(&mut self, after_sampling: impl FnOnce(&Self)) {
         self.now_ms += 1;
         let now_ms = self.now_ms;
         self.scan.with(|scanner| scanner.prepare(now_ms));
         self.run();
+        after_sampling(self);
         self.task
             .step(&self.scan, &mut self.keys, &mut self.progress, now_ms);
     }
@@ -273,22 +283,21 @@ impl World {
         }
     }
 
-    pub(super) fn model(&self) -> Mutex<Mutual, Model<'_, Mutual, Nor, ROWS, COLUMNS>> {
-        self.model_with(&FACTORY)
+    pub(super) fn model<'w>(
+        &'w self,
+        settings: &'w mut Settings<Nor>,
+    ) -> Mutex<Mutual, Model<'w, Mutual, Nor, ROWS, COLUMNS>> {
+        self.model_with(&FACTORY, settings)
     }
 
-    pub(super) fn model_with(
-        &self,
+    pub(super) fn model_with<'w>(
+        &'w self,
         factory: &'static Factory<ROWS, COLUMNS>,
-    ) -> Mutex<Mutual, Model<'_, Mutual, Nor, ROWS, COLUMNS>> {
-        Mutex::new(block_on(Model::open(
-            &self.shared,
-            &self.profile,
-            storage(),
-            factory,
-            0,
-            4,
-        )))
+        settings: &'w mut Settings<Nor>,
+    ) -> Mutex<Mutual, Model<'w, Mutual, Nor, ROWS, COLUMNS>> {
+        let mut model = Model::new(&self.shared, &self.profile, Some(settings), factory, 0, 4);
+        block_on(model.load());
+        Mutex::new(model)
     }
 
     pub(super) fn keyboard(&self) -> Option<Vec<u8>> {
@@ -302,7 +311,8 @@ impl World {
 #[test]
 fn a_key_press_reaches_the_keyboard_report_at_the_end_of_the_cycle_that_sampled_it() {
     let world = World::new();
-    let model = world.model();
+    let mut settings = storage();
+    let model = world.model(&mut settings);
     let mut bench = Bench80::new(world.task(Mode::NoGamepad));
     let _ = world.reports.take();
     let _ = model;
@@ -324,7 +334,8 @@ fn a_key_press_reaches_the_keyboard_report_at_the_end_of_the_cycle_that_sampled_
 #[test]
 fn rapid_trigger_from_the_configuration_channel_applies_between_cycles() {
     let world = World::new();
-    let model = world.model();
+    let mut settings = storage();
+    let model = world.model(&mut settings);
     let mut configurator = Configurator::new(&model, capabilities());
     let mut bench = Bench80::new(world.task(Mode::NoGamepad));
     let fixed: Vec<bool> = [FULL, THREE_QUARTERS, FULL]
@@ -371,7 +382,8 @@ fn rapid_trigger_from_the_configuration_channel_applies_between_cycles() {
 #[test]
 fn an_advanced_key_from_the_configuration_channel_runs_in_the_key_pass() {
     let world = World::new();
-    let model = world.model();
+    let mut settings = storage();
+    let model = world.model(&mut settings);
     let mut configurator = Configurator::new(&model, capabilities());
     let mut bench = Bench80::new(world.task(Mode::NoGamepad));
     let toggle = advanced::Key {
@@ -379,7 +391,8 @@ fn an_advanced_key_from_the_configuration_channel_runs_in_the_key_pass() {
         layer: Layer::Base,
         behaviour: Behaviour::Toggle(Action::Keyboard(0x2C)),
     };
-    block_on(configurator.set_advanced_keys(Slot::new(0), [toggle].into_iter().collect())).unwrap();
+    let toggles: advanced::Keys = [toggle].into_iter().collect();
+    block_on(configurator.set_advanced_keys(Slot::new(0), &toggles)).unwrap();
     bench.press(KEY_A, FULL);
     bench.cycle();
     bench.press(KEY_A, 0);
@@ -401,7 +414,8 @@ fn nkro_of(bench: &Bench80<'_>) -> Vec<u8> {
 #[test]
 fn a_key_bound_to_the_gamepad_moves_the_stick_of_the_hid_gamepad_report() {
     let world = World::new();
-    let model = world.model();
+    let mut settings = storage();
+    let model = world.model(&mut settings);
     let mut configurator = Configurator::new(&model, capabilities());
     let mut bench = Bench80::new(world.task(Mode::Gamepad));
     let mut bindings: Bounded<Option<Control>, 128> =
@@ -411,7 +425,7 @@ fn a_key_bound_to_the_gamepad_moves_the_stick_of_the_hid_gamepad_report() {
     }
     block_on(configurator.set_gamepad_mapping(
         Slot::new(0),
-        gamepad::Mapping {
+        &gamepad::Mapping {
             bindings,
             exclusive: true,
         },
@@ -434,7 +448,8 @@ fn a_key_bound_to_the_gamepad_moves_the_stick_of_the_hid_gamepad_report() {
 #[test]
 fn a_profile_key_switches_the_profile_through_the_configuration_model() {
     let world = World::new();
-    let model = world.model();
+    let mut settings = storage();
+    let model = world.model(&mut settings);
     let mut configurator = Configurator::new(&model, capabilities());
     let mut bench = Bench80::new(world.task(Mode::NoGamepad));
     bench.press(PROFILE_KEY, FULL);
@@ -476,7 +491,8 @@ fn a_profile_key_switches_the_profile_through_the_configuration_model() {
 #[test]
 fn unsaved_changes_are_dropped_by_revert_and_kept_by_save() {
     let world = World::new();
-    let model = world.model();
+    let mut settings = storage();
+    let model = world.model(&mut settings);
     let mut configurator = Configurator::new(&model, capabilities());
     let changed = config::Settings {
         rapid_trigger_enabled: true,

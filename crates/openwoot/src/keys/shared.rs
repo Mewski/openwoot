@@ -32,8 +32,12 @@ impl<M: RawMutex> Shared<M> {
         }
     }
 
-    pub fn publish(&self, profile: Profile, count: u8, active: u8) {
-        self.profile.lock(|cell| *cell.borrow_mut() = Some(profile));
+    pub fn edit<R>(&self, edit: impl FnOnce(&mut Profile) -> R) -> R {
+        self.profile
+            .lock(|cell| edit(cell.borrow_mut().get_or_insert_with(Profile::empty)))
+    }
+
+    pub fn activate(&self, count: u8, active: u8) {
         self.profiles.store(count, Ordering::Relaxed);
         self.active.store(active, Ordering::Relaxed);
         self.mark(Parts::ALL.union(Parts::ACTIVATED));
@@ -65,7 +69,8 @@ impl<M: RawMutex> Shared<M> {
     }
 
     pub fn read<R>(&self, read: impl FnOnce(&Profile) -> R) -> Option<R> {
-        self.profile.lock(|cell| cell.borrow().as_ref().map(read))
+        self.profile
+            .lock(|cell| cell.try_borrow().ok()?.as_ref().map(read))
     }
 
     #[must_use]
@@ -108,5 +113,19 @@ impl<M: RawMutex> core::fmt::Debug for Shared<M> {
             .field("profiles", &self.profiles)
             .field("active", &self.active)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+
+    use super::*;
+
+    #[test]
+    fn a_read_inside_an_edit_finds_no_profile_instead_of_panicking() {
+        let shared = Shared::<NoopRawMutex>::new();
+        assert_eq!(shared.edit(|_| shared.read(|_| ())), None);
+        assert_eq!(shared.read(|_| ()), Some(()));
     }
 }

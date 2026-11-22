@@ -66,7 +66,10 @@ impl<M: RawMutex> KeyReports<M> {
 
     pub fn publish(&self, output: &Output) -> bool {
         let published = self.queue.lock(|queue| {
-            let Queue { pending, sent } = &mut *queue.borrow_mut();
+            let Ok(mut queue) = queue.try_borrow_mut() else {
+                return false;
+            };
+            let Queue { pending, sent } = &mut *queue;
             let mut published = false;
             published |= offer(&mut pending.keyboard, &mut sent.keyboard, output.keyboard());
             published |= offer(&mut pending.system, &mut sent.system, *output.system());
@@ -93,14 +96,21 @@ impl<M: RawMutex> KeyReports<M> {
     }
 
     pub fn resend(&self) {
-        self.queue
-            .lock(|queue| queue.borrow_mut().sent = Pending::default());
+        self.queue.lock(|queue| {
+            if let Ok(mut queue) = queue.try_borrow_mut() {
+                queue.sent = Pending::default();
+            }
+        });
     }
 
     #[must_use]
     pub fn take(&self) -> Pending {
-        self.queue
-            .lock(|queue| core::mem::take(&mut queue.borrow_mut().pending))
+        self.queue.lock(|queue| {
+            queue.try_borrow_mut().map_or_else(
+                |_| Pending::default(),
+                |mut queue| core::mem::take(&mut queue.pending),
+            )
+        })
     }
 
     pub async fn ready(&self) -> Pending {

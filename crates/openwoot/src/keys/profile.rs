@@ -2,15 +2,12 @@ use heapless::Vec;
 use openwoot_protocol::{
     advanced,
     gamepad::{self, CurvePoint, Normalization},
-    keys::{self as config, Keymap, Layer, Overrides},
+    keys::{self as config, Keymap, Overrides},
 };
 use serde::{Deserialize, Serialize};
 
 use super::default_settings;
-use crate::{
-    layout::{DefaultKeymap, LAYERS},
-    storage::Record,
-};
+use crate::{layout::LAYERS, storage::Record};
 
 pub const IDENTITY_CURVE: [CurvePoint; gamepad::CURVE_POINTS] = [
     CurvePoint {
@@ -90,18 +87,14 @@ impl Parts {
 
 impl Profile {
     #[must_use]
-    pub fn defaults<const ROWS: usize, const COLUMNS: usize>(
-        keymap: &DefaultKeymap<ROWS, COLUMNS>,
-        variant: u8,
-    ) -> Self {
-        let keys = ROWS * COLUMNS;
+    pub const fn empty() -> Self {
         Self {
             settings: default_settings(),
-            keymaps: Keymaps(Layer::ALL.map(|layer| keymap.keymap(layer, variant))),
-            overrides: core::iter::repeat_n(config::Override::default(), keys).collect(),
+            keymaps: Keymaps([const { Vec::new() }; LAYERS]),
+            overrides: Vec::new(),
             advanced: Vec::new(),
             gamepad_mapping: gamepad::Mapping {
-                bindings: core::iter::repeat_n(None, keys).collect(),
+                bindings: Vec::new(),
                 exclusive: false,
             },
             gamepad_settings: default_gamepad_settings(),
