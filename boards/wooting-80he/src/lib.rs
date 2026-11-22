@@ -3,9 +3,11 @@
 
 pub use cortex_m_rt::entry;
 use hal::{
+    gpio::{Level, OutputType, Port, Speed},
     pac,
     rcu::{self, AhbDivider, ApbDivider, Clocks, Hertz, Pll, PllSystemDivider, TimerMultiplier},
     system::Bootloader,
+    usb,
 };
 use openwoot::Keyboard;
 pub use openwoot_gd32f4 as hal;
@@ -47,10 +49,15 @@ pub const CLOCK_TREE: rcu::Config = rcu::Config {
     timer_multiplier: TimerMultiplier::Quadruple,
 };
 
+hal::bind_interrupts!(struct Irqs {
+    USBHS => usb::InterruptHandler;
+});
+
 #[derive(Debug)]
 pub struct Board {
     pub clocks: Clocks,
     pub bootloader: Bootloader,
+    pub usb: usb::Driver,
 }
 
 impl Board {
@@ -58,9 +65,41 @@ impl Board {
     pub fn new(peripherals: pac::Peripherals) -> Self {
         let clocks = CLOCK_TREE.configure(peripherals.rcu, &peripherals.pmu);
         hal::time::start(peripherals.timer4, &clocks);
+        let port_a = Port::<'A'>::new(peripherals.gpioa);
+        let port_b = Port::<'B'>::new(peripherals.gpiob);
+        let port_c = Port::<'C'>::new(peripherals.gpioc);
+        let usb = usb::Driver::new(
+            usb::Core {
+                global: peripherals.hs_global,
+                host: peripherals.hs_host,
+                device: peripherals.hs_device,
+                power_clock: peripherals.hs_pwrclk,
+                fifo: peripherals.hs_fifo,
+            },
+            usb::UlpiPins {
+                clock: port_a.pin5,
+                direction: port_c.pin2,
+                next: port_c.pin3,
+                stop: port_c.pin0,
+                data0: port_a.pin3,
+                data1: port_b.pin0,
+                data2: port_b.pin1,
+                data3: port_b.pin10,
+                data4: port_b.pin11,
+                data5: port_b.pin12,
+                data6: port_b.pin13,
+                data7: port_b.pin5,
+            },
+            port_c
+                .pin10
+                .into_output(OutputType::PushPull, Speed::High, Level::Low),
+            Irqs,
+            usb::SpeedLimit::High,
+        );
         Self {
             clocks,
             bootloader: Bootloader::new(peripherals.pmu, peripherals.rtc),
+            usb,
         }
     }
 }

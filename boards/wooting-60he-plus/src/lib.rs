@@ -3,9 +3,11 @@
 
 pub use cortex_m_rt::entry;
 use hal::{
+    gpio::{Level, Output, OutputType, Pin, Port, Speed},
     pac,
     rcu::{self, AhbDivider, ApbDivider, Clocks, PllMultiplier},
     system::Bootloader,
+    usb,
 };
 use openwoot::Keyboard;
 pub use openwoot_gd32f3 as hal;
@@ -37,10 +39,16 @@ pub const CLOCK_TREE: rcu::Config = rcu::Config {
     apb2_divider: ApbDivider::By1,
 };
 
+hal::bind_interrupts!(struct Irqs {
+    USBD_HP_CAN0_TX => usb::InterruptHandler;
+    USBD_LP_CAN0_RX0 => usb::InterruptHandler;
+});
+
 #[derive(Debug)]
 pub struct Board {
     pub clocks: Clocks,
     pub bootloader: Bootloader,
+    pub usb: usb::Driver<Pin<'A', 15, Output>>,
 }
 
 impl Board {
@@ -48,9 +56,21 @@ impl Board {
     pub fn new(peripherals: pac::Peripherals) -> Self {
         let clocks = CLOCK_TREE.configure(peripherals.rcu, &peripherals.pmu);
         hal::time::start(peripherals.timer4, &clocks);
+        let port_a = Port::<'A'>::new(peripherals.gpioa);
+        let usb = usb::Driver::new(
+            peripherals.usbd,
+            peripherals.usbd_ram,
+            &peripherals.afio,
+            port_a
+                .pin15
+                .into_output(OutputType::PushPull, Speed::High, Level::Low),
+            Irqs,
+            &clocks,
+        );
         Self {
             clocks,
             bootloader: Bootloader::new(peripherals.pmu, peripherals.bkp),
+            usb,
         }
     }
 }

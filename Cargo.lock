@@ -598,6 +598,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "embassy-usb-synopsys-otg"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6efd0c0e0b21bcf91b475b8fa47347c1df32c9a99728ae1e1b0e6625862dfd1a"
+dependencies = [
+ "critical-section",
+ "embassy-sync",
+ "embassy-time",
+ "embassy-usb-driver",
+ "portable-atomic",
+]
+
+[[package]]
 name = "embedded-hal"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1109,8 +1122,11 @@ dependencies = [
  "cortex-m-rt",
  "critical-section",
  "embassy-executor",
+ "embassy-sync",
+ "embassy-time",
  "embassy-time-driver",
  "embassy-time-queue-utils",
+ "embassy-usb-driver",
  "embedded-hal 1.0.0",
  "gd32f303-pac",
  "openwoot-image",
@@ -1126,6 +1142,8 @@ dependencies = [
  "embassy-executor",
  "embassy-time-driver",
  "embassy-time-queue-utils",
+ "embassy-usb-driver",
+ "embassy-usb-synopsys-otg",
  "embedded-hal 1.0.0",
  "gd32f425-pac",
  "openwoot-image",
