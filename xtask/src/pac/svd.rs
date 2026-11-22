@@ -188,5 +188,23 @@ fn field<'a>(register: &'a mut RegisterInfo, name: &str) -> Result<&'a mut Field
 }
 
 const fn mask(size: u32) -> u64 {
-    (1_u64 << size) - 1
+    match 1_u64.checked_shl(size) {
+        Some(bit) => bit - 1,
+        None => u64::MAX,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mask_covers_the_low_bits_up_to_all_64() {
+        assert_eq!(mask(0), 0);
+        assert_eq!(mask(8), 0xFF);
+        assert_eq!(mask(32), 0xFFFF_FFFF);
+        assert_eq!(mask(63), u64::MAX >> 1);
+        assert_eq!(mask(64), u64::MAX);
+        assert_eq!(mask(65), u64::MAX);
+    }
 }

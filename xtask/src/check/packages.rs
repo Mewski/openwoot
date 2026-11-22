@@ -2,6 +2,7 @@ use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::Package;
+use toml::{Table, Value};
 
 use crate::workspace::{self, Workspace};
 
@@ -100,7 +101,9 @@ pub(super) fn lints_tables(members: &[Member<'_>], problems: &mut Vec<String>) -
         let manifest_path = &member.package.manifest_path;
         let manifest = fs::read_to_string(manifest_path)
             .with_context(|| format!("could not read `{manifest_path}`"))?;
-        if !manifest.contains("[lints]\nworkspace = true") {
+        let inherits = inherits_workspace_lints(&manifest)
+            .with_context(|| format!("could not parse `{manifest_path}`"))?;
+        if !inherits {
             problems.push(format!(
                 "`{}`: `Cargo.toml` needs `[lints] workspace = true`",
                 member.package.name
@@ -108,4 +111,48 @@ pub(super) fn lints_tables(members: &[Member<'_>], problems: &mut Vec<String>) -
         }
     }
     Ok(())
+}
+
+fn inherits_workspace_lints(manifest: &str) -> Result<bool> {
+    let manifest: Table = manifest.parse()?;
+    let workspace = manifest
+        .get("lints")
+        .and_then(|lints| lints.get("workspace"))
+        .and_then(Value::as_bool);
+    Ok(workspace == Some(true))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lints_table_inherits_regardless_of_spelling() {
+        for manifest in [
+            "[lints]\nworkspace = true\n",
+            "[lints]\r\nworkspace=true\r\n",
+            "[lints]\n\n  workspace   =   true  # inherited\n",
+            "lints = { workspace = true }\n",
+            "lints.workspace = true\n",
+        ] {
+            assert!(inherits_workspace_lints(manifest).unwrap(), "{manifest:?}");
+        }
+    }
+
+    #[test]
+    fn missing_or_disabled_lints_table_is_reported() {
+        for manifest in [
+            "[package]\nname = \"crate\"\n",
+            "[lints]\nworkspace = false\n",
+            "[lints.rust]\nworkspace = true\n",
+            "# [lints]\n# workspace = true\n",
+        ] {
+            assert!(!inherits_workspace_lints(manifest).unwrap(), "{manifest:?}");
+        }
+    }
+
+    #[test]
+    fn malformed_manifest_is_an_error() {
+        assert!(inherits_workspace_lints("[lints\nworkspace = true\n").is_err());
+    }
 }

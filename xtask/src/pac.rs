@@ -52,6 +52,12 @@ impl Tool {
             .arg("--version")
             .output()
             .with_context(|| format!("could not run `{} --version`", self.program))?;
+        ensure!(
+            output.status.success(),
+            "`{} --version` ended with {}",
+            self.program,
+            output.status
+        );
         let reported = String::from_utf8_lossy(&output.stdout);
         ensure!(
             reported.starts_with(self.version),

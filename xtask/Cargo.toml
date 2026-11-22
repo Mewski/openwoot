@@ -16,6 +16,7 @@ openwoot-image = { workspace = true }
 svd-encoder = { workspace = true }
 svd-parser = { workspace = true }
 svd-rs = { workspace = true }
+toml = { workspace = true }
 
 [lints]
 workspace = true

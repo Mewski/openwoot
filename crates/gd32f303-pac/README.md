@@ -1,6 +1,6 @@
 # gd32f303-pac
 
-Peripheral access crate for the GigaDevice GD32F303 (Wooting 60HE+), generated from GigaDevice's SVD by `cargo xtask pac` with svd2rust 0.37.1, form 0.13.0 and nightly rustfmt. `src/`, `build.rs` and `device.x` are generated and committed; change the patches in `xtask/src/pac.rs` and regenerate, never edit the generated files. Regenerating an unchanged input gives byte-identical output.
+Peripheral access crate for the GigaDevice GD32F303 (Wooting 60HE+), generated from GigaDevice's SVD by `cargo xtask pac` with svd2rust 0.37.1, form 0.13.0 and nightly rustfmt. `src/`, `build.rs` and `device.x` are generated and committed; change the patches in `xtask/src/pac/patches.rs` and regenerate, never edit the generated files. Regenerating an unchanged input gives byte-identical output.
 
 Features, as svd2rust emits them:
 
