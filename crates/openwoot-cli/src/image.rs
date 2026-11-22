@@ -1,4 +1,4 @@
-use ihex::Record;
+use ihex::{ReaderError, Record};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Content {
@@ -7,23 +7,27 @@ pub struct Content {
 }
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub enum ParseError {
-    #[error("record {record}: {reason}")]
-    InvalidRecord { record: usize, reason: String },
-    #[error("record {record}: address below the first data record")]
+pub enum Error {
+    #[error("record {record} is invalid")]
+    InvalidRecord {
+        record: usize,
+        #[source]
+        source: ReaderError,
+    },
+    #[error("record {record} lies below the address of the first data record")]
     BelowFirstRecord { record: usize },
-    #[error("no end-of-file record")]
+    #[error("the end-of-file record is missing")]
     NoEndOfFile,
-    #[error("no data record")]
+    #[error("the file holds no data record")]
     NoData,
-    #[error("the file is not ASCII text")]
+    #[error("the file is not text")]
     NotText,
 }
 
 impl Content {
-    pub fn parse(file: &[u8]) -> Result<Self, ParseError> {
+    pub fn parse(file: &[u8]) -> Result<Self, Error> {
         if file.trim_ascii_start().starts_with(b":") {
-            let text = str::from_utf8(file).map_err(|_| ParseError::NotText)?;
+            let text = str::from_utf8(file).map_err(|_| Error::NotText)?;
             parse_intel_hex(text)
         } else {
             Ok(Self {
@@ -34,18 +38,15 @@ impl Content {
     }
 }
 
-fn parse_intel_hex(text: &str) -> Result<Content, ParseError> {
+fn parse_intel_hex(text: &str) -> Result<Content, Error> {
     let mut base = 0u32;
     let mut first = None;
     let mut bytes = Vec::new();
     let mut seen_end = false;
     for (index, line) in text.split_whitespace().enumerate() {
         let record = index + 1;
-        let parsed =
-            Record::from_record_string(line).map_err(|error| ParseError::InvalidRecord {
-                record,
-                reason: error.to_string(),
-            })?;
+        let parsed = Record::from_record_string(line)
+            .map_err(|source| Error::InvalidRecord { record, source })?;
         match parsed {
             Record::Data { offset, value } => {
                 let address = base + u32::from(offset);
@@ -53,7 +54,7 @@ fn parse_intel_hex(text: &str) -> Result<Content, ParseError> {
                 let position = address
                     .checked_sub(first)
                     .and_then(|position| usize::try_from(position).ok())
-                    .ok_or(ParseError::BelowFirstRecord { record })?;
+                    .ok_or(Error::BelowFirstRecord { record })?;
                 let end = position + value.len();
                 if end > bytes.len() {
                     bytes.resize(end, 0xFF);
@@ -69,9 +70,9 @@ fn parse_intel_hex(text: &str) -> Result<Content, ParseError> {
         }
     }
     if !seen_end {
-        return Err(ParseError::NoEndOfFile);
+        return Err(Error::NoEndOfFile);
     }
-    let start = first.ok_or(ParseError::NoData)?;
+    let start = first.ok_or(Error::NoData)?;
     Ok(Content {
         start: Some(start),
         bytes,
@@ -93,10 +94,7 @@ mod tests {
     #[test]
     fn intel_hex_needs_an_end_of_file_record() {
         let text = ":020000040800F2\n:048000000102030472\n";
-        assert_eq!(
-            Content::parse(text.as_bytes()),
-            Err(ParseError::NoEndOfFile)
-        );
+        assert_eq!(Content::parse(text.as_bytes()), Err(Error::NoEndOfFile));
     }
 
     #[test]

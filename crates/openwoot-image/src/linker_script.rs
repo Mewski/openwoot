@@ -10,12 +10,12 @@ pub struct MemoryLayout {
 pub enum LinkerScriptError {
     #[error("`memory.x` has no `{0}` region")]
     MissingRegion(&'static str),
-    #[error("`memory.x`: the `{field}` of the `{region}` region is missing or not a number")]
+    #[error("the `{field}` of region `{region}` in `memory.x` is missing or not a number")]
     InvalidField {
         region: &'static str,
         field: &'static str,
     },
-    #[error("`memory.x`: the `{0}` region ends beyond the address space or is empty")]
+    #[error("region `{0}` in `memory.x` is empty or ends beyond the address space")]
     InvalidBounds(&'static str),
 }
 

@@ -3,7 +3,7 @@ mod fake;
 use fake::Bootloader;
 use futures_lite::future::block_on;
 use openwoot_cli::{
-    bootloader::{Command, Error, Flags, Session, Upload},
+    bootloader::{Command, Error, Session, Upload},
     transfer,
 };
 
@@ -18,19 +18,18 @@ fn image() -> Vec<u8> {
         .collect()
 }
 
-fn install(bootloader: Bootloader) -> (Result<(), Error>, Bootloader, Vec<usize>) {
+fn install(bootloader: &Bootloader) -> (Result<(), Error>, Vec<usize>) {
     let upload = Upload::new(&image(), BLOCK_SIZE);
-    let mut session = Session::new(bootloader);
+    let mut session = Session::new(bootloader.clone());
     let mut progress = Vec::new();
     let result = block_on(session.install(&upload, |written| progress.push(written)));
-    (result, session.into_port(), progress)
+    (result, progress)
 }
 
 #[test]
 fn state_reports_what_the_read_only_commands_return() {
-    let mut session = Session::new(Bootloader::new());
-    let state = block_on(session.state()).unwrap();
-    assert_eq!(state.flags.map(Flags::bits), Some(0x02));
+    let bootloader = Bootloader::new();
+    let state = block_on(Session::new(bootloader.clone()).state()).unwrap();
     assert_eq!(
         state.flags.unwrap().to_string(),
         "0x02 (update mode requested by the firmware)"
@@ -38,42 +37,45 @@ fn state_reports_what_the_read_only_commands_return() {
     assert_eq!(state.version, "2.3");
     assert_eq!(state.serial, "A1B2C3D4E5F6");
     assert_eq!(state.session_crc, 0);
-    assert_eq!(session.into_port().commands, [0, 1, 9, 9, 4]);
+    assert_eq!(bootloader.0.borrow().commands, [0, 1, 9, 9, 4]);
 }
 
 #[test]
 fn install_writes_verifies_and_marks_the_image_complete() {
     let upload = Upload::new(&image(), BLOCK_SIZE);
-    let (result, bootloader, progress) = install(Bootloader::new());
+    let bootloader = Bootloader::new();
+    let (result, progress) = install(&bootloader);
     result.unwrap();
-    assert_eq!(bootloader.flash[..upload.bytes.len()], upload.bytes);
-    assert_eq!(bootloader.marker, 0);
-    assert_eq!(bootloader.rebooted_with, Some(1));
+    let state = bootloader.0.borrow();
+    assert_eq!(state.flash[..upload.bytes.len()], upload.bytes);
+    assert_eq!(state.marker, 0);
+    assert_eq!(state.rebooted_with, Some(1));
     assert_eq!(progress, (1..=BLOCKS).collect::<Vec<_>>());
     let mut expected = vec![6, 2];
     expected.extend([3; BLOCKS]);
     expected.extend([8, 4, 5]);
-    assert_eq!(bootloader.commands, expected);
+    assert_eq!(state.commands, expected);
 }
 
 #[test]
 fn a_crc_mismatch_stops_before_the_image_is_marked_complete() {
-    let mut bootloader = Bootloader::new();
-    bootloader.faults.flipped_block = Some(17);
-    let (result, bootloader, _) = install(bootloader);
+    let bootloader = Bootloader::new();
+    bootloader.0.borrow_mut().faults.flipped_block = Some(17);
+    let (result, _) = install(&bootloader);
     assert!(
         matches!(result, Err(Error::CrcMismatch { reported, expected }) if reported != expected)
     );
-    assert_eq!(bootloader.marker, u32::MAX);
-    assert_eq!(bootloader.rebooted_with, None);
-    assert_eq!(bootloader.commands.last(), Some(&4));
+    let state = bootloader.0.borrow();
+    assert_eq!(state.marker, u32::MAX);
+    assert_eq!(state.rebooted_with, None);
+    assert_eq!(state.commands.last(), Some(&4));
 }
 
 #[test]
 fn a_wrong_reply_stops_the_upload() {
-    let mut bootloader = Bootloader::new();
-    bootloader.faults.wrong_echo_to_block = Some(5);
-    let (result, bootloader, progress) = install(bootloader);
+    let bootloader = Bootloader::new();
+    bootloader.0.borrow_mut().faults.wrong_echo_to_block = Some(5);
+    let (result, progress) = install(&bootloader);
     assert!(matches!(
         result,
         Err(Error::UnexpectedReply {
@@ -82,52 +84,51 @@ fn a_wrong_reply_stops_the_upload() {
         })
     ));
     assert_eq!(progress.len(), 5);
-    assert_eq!(bootloader.marker, u32::MAX);
-    assert_eq!(bootloader.rebooted_with, None);
+    let state = bootloader.0.borrow();
+    assert_eq!(state.marker, u32::MAX);
+    assert_eq!(state.rebooted_with, None);
 }
 
 #[test]
 fn a_disappearing_keyboard_stops_the_upload() {
-    let mut bootloader = Bootloader::new();
-    bootloader.faults.disconnect_after_requests = Some(10);
-    let (result, bootloader, progress) = install(bootloader);
+    let bootloader = Bootloader::new();
+    bootloader.0.borrow_mut().faults.disconnect_after_requests = Some(10);
+    let (result, progress) = install(&bootloader);
     assert_eq!(result, Err(Error::Transfer(transfer::Error::Disconnected)));
     assert_eq!(progress.len(), 8);
-    assert_eq!(bootloader.marker, u32::MAX);
-    assert_eq!(bootloader.rebooted_with, None);
+    let state = bootloader.0.borrow();
+    assert_eq!(state.marker, u32::MAX);
+    assert_eq!(state.rebooted_with, None);
 }
 
 #[test]
 fn ping_is_retried_after_a_pause() {
-    let mut bootloader = Bootloader::new();
-    bootloader.faults.silent_pings = 2;
-    let mut session = Session::new(bootloader);
-    block_on(session.state()).unwrap();
-    assert_eq!(session.into_port().pauses, 2);
+    let bootloader = Bootloader::new();
+    bootloader.0.borrow_mut().faults.silent_pings = 2;
+    block_on(Session::new(bootloader.clone()).state()).unwrap();
+    assert_eq!(bootloader.0.borrow().pauses, 2);
 }
 
 #[test]
 fn ping_gives_up_after_five_attempts() {
-    let mut bootloader = Bootloader::new();
-    bootloader.faults.silent_pings = 5;
-    let mut session = Session::new(bootloader);
+    let bootloader = Bootloader::new();
+    bootloader.0.borrow_mut().faults.silent_pings = 5;
     assert!(matches!(
-        block_on(session.state()),
+        block_on(Session::new(bootloader.clone()).state()),
         Err(Error::NoReply {
             command: Command::Ping,
             ..
         })
     ));
-    assert_eq!(session.into_port().pauses, 4);
+    assert_eq!(bootloader.0.borrow().pauses, 4);
 }
 
 #[test]
 fn a_refused_request_reports_its_status() {
-    let mut bootloader = Bootloader::new();
-    bootloader.serial = None;
-    let mut session = Session::new(bootloader);
+    let bootloader = Bootloader::new();
+    bootloader.0.borrow_mut().serial = None;
     assert_eq!(
-        block_on(session.state()),
+        block_on(Session::new(bootloader).state()),
         Err(Error::Refused {
             command: Command::Serial,
             status: 0xFF
@@ -137,11 +138,11 @@ fn a_refused_request_reports_its_status() {
 
 #[test]
 fn an_empty_image_is_not_sent() {
-    let mut session = Session::new(Bootloader::new());
+    let bootloader = Bootloader::new();
     let upload = Upload::new(&[], BLOCK_SIZE);
     assert_eq!(
-        block_on(session.install(&upload, |_| {})),
+        block_on(Session::new(bootloader.clone()).install(&upload, |_| {})),
         Err(Error::BlockCountOutOfRange(0))
     );
-    assert_eq!(session.into_port().commands, Vec::<u8>::new());
+    assert_eq!(bootloader.0.borrow().commands, Vec::<u8>::new());
 }

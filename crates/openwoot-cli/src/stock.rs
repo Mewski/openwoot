@@ -43,13 +43,13 @@ async fn command(reports: &mut impl Reports, command: Command) -> Result<Option<
     send(reports, command).await?;
     let number = u8::from(command);
     let deadline = Instant::now() + REPLY_TIMEOUT;
-    let mut buffer = vec![0; report::MAX_LEN];
+    let mut input = vec![0; report::MAX_LEN];
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let Some(len) = reports.read_input(&mut buffer, remaining).await? else {
+        let Some(len) = reports.read_input(&mut input, remaining).await? else {
             return Ok(None);
         };
-        let received = buffer.get(..len).unwrap_or_default();
+        let received = input.get(..len).unwrap_or_default();
         match decode_reply(received) {
             Some(reply) if reply.command == number && reply.status == u8::from(Status::Success) => {
                 return Ok(Some(reply.payload.to_vec()));

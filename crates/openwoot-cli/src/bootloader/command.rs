@@ -29,8 +29,7 @@ impl Command {
         }
     }
 
-    #[must_use]
-    pub const fn name(self) -> &'static str {
+    const fn name(self) -> &'static str {
         match self {
             Self::Ping => "ping",
             Self::Version => "version",

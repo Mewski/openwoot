@@ -20,8 +20,8 @@ pub enum Error {
     Transfer(#[from] transfer::Error),
     #[error("could not encode the request")]
     Encode(#[source] openwoot_protocol::Error),
-    #[error("the firmware answered with an error")]
-    Response(#[source] openwoot_protocol::Error),
+    #[error("could not use the reply")]
+    Reply(#[source] openwoot_protocol::Error),
 }
 
 pub(crate) async fn firmware_version(reports: &mut impl Reports) -> Result<Option<Version>, Error> {
@@ -47,20 +47,20 @@ where
     E::Response: DeserializeOwned,
 {
     let mut encoded = [0; report::MAX_LEN];
-    let report =
+    let sent =
         encode_request::<E>(SEQUENCE_NUMBER, request, &mut encoded).map_err(Error::Encode)?;
     reports.discard_input().await?;
-    reports.write_output(report).await?;
+    reports.write_output(sent).await?;
     let deadline = Instant::now() + REPLY_TIMEOUT;
-    let mut reply = vec![0; report::MAX_LEN];
+    let mut input = vec![0; report::MAX_LEN];
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let Some(len) = reports.read_input(&mut reply, remaining).await? else {
+        let Some(len) = reports.read_input(&mut input, remaining).await? else {
             return Ok(None);
         };
-        let report = reply.get(..len).unwrap_or_default();
+        let received = input.get(..len).unwrap_or_default();
         if let Some(response) =
-            decode_response::<E>(SEQUENCE_NUMBER, report).map_err(Error::Response)?
+            decode_response::<E>(SEQUENCE_NUMBER, received).map_err(Error::Reply)?
         {
             return Ok(Some(response));
         }

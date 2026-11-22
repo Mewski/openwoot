@@ -89,7 +89,7 @@ fn firmware_without_diagnostics_answers_the_request_as_unknown() {
     let mut keyboard = Keyboard::openwoot(OPENWOOT, true);
     assert!(matches!(
         block_on(channel::diagnostics(&mut keyboard)),
-        Err(channel::Error::Response(openwoot_protocol::Error::Device(
+        Err(channel::Error::Reply(openwoot_protocol::Error::Device(
             WireError::UnknownKey
         )))
     ));

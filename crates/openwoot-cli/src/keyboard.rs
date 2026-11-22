@@ -65,7 +65,7 @@ pub async fn diagnostics(hid: &Hid) -> Result<(DeviceInfo, Report), Error> {
     let (device, mut interface) = open_running(hid).await?;
     let report = match channel::diagnostics(&mut interface).await {
         Ok(report) => report.ok_or(Error::NoChannelAnswer)?,
-        Err(channel::Error::Response(openwoot_protocol::Error::Device(WireError::UnknownKey))) => {
+        Err(channel::Error::Reply(openwoot_protocol::Error::Device(WireError::UnknownKey))) => {
             return Err(Error::NoDiagnostics);
         }
         Err(error) => return Err(error.into()),

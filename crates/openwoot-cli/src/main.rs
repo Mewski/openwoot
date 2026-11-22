@@ -120,7 +120,12 @@ fn flash(args: &FlashArgs) -> Result<()> {
         }
         bail!("the {board} has no known update mode; nothing was sent");
     };
-    let block_size = usize::try_from(mode.block_size).context("block size exceeds memory")?;
+    let block_size = usize::try_from(mode.block_size).with_context(|| {
+        format!(
+            "the block size of {} bytes does not fit in memory",
+            mode.block_size
+        )
+    })?;
     let upload = Upload::new(image.bytes(), block_size);
     show(
         "update mode",

@@ -2,7 +2,7 @@
 name = "openwoot-cli"
 version = "0.0.0"
 edition.workspace = true
-description = "Host tool for openwoot keyboards: check and flash firmware images"
+description = "Query openwoot keyboards and flash firmware images to them"
 license.workspace = true
 publish.workspace = true
 rust-version.workspace = true

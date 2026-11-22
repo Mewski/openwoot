@@ -61,11 +61,6 @@ impl Flags {
         (0x02, "update mode requested by the firmware"),
         (0x04, "no valid firmware installed"),
     ];
-
-    #[must_use]
-    pub const fn bits(self) -> u8 {
-        self.0
-    }
 }
 
 impl fmt::Display for Flags {
@@ -87,10 +82,6 @@ impl fmt::Display for Flags {
 impl<P: Port> Session<P> {
     pub const fn new(port: P) -> Self {
         Self { port }
-    }
-
-    pub fn into_port(self) -> P {
-        self.port
     }
 
     pub async fn state(&mut self) -> Result<State, Error> {

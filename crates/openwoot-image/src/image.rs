@@ -24,7 +24,7 @@ pub enum Error {
     MissingDescriptor,
     #[error("the image descriptor is invalid")]
     InvalidDescriptor(#[from] DescriptorError),
-    #[error("the image starts at {}, its descriptor at {}", Hex(*.found), Hex(*.expected))]
+    #[error("the image starts at {}, its descriptor names {}", Hex(*.found), Hex(*.expected))]
     StartMismatch { found: u32, expected: u32 },
     #[error(
         "the image has {size} bytes; its area {}-{} holds {capacity} bytes",
@@ -109,11 +109,6 @@ impl<'a> Image<'a> {
         &self.descriptor
     }
 
-    #[must_use]
-    pub const fn descriptor_offset(&self) -> usize {
-        self.descriptor_offset
-    }
-
     fn descriptor_end(&self) -> u32 {
         let end = self.descriptor_offset + Descriptor::ENCODED_LEN;
         self.descriptor.image().start + u32::try_from(end).unwrap_or(u32::MAX)
@@ -189,7 +184,7 @@ mod tests {
     fn accepts_a_well_formed_image() {
         let bytes = firmware(0x400);
         let image = Image::new(&bytes, Some(START)).unwrap();
-        assert_eq!(image.descriptor_offset(), DESCRIPTOR_OFFSET);
+        assert_eq!(image.descriptor_offset, DESCRIPTOR_OFFSET);
         assert_eq!(image.descriptor().board_name(), Some("Example board"));
     }
 

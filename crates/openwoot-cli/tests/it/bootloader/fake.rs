@@ -1,4 +1,4 @@
-use std::{future::ready, time::Duration};
+use std::{cell::RefCell, future::ready, rc::Rc, time::Duration};
 
 use openwoot_cli::{
     bootloader::{Port, REPLY_LEN, Reply, Request, crc24},
@@ -24,7 +24,7 @@ pub(super) struct Faults {
 }
 
 #[derive(Debug)]
-pub(super) struct Bootloader {
+pub(super) struct State {
     pub flash: Vec<u8>,
     pub marker: u32,
     pub flags: u8,
@@ -42,9 +42,12 @@ pub(super) struct Bootloader {
     disconnected: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct Bootloader(pub Rc<RefCell<State>>);
+
 impl Bootloader {
     pub(super) fn new() -> Self {
-        Self {
+        Self(Rc::new(RefCell::new(State {
             flash: vec![0xA5; APPLICATION_BLOCKS as usize * BLOCK_LEN],
             marker: 0,
             flags: 0x02,
@@ -60,9 +63,11 @@ impl Bootloader {
             crc_end: 0,
             pending: None,
             disconnected: false,
-        }
+        })))
     }
+}
 
+impl State {
     fn connected(&self) -> Result<(), transfer::Error> {
         if self.disconnected {
             Err(transfer::Error::Disconnected)
@@ -207,19 +212,20 @@ impl Bootloader {
 
 impl Port for Bootloader {
     fn discard_replies(&mut self) -> impl Future<Output = Result<(), transfer::Error>> {
-        self.pending = None;
-        ready(self.connected())
+        let mut state = self.0.borrow_mut();
+        state.pending = None;
+        ready(state.connected())
     }
 
     fn send_request(
         &mut self,
         request: &Request,
     ) -> impl Future<Output = Result<(), transfer::Error>> {
-        ready(self.accept_request(*request))
+        ready(self.0.borrow_mut().accept_request(*request))
     }
 
     fn send_block(&mut self, block: &[u8]) -> impl Future<Output = Result<(), transfer::Error>> {
-        ready(self.accept_block(block))
+        ready(self.0.borrow_mut().accept_block(block))
     }
 
     fn receive_reply(
@@ -227,11 +233,11 @@ impl Port for Bootloader {
         reply: &mut Reply,
         _timeout: Duration,
     ) -> impl Future<Output = Result<Option<usize>, transfer::Error>> {
-        ready(self.take_reply(reply))
+        ready(self.0.borrow_mut().take_reply(reply))
     }
 
     fn pause(&mut self, _duration: Duration) -> impl Future<Output = ()> {
-        self.pauses += 1;
+        self.0.borrow_mut().pauses += 1;
         ready(())
     }
 }
