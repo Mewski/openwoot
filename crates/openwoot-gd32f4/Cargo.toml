@@ -25,7 +25,7 @@ openwoot-image = { workspace = true }
 thiserror = { workspace = true }
 
 [target.'cfg(target_os = "none")'.dependencies]
-cortex-m-rt = { workspace = true, features = ["set-vtor"] }
+cortex-m-rt = { workspace = true, features = ["paint-stack", "set-vtor"] }
 critical-section = { workspace = true, features = ["restore-state-u8"] }
 embassy-executor = { workspace = true, features = [
     "executor-interrupt",

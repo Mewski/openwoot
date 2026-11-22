@@ -15,6 +15,7 @@ pub mod rcu;
 mod register;
 pub mod scan;
 pub mod spi;
+mod stack;
 pub mod system;
 pub mod time;
 pub mod usb;

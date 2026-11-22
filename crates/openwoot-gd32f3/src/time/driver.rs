@@ -62,8 +62,10 @@ struct TimeDriver {
 impl TimeDriver {
     fn on_interrupt(&self) {
         critical_section::with(|cs| {
-            if self.monotonic.on_interrupt(cs) {
-                self.arm_next(cs, &mut self.queue.borrow(cs).borrow_mut());
+            if self.monotonic.on_interrupt(cs)
+                && let Ok(mut queue) = self.queue.borrow(cs).try_borrow_mut()
+            {
+                self.arm_next(cs, &mut queue);
             }
         });
     }
@@ -83,8 +85,9 @@ impl Driver for TimeDriver {
 
     fn schedule_wake(&self, at: u64, waker: &Waker) {
         critical_section::with(|cs| {
-            let mut queue = self.queue.borrow(cs).borrow_mut();
-            if queue.schedule_wake(at, waker) {
+            if let Ok(mut queue) = self.queue.borrow(cs).try_borrow_mut()
+                && queue.schedule_wake(at, waker)
+            {
                 self.arm_next(cs, &mut queue);
             }
         });
