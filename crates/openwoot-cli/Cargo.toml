@@ -13,9 +13,14 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+async-hid = { workspace = true }
+async-io = { workspace = true }
 clap = { workspace = true }
+futures-lite = { workspace = true }
 ihex = { workspace = true }
+indicatif = { workspace = true }
 openwoot-image = { workspace = true }
+openwoot-protocol = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

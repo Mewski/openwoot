@@ -1,6 +1,6 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Upload {
-    pub blocks: Vec<u8>,
+    pub bytes: Vec<u8>,
     pub block_size: usize,
     pub crc: u32,
 }
@@ -8,11 +8,12 @@ pub struct Upload {
 impl Upload {
     #[must_use]
     pub fn new(image: &[u8], block_size: usize) -> Self {
-        let mut blocks = image.to_vec();
-        blocks.resize(image.len().next_multiple_of(block_size.max(1)), 0xFF);
-        let crc = crc24(&blocks);
+        let block_size = block_size.max(1);
+        let mut bytes = image.to_vec();
+        bytes.resize(image.len().next_multiple_of(block_size), 0xFF);
+        let crc = crc24(&bytes);
         Self {
-            blocks,
+            bytes,
             block_size,
             crc,
         }
@@ -20,7 +21,11 @@ impl Upload {
 
     #[must_use]
     pub fn block_count(&self) -> usize {
-        self.blocks.len() / self.block_size.max(1)
+        self.bytes.len() / self.block_size
+    }
+
+    pub fn blocks(&self) -> impl Iterator<Item = &[u8]> {
+        self.bytes.chunks(self.block_size)
     }
 }
 
@@ -49,8 +54,9 @@ mod tests {
     #[test]
     fn upload_pads_to_whole_blocks() {
         let upload = Upload::new(&[0; 1000], 256);
-        assert_eq!(upload.blocks.len(), 1024);
+        assert_eq!(upload.bytes.len(), 1024);
         assert_eq!(upload.block_count(), 4);
-        assert_eq!(upload.blocks[1000..], [0xFF; 24]);
+        assert_eq!(upload.bytes[1000..], [0xFF; 24]);
+        assert!(upload.blocks().all(|block| block.len() == 256));
     }
 }
