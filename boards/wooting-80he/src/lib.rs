@@ -2,6 +2,11 @@
 #![forbid(unsafe_code)]
 
 pub use cortex_m_rt::entry;
+use hal::{
+    pac,
+    rcu::{self, AhbDivider, ApbDivider, Clocks, Hertz, Pll, PllSystemDivider, TimerMultiplier},
+    system::Bootloader,
+};
 use openwoot::Keyboard;
 pub use openwoot_gd32f4 as hal;
 use openwoot_image::{Descriptor, Region, UpdateMode, UsbIds};
@@ -28,14 +33,35 @@ pub const SERIAL_PAGE: Region = Region {
 pub const KEY_ROWS: usize = 6;
 pub const KEY_COLUMNS: usize = 17;
 pub const DESCRIPTOR: Descriptor = Descriptor::new(NAME, USB_IDS, IMAGE, UPDATE_MODE);
+pub const CLOCK_TREE: rcu::Config = rcu::Config {
+    crystal: Hertz::from_mhz(25),
+    pll: Pll {
+        input_divider: 25,
+        multiplier: 400,
+        system_divider: PllSystemDivider::By2,
+        peripheral_divider: 9,
+    },
+    ahb_divider: AhbDivider::By1,
+    apb1_divider: ApbDivider::By4,
+    apb2_divider: ApbDivider::By2,
+    timer_multiplier: TimerMultiplier::Quadruple,
+};
 
-#[derive(Debug, Default)]
-pub struct Board;
+#[derive(Debug)]
+pub struct Board {
+    pub clocks: Clocks,
+    pub bootloader: Bootloader,
+}
 
 impl Board {
     #[must_use]
-    pub const fn new() -> Self {
-        Self
+    pub fn new(peripherals: pac::Peripherals) -> Self {
+        let clocks = CLOCK_TREE.configure(peripherals.rcu, &peripherals.pmu);
+        hal::time::start(peripherals.timer4, &clocks);
+        Self {
+            clocks,
+            bootloader: Bootloader::new(peripherals.pmu, peripherals.rtc),
+        }
     }
 }
 
@@ -53,5 +79,16 @@ mod tests {
     fn image_keeps_clear_of_the_bootloader_and_the_serial_page() {
         assert_eq!(IMAGE.start, BOOTLOADER.end);
         assert_eq!(IMAGE.end, SERIAL_PAGE.start);
+    }
+
+    #[test]
+    fn the_clock_tree_runs_the_core_at_200_megahertz_and_the_timers_at_1_megahertz_ticks() {
+        let clocks = CLOCK_TREE.clocks();
+        assert_eq!(clocks.system, Hertz::from_mhz(200));
+        assert_eq!(clocks.apb1, Hertz::from_mhz(50));
+        assert_eq!(clocks.apb2, Hertz::from_mhz(100));
+        assert!(clocks.pll_input >= Hertz::from_mhz(1) && clocks.pll_input <= Hertz::from_mhz(2));
+        assert!(clocks.pll_vco >= Hertz::from_mhz(100) && clocks.pll_vco <= Hertz::from_mhz(500));
+        assert_eq!(hal::time::prescaler(clocks.apb1_timers), 199);
     }
 }

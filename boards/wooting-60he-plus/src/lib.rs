@@ -2,6 +2,11 @@
 #![forbid(unsafe_code)]
 
 pub use cortex_m_rt::entry;
+use hal::{
+    pac,
+    rcu::{self, AhbDivider, ApbDivider, Clocks, PllMultiplier},
+    system::Bootloader,
+};
 use openwoot::Keyboard;
 pub use openwoot_gd32f3 as hal;
 use openwoot_image::{Descriptor, Region, UpdateMode, UsbIds};
@@ -25,14 +30,28 @@ pub const SERIAL_PAGE: Region = Region {
 pub const KEY_ROWS: usize = 6;
 pub const KEY_COLUMNS: usize = 14;
 pub const DESCRIPTOR: Descriptor = Descriptor::new(NAME, USB_IDS, IMAGE, UPDATE_MODE);
+pub const CLOCK_TREE: rcu::Config = rcu::Config {
+    pll_multiplier: PllMultiplier::new::<30>(),
+    ahb_divider: AhbDivider::By1,
+    apb1_divider: ApbDivider::By2,
+    apb2_divider: ApbDivider::By1,
+};
 
-#[derive(Debug, Default)]
-pub struct Board;
+#[derive(Debug)]
+pub struct Board {
+    pub clocks: Clocks,
+    pub bootloader: Bootloader,
+}
 
 impl Board {
     #[must_use]
-    pub const fn new() -> Self {
-        Self
+    pub fn new(peripherals: pac::Peripherals) -> Self {
+        let clocks = CLOCK_TREE.configure(peripherals.rcu, &peripherals.pmu);
+        hal::time::start(peripherals.timer4, &clocks);
+        Self {
+            clocks,
+            bootloader: Bootloader::new(peripherals.pmu, peripherals.bkp),
+        }
     }
 }
 
@@ -50,5 +69,14 @@ mod tests {
     fn image_keeps_clear_of_the_bootloader_and_the_serial_page() {
         assert_eq!(IMAGE.start, BOOTLOADER.end);
         assert_eq!(IMAGE.end, SERIAL_PAGE.start);
+    }
+
+    #[test]
+    fn the_clock_tree_runs_the_core_at_120_megahertz_and_the_timers_at_1_megahertz_ticks() {
+        let clocks = CLOCK_TREE.clocks();
+        assert_eq!(clocks.system, rcu::Hertz::from_mhz(120));
+        assert_eq!(clocks.apb1, rcu::Hertz::from_mhz(60));
+        assert_eq!(clocks.apb2, rcu::Hertz::from_mhz(120));
+        assert_eq!(hal::time::prescaler(clocks.apb1_timers), 119);
     }
 }

@@ -10,11 +10,26 @@ rust-version.workspace = true
 target = "thumbv7em-none-eabihf"
 
 [dependencies]
-gd32f425-pac = { workspace = true }
+cortex-m = { workspace = true }
+critical-section = { workspace = true }
+embedded-hal = { workspace = true }
+gd32f425-pac = { workspace = true, features = ["critical-section"] }
 openwoot-image = { workspace = true }
 
 [target.'cfg(target_os = "none")'.dependencies]
-gd32f425-pac = { workspace = true, features = ["rt"] }
+cortex-m-rt = { workspace = true, features = ["set-vtor"] }
+critical-section = { workspace = true, features = ["restore-state-u8"] }
+embassy-executor = { workspace = true, features = [
+    "executor-interrupt",
+    "executor-thread",
+    "platform-cortex-m",
+] }
+embassy-time-driver = { workspace = true, features = ["tick-hz-1_000_000"] }
+embassy-time-queue-utils = { workspace = true }
+gd32f425-pac = { workspace = true, features = ["critical-section", "rt"] }
+
+[dev-dependencies]
+critical-section = { workspace = true, features = ["std"] }
 
 [lints]
 workspace = true

@@ -1,12 +1,10 @@
 use core::{convert::Infallible, future::pending};
 
+use embassy_executor::SendSpawner;
+
 use crate::Keyboard;
 
-pub fn run<Board: Keyboard>(board: Board) -> ! {
-    match embassy_futures::block_on(idle_task(board)) {}
-}
-
-async fn idle_task<Board: Keyboard>(board: Board) -> Infallible {
-    let _board = board;
+pub async fn run<Board: Keyboard>(board: Board, keys: SendSpawner) -> Infallible {
+    let _running = (board, keys);
     pending().await
 }

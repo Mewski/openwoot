@@ -13,4 +13,4 @@ SECTIONS
 }
 INSERT AFTER .vector_table;
 
-_stext = ADDR(.app_descriptor) + SIZEOF(.app_descriptor);
+_stext = ALIGN(ADDR(.app_descriptor) + SIZEOF(.app_descriptor), 8);

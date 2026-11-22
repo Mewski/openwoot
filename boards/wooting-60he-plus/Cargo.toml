@@ -18,6 +18,9 @@ openwoot = { workspace = true }
 openwoot-gd32f3 = { workspace = true }
 openwoot-image = { workspace = true }
 
+[target.'cfg(target_os = "none")'.dependencies]
+embassy-executor = { workspace = true }
+
 [build-dependencies]
 openwoot-image = { workspace = true }
 
