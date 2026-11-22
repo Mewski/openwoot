@@ -22,6 +22,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if env::var("TARGET")?.starts_with("thumb") {
         println!("cargo:rustc-link-arg-bins=--nmagic");
         println!("cargo:rustc-link-arg-bins=-Tlink.x");
+        println!("cargo:rustc-link-arg-bins=--emit-relocs");
     }
     Ok(())
 }

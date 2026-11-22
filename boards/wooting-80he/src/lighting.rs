@@ -5,7 +5,7 @@ use hal::{
 };
 use openwoot::{
     keys::Key,
-    lighting::{FramePage, Gains, Geometry, Led, LedMap, LedPosition, Matrix, Variant},
+    lighting::{Bar, FramePage, Gains, Geometry, Led, LedMap, LedPosition, Matrix, Variant},
     runtime,
 };
 use openwoot_drivers::is31fl3741::Configuration;
@@ -37,14 +37,20 @@ pub const LIGHTBAR_LEDS: [Led; 10] = [
 ];
 pub const SPACEBAR: Key = Key::new(5, 6);
 
-pub type Lighting = openwoot::lighting::Lighting<(), ROWS, COLUMNS, PAGES, PAGE_LENGTH>;
+pub type Lighting = openwoot::lighting::Lighting<Bar, ROWS, COLUMNS, PAGES, PAGE_LENGTH>;
 pub type Task =
-    runtime::Lighting<'static, CriticalSectionRawMutex, (), ROWS, COLUMNS, PAGES, PAGE_LENGTH>;
+    runtime::Lighting<'static, CriticalSectionRawMutex, Bar, ROWS, COLUMNS, PAGES, PAGE_LENGTH>;
 pub type LedDriver = Matrix<I2c, Pin<'B', 8, Output>>;
 
 #[must_use]
 pub fn lighting(layout_variant: u8) -> Lighting {
-    Lighting::new(&LEDS, variant(layout_variant), GEOMETRY, (), 0)
+    Lighting::new(
+        &LEDS,
+        variant(layout_variant),
+        GEOMETRY,
+        Bar::new(&LIGHTBAR_LEDS, &LEDS, COLUMNS),
+        0,
+    )
 }
 
 pub static LEDS: LedMap<PAGES> = LedMap {

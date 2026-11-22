@@ -98,13 +98,7 @@ impl Board {
             &clocks,
             Irqs,
         );
-        if !scan::SCAN.install(scan::Scanner::new(
-            converter,
-            scan::ANSI,
-            scan::PARALLEL_ORDER,
-        )) {
-            hal::system::reset();
-        }
+        install_scanner(converter);
         let port_a = Port::<'A'>::new(peripherals.gpioa);
         let port_b = Port::<'B'>::new(peripherals.gpiob);
         let mut bootloader = Bootloader::new(peripherals.pmu, peripherals.bkp);
@@ -122,17 +116,7 @@ impl Board {
             Device::new(flash_bus, chip_select, clocks.system),
             storage::NOR_CAPACITY,
         );
-        let mut storage = block_on(storage::Storage::open(
-            nor,
-            storage::SETTINGS,
-            storage::DEVICE_INFO,
-            storage::LAYOUT_VARIANT,
-            bootloader.take_format_request(),
-        ));
-        let face = block_on(openwoot::profile::stored_face(
-            storage.settings.as_mut(),
-            FACE,
-        ));
+        let (storage, face) = open_storage(nor, bootloader.take_format_request());
         let usb = usb::Driver::new(
             usb::Core {
                 controller: peripherals.usbd,
@@ -189,6 +173,30 @@ impl Board {
 
 fn serial_number() -> Option<&'static str> {
     hal::flash::read(SERIAL_PAGE).and_then(serial_number_from_page)
+}
+
+#[inline(never)]
+fn install_scanner(converter: scan::Converter) {
+    if !scan::SCAN.install(|| scan::Scanner::new(converter, scan::ANSI, scan::PARALLEL_ORDER)) {
+        hal::system::reset();
+    }
+}
+
+#[inline(never)]
+fn open_storage(nor: storage::Nor, format: bool) -> (storage::Storage, Face) {
+    let mut storage = block_on(storage::Storage::open(
+        nor,
+        storage::SETTINGS_STORE.take(),
+        storage::SETTINGS,
+        storage::DEVICE_INFO,
+        storage::LAYOUT_VARIANT,
+        format,
+    ));
+    let face = block_on(openwoot::profile::stored_face(
+        storage.settings.as_deref_mut(),
+        FACE,
+    ));
+    (storage, face)
 }
 
 #[cfg(test)]

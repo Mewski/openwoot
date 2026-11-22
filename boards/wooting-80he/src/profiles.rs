@@ -1,51 +1,133 @@
 use openwoot::{
+    analog::SwitchType,
     layout::LAYERS,
-    lighting::from_rgb565,
-    profile::{Factory, Preset},
+    lighting::{from_rgb565, lightbar_indicator},
+    profile::{Edition, Factory, Preset},
 };
 use openwoot_protocol::{
+    advanced::{self, Behaviour, DepthPriority, Resolution},
     global,
     heapless::Vec,
-    keys::{self, Distance, RapidTrigger, ScanMode, TapDuration},
+    keys::{self, Distance, Index, Layer, RapidTrigger, ScanMode, TapDuration},
+    lightbar::Background,
     lighting::{
         AnalogLevel, Color, Effect, HueRange, Idle, Indicators, KeyColors, KeyTest, LevelMeter,
         RainbowWave, ReactiveColoring, ReactiveFade, Rgb, Settings,
     },
 };
 
-use crate::{FACE, KEY_COLUMNS, KEY_ROWS, keys::KEYMAP};
+use crate::{FACE, KEY_COLUMNS, KEY_ROWS, keys::KEYMAP, lighting::LIGHTBAR_LEDS};
 
 pub const CREATED: u8 = 2;
+pub const EDITION_PRODUCT: &str = "Wooting 80HE TenZ";
+pub const EDITION_CODES: [u8; 2] = [9, 99];
 
 pub static FACTORY: Factory<KEY_ROWS, KEY_COLUMNS> = Factory {
     keymap: KEYMAP,
     presets: &PRESETS,
-    fallback: Preset {
-        name: "",
-        color: NO_COLOR,
-        keys: TYPING_KEYS,
-        lighting: lighting([]),
-        colors: [None; LAYERS],
-    },
+    fallback: OTHER,
     created: CREATED,
-    global: global::Settings {
-        idle: Some(Idle {
-            dim_after_minutes: 5,
-            off_after_minutes: 10,
-            off_enabled: true,
-        }),
-        num_lock_inverted: false,
-        release_rebound_filter: false,
-    },
+    global: GLOBAL,
+    lightbar: lightbar_indicator(LIGHTBAR_COUNT, Background::Contrast, 5),
     face: FACE,
 };
 
+pub static EDITION: Edition<KEY_ROWS, KEY_COLUMNS> = Edition {
+    codes: &EDITION_CODES,
+    product: EDITION_PRODUCT,
+    factory: Factory {
+        keymap: KEYMAP,
+        presets: &EDITION_PRESETS,
+        fallback: OTHER,
+        created: 3,
+        global: GLOBAL,
+        lightbar: lightbar_indicator(LIGHTBAR_COUNT, Background::ProfileColor, 1),
+        face: FACE,
+    },
+    switch_type: match SwitchType::new(1) {
+        Some(switch_type) => switch_type,
+        None => SwitchType::DEFAULT,
+    },
+};
+
 static PRESETS: [Preset; 4] = [
+    TYPING,
     Preset {
-        name: "Typing Profile",
-        color: BLUE,
-        keys: TYPING_KEYS,
-        lighting: lighting([
+        name: "Rapid Profile",
+        color: RED,
+        keys: RAPID_KEYS,
+        actuation_points: &[],
+        advanced: &[],
+        lighting: lighting(
+            255,
+            [
+                Effect::RainbowWave(RainbowWave {
+                    hues: HueRange::From2To39,
+                    period: 30,
+                    forward: false,
+                }),
+                Effect::KeyTest(KeyTest { base_level: 255 }),
+            ],
+        ),
+        colors: [Some(&RED_RUN), Some(&LAYER_ONE), None, None],
+        lightbar_brightness: None,
+    },
+    Preset {
+        name: "Analog Profile",
+        color: NO_COLOR,
+        keys: RAPID_KEYS,
+        actuation_points: &[],
+        advanced: &[],
+        lighting: lighting(
+            255,
+            [Effect::LevelMeter(LevelMeter {
+                base_level: 51,
+                gamepad_curve: false,
+            })],
+        ),
+        colors: [None; LAYERS],
+        lightbar_brightness: None,
+    },
+    ANALOG_GLOW,
+];
+
+static EDITION_PRESETS: [Preset; 4] = [
+    Preset {
+        name: "TenZ Profile",
+        color: RED,
+        keys: EDITION_KEYS,
+        actuation_points: &EDITION_ACTUATION_POINTS,
+        advanced: &[],
+        lighting: lighting(EDITION_BRIGHTNESS, []),
+        colors: [Some(&RED_RUN), Some(&LAYER_ONE), None, None],
+        lightbar_brightness: Some(127),
+    },
+    TYPING,
+    Preset {
+        name: "TenZ Ultra Profile",
+        color: RED,
+        keys: keys::Settings {
+            scan_mode: ScanMode::Parallel,
+            ..EDITION_KEYS
+        },
+        actuation_points: &EDITION_ACTUATION_POINTS,
+        advanced: &EDITION_KEY_PAIRS,
+        lighting: lighting(EDITION_BRIGHTNESS, []),
+        colors: [Some(&RED_RUN), Some(&LAYER_ONE), None, None],
+        lightbar_brightness: Some(255),
+    },
+    ANALOG_GLOW,
+];
+
+const TYPING: Preset = Preset {
+    name: "Typing Profile",
+    color: BLUE,
+    keys: TYPING_KEYS,
+    actuation_points: &[],
+    advanced: &[],
+    lighting: lighting(
+        255,
+        [
             Effect::RainbowWave(RainbowWave {
                 hues: HueRange::From113To204,
                 period: 34,
@@ -53,43 +135,68 @@ static PRESETS: [Preset; 4] = [
             }),
             reactive_fade(8, 0xFFFF),
             reactive_fade(4, 0xFFE0),
-        ]),
-        colors: [Some(&BLUE_RUN), Some(&LAYER_ONE), None, None],
-    },
-    Preset {
-        name: "Rapid Profile",
-        color: RED,
-        keys: RAPID_KEYS,
-        lighting: lighting([
-            Effect::RainbowWave(RainbowWave {
-                hues: HueRange::From2To39,
-                period: 30,
-                forward: false,
-            }),
-            Effect::KeyTest(KeyTest { base_level: 255 }),
-        ]),
-        colors: [Some(&RED_RUN), Some(&LAYER_ONE), None, None],
-    },
-    Preset {
-        name: "Analog Profile",
-        color: NO_COLOR,
-        keys: RAPID_KEYS,
-        lighting: lighting([Effect::LevelMeter(LevelMeter {
-            base_level: 51,
-            gamepad_curve: false,
-        })]),
-        colors: [None; LAYERS],
-    },
-    Preset {
-        name: "Analog Profile",
-        color: NO_COLOR,
-        keys: RAPID_KEYS,
-        lighting: lighting([Effect::AnalogGlow(AnalogLevel {
+        ],
+    ),
+    colors: [Some(&BLUE_RUN), Some(&LAYER_ONE), None, None],
+    lightbar_brightness: None,
+};
+const ANALOG_GLOW: Preset = Preset {
+    name: "Analog Profile",
+    color: NO_COLOR,
+    keys: RAPID_KEYS,
+    actuation_points: &[],
+    advanced: &[],
+    lighting: lighting(
+        255,
+        [Effect::AnalogGlow(AnalogLevel {
             base_level: 130,
             gamepad_curve: false,
-        })]),
-        colors: [None; LAYERS],
-    },
+        })],
+    ),
+    colors: [None; LAYERS],
+    lightbar_brightness: None,
+};
+const OTHER: Preset = Preset {
+    name: "",
+    color: NO_COLOR,
+    keys: TYPING_KEYS,
+    actuation_points: &[],
+    advanced: &[],
+    lighting: lighting(255, []),
+    colors: [None; LAYERS],
+    lightbar_brightness: None,
+};
+const GLOBAL: global::Settings = global::Settings {
+    idle: Some(Idle {
+        dim_after_minutes: 5,
+        off_after_minutes: 10,
+        off_enabled: true,
+    }),
+    num_lock_inverted: false,
+    release_rebound_filter: false,
+};
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the light bar has ten LEDs, a constant checked by the tests"
+)]
+const LIGHTBAR_COUNT: u8 = LIGHTBAR_LEDS.len() as u8;
+const EDITION_BRIGHTNESS: u8 = 112;
+const SHALLOW: Distance = Distance::from_fraction(26 * 257);
+const DEEP: Distance = Distance::from_fraction(191 * 257);
+const EDITION_ACTUATION_POINTS: [(Index, Distance); 9] = [
+    (key(2, 2), SHALLOW),
+    (key(3, 1), SHALLOW),
+    (key(3, 2), SHALLOW),
+    (key(3, 3), SHALLOW),
+    (key(5, 0), SHALLOW),
+    (key(0, 0), DEEP),
+    (key(2, 0), DEEP),
+    (key(3, 0), DEEP),
+    (key(5, 6), DEEP),
+];
+const EDITION_KEY_PAIRS: [advanced::Key; 2] = [
+    depth_priority(key(3, 1), key(3, 3)),
+    depth_priority(key(2, 2), key(3, 2)),
 ];
 
 const TYPING_KEYS: keys::Settings = keys::Settings {
@@ -111,6 +218,16 @@ const RAPID_KEYS: keys::Settings = keys::Settings {
         press: Distance::from_fraction(26 * 257),
         release: None,
         continuous: false,
+    },
+    ..TYPING_KEYS
+};
+const EDITION_KEYS: keys::Settings = keys::Settings {
+    actuation: Distance::from_fraction(63 * 257),
+    rapid_trigger_enabled: true,
+    rapid_trigger: RapidTrigger {
+        press: Distance::from_fraction(26 * 257),
+        release: None,
+        continuous: true,
     },
     ..TYPING_KEYS
 };
@@ -214,9 +331,9 @@ static BLUE_RUN: KeyColors = key_colors(&BLUE_RUN_565);
 static RED_RUN: KeyColors = key_colors(&RED_RUN_565);
 static LAYER_ONE: KeyColors = key_colors(&LAYER_ONE_565);
 
-const fn lighting<const EFFECTS: usize>(effects: [Effect; EFFECTS]) -> Settings {
+const fn lighting<const EFFECTS: usize>(brightness: u8, effects: [Effect; EFFECTS]) -> Settings {
     Settings {
-        brightness: 255,
+        brightness,
         indicators: Indicators {
             caps_lock: WHITE,
             scroll_lock: WHITE,
@@ -224,6 +341,25 @@ const fn lighting<const EFFECTS: usize>(effects: [Effect; EFFECTS]) -> Settings 
             layer_lock: WHITE,
         },
         effects: Vec::from_array(effects),
+    }
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "positions of the 6 x 17 key matrix fit a key index"
+)]
+const fn key(row: usize, column: usize) -> Index {
+    Index::new((row * KEY_COLUMNS + column) as u8)
+}
+
+const fn depth_priority(first: Index, other: Index) -> advanced::Key {
+    advanced::Key {
+        key: first,
+        layer: Layer::Base,
+        behaviour: Behaviour::DepthPriority(DepthPriority {
+            other,
+            both_bottomed_out: Resolution::Both,
+        }),
     }
 }
 
@@ -258,12 +394,126 @@ const fn key_colors<const WIDTH: usize>(map: &[[u16; WIDTH]; KEY_ROWS]) -> KeyCo
 mod tests {
     use openwoot::{
         keys::Key,
-        lighting::{Canvas, Frame, KeyEvent, Layers, Painter},
+        lighting::{
+            Bar, Canvas, Frame, KeyEvent, Layers, Lightbar, Painter, ProfileState, Signals,
+        },
+        profile::Unit,
+        storage::{DeviceInfo, SerialNumber},
     };
-    use openwoot_protocol::keys::Layer;
+    use openwoot_protocol::{
+        keys::Layer,
+        lightbar::{Effect, ProfileIndicator, Range},
+    };
 
     use super::*;
-    use crate::lighting::{ANSI, GEOMETRY, LEDS, PAGE_LENGTH, PAGES};
+    use crate::{
+        NAME,
+        lighting::{ANSI, GEOMETRY, LEDS, PAGE_LENGTH, PAGES},
+    };
+
+    fn unit_with_edition(edition: Option<u8>) -> Unit<KEY_ROWS, KEY_COLUMNS> {
+        let info = DeviceInfo {
+            serial: SerialNumber {
+                edition,
+                ..SerialNumber::default()
+            },
+            aux: None,
+            physical_layout: None,
+            lock_mode: None,
+        };
+        EDITION.unit(Unit::regular(NAME, &FACTORY), Some(&info))
+    }
+
+    #[test]
+    fn a_tenz_serial_selects_the_edition_product_profiles_and_switch_type() {
+        for code in EDITION_CODES {
+            let unit = unit_with_edition(Some(code));
+            assert_eq!(unit.product, "Wooting 80HE TenZ");
+            assert_eq!(unit.edition, Some(code));
+            assert_eq!(unit.switch_type.id(), 1);
+            assert_eq!(unit.factory.created, 3);
+            assert_eq!(unit.factory.preset(0).info().name.as_str(), "TenZ Profile");
+            assert_eq!(
+                unit.factory.preset(1).info().name.as_str(),
+                "Typing Profile"
+            );
+            assert_eq!(
+                unit.factory.preset(2).info().name.as_str(),
+                "TenZ Ultra Profile"
+            );
+            assert_eq!(unit.factory.preset(2).keys.scan_mode, ScanMode::Parallel);
+            assert_eq!(unit.factory.preset(2).advanced_keys().len(), 2);
+            let overrides = unit.factory.preset(0).overrides(KEY_ROWS * KEY_COLUMNS);
+            assert_eq!(overrides[3 * KEY_COLUMNS + 1].actuation, Some(SHALLOW));
+            assert_eq!(overrides[5 * KEY_COLUMNS + 6].actuation, Some(DEEP));
+            assert_eq!(overrides[1].actuation, None);
+            assert_eq!(unit.factory.preset(0).lighting.brightness, 112);
+            assert_eq!(unit.factory.preset(0).lightbar().brightness, Some(127));
+            assert_eq!(unit.factory.preset(1).lightbar().brightness, None);
+            assert_eq!(unit.factory.preset(2).lightbar().brightness, Some(255));
+        }
+        for edition in [None, Some(1), Some(10)] {
+            let unit = unit_with_edition(edition);
+            assert_eq!(unit.product, "Wooting 80HE");
+            assert_eq!(unit.edition, None);
+            assert_eq!(unit.switch_type.id(), 0);
+            assert_eq!(unit.factory.created, 2);
+        }
+        let unread = EDITION.unit(Unit::regular(NAME, &FACTORY), None);
+        assert_eq!(unread.product, NAME);
+    }
+
+    #[test]
+    fn the_factory_light_bar_shows_the_profile_over_the_whole_bar() {
+        let indicator = |entries: &openwoot_protocol::lightbar::Entries| match entries.first() {
+            Some(entry) => match &entry.effect {
+                Effect::ProfileIndicator(indicator) => Some(*indicator),
+                _ => None,
+            },
+            None => None,
+        };
+        assert_eq!(
+            indicator(&FACTORY.lightbar),
+            Some(ProfileIndicator {
+                range: Range { first: 0, last: 9 },
+                background: Background::Contrast,
+                segments: 5,
+            })
+        );
+        assert_eq!(
+            indicator(&EDITION.factory.lightbar),
+            Some(ProfileIndicator {
+                range: Range { first: 0, last: 9 },
+                background: Background::ProfileColor,
+                segments: 1,
+            })
+        );
+        let preset = FACTORY.preset(0);
+        let settings = preset.lightbar();
+        assert!(settings.enabled && settings.use_global && settings.entries.is_empty());
+        assert_eq!(settings.brightness, None);
+
+        let mut bar = Bar::new(&LIGHTBAR_LEDS, &LEDS, KEY_COLUMNS);
+        bar.configure(&settings, &FACTORY.lightbar, 200);
+        bar.profile_changed(ProfileState {
+            slot: 0,
+            count: 2,
+            color: preset.color,
+        });
+        let mut frame = Frame::<PAGES, PAGE_LENGTH>::new();
+        let mut canvas = Painter::new(&mut frame, &LEDS, &ANSI, None);
+        assert!(bar.needs_render(16));
+        bar.render(&mut canvas, 16);
+        let shown: [Rgb; 10] = LIGHTBAR_LEDS.map(|led| canvas.led(led).unwrap_or(NO_COLOR));
+        let green = Rgb {
+            red: 0,
+            green: 0xFF,
+            blue: 0,
+        };
+        assert_eq!(shown[..2], [BLUE; 2]);
+        assert_eq!(shown[2..], [green; 8]);
+        assert_eq!(bar.brightness(), 200);
+    }
 
     const STEP_MS: u32 = 16;
     const KEY_EVENTS: [(u32, Key, KeyEvent); 4] = [
@@ -460,5 +710,10 @@ mod tests {
                 .and_then(|colors| colors.get(KEY_COLUMNS + 1)),
             Some(&from_rgb565(0xFFE0))
         );
+    }
+
+    #[test]
+    fn the_light_bar_count_matches_the_led_table() {
+        assert_eq!(usize::from(LIGHTBAR_COUNT), LIGHTBAR_LEDS.len());
     }
 }

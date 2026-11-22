@@ -24,8 +24,11 @@ pub static FACTORY: Factory<KEY_ROWS, KEY_COLUMNS> = Factory {
         name: "",
         color: NO_COLOR,
         keys: OTHER_KEYS,
+        actuation_points: &[],
+        advanced: &[],
         lighting: lighting([]),
         colors: [None; LAYERS],
+        lightbar_brightness: None,
     },
     created: CREATED,
     global: global::Settings {
@@ -37,6 +40,7 @@ pub static FACTORY: Factory<KEY_ROWS, KEY_COLUMNS> = Factory {
         num_lock_inverted: false,
         release_rebound_filter: false,
     },
+    lightbar: Vec::new(),
     face: FACE,
 };
 
@@ -45,6 +49,8 @@ static PRESETS: [Preset; 4] = [
         name: "Typing Profile",
         color: BLUE,
         keys: TYPING_KEYS,
+        actuation_points: &[],
+        advanced: &[],
         lighting: lighting([
             Effect::RainbowWave(RainbowWave {
                 hues: HueRange::FullCircle,
@@ -54,11 +60,14 @@ static PRESETS: [Preset; 4] = [
             reactive_fade(6, 0xFFFF),
         ]),
         colors: [Some(&COLOR_RUN), Some(&LAYER_ONE), Some(&LAYER_TWO), None],
+        lightbar_brightness: None,
     },
     Preset {
         name: "Rapid Profile",
         color: RED,
         keys: RAPID_KEYS,
+        actuation_points: &[],
+        advanced: &[],
         lighting: lighting([
             Effect::RainbowWave(RainbowWave {
                 hues: HueRange::From2To39,
@@ -68,6 +77,7 @@ static PRESETS: [Preset; 4] = [
             Effect::KeyTest(KeyTest { base_level: 255 }),
         ]),
         colors: [Some(&BLUE_RUN), Some(&LAYER_ONE), Some(&LAYER_TWO), None],
+        lightbar_brightness: None,
     },
     uncreated(),
     uncreated(),
@@ -231,8 +241,11 @@ const fn uncreated() -> Preset {
         name: "",
         color: NO_COLOR,
         keys: RAPID_KEYS,
+        actuation_points: &[],
+        advanced: &[],
         lighting: lighting([]),
         colors: [None; LAYERS],
+        lightbar_brightness: None,
     }
 }
 

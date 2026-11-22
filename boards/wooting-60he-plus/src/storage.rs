@@ -6,6 +6,7 @@ use hal::{
 use openwoot::storage::{self, McuPage, NorLayout, OptionBit, SettingsRegion};
 use openwoot_drivers::spi_nor::SpiNor;
 use openwoot_image::Region;
+use static_cell::ConstStaticCell;
 
 use crate::hal;
 
@@ -38,7 +39,10 @@ const _: () = assert!(
 
 pub type ChipSelect = Pin<'B', 12, Output>;
 pub type Nor = SpiNor<Device<ChipSelect>>;
-pub type Storage = storage::Storage<Nor>;
+pub type Storage = storage::Storage<'static, Nor>;
+
+pub static SETTINGS_STORE: ConstStaticCell<storage::Settings<Nor>> =
+    ConstStaticCell::new(storage::Settings::new());
 
 #[cfg(test)]
 mod tests {

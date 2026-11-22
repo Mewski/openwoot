@@ -275,16 +275,16 @@ const VARIANT_PATCHES: [&[Patch]; LAYOUT_VARIANTS] = [
 ];
 
 #[must_use]
-pub fn capabilities() -> Capabilities {
+pub fn capabilities(edition: Option<u8>) -> Capabilities {
     Capabilities {
         key_rows: u8::try_from(KEY_ROWS).unwrap_or(u8::MAX),
         key_columns: u8::try_from(KEY_COLUMNS).unwrap_or(u8::MAX),
         profiles: PROFILES,
         layouts: Vec::from_iter([Layout::Ansi, Layout::Iso, Layout::Jis]),
         lightbar_leds: u8::try_from(crate::lighting::LIGHTBAR_LEDS.len()).unwrap_or(u8::MAX),
-        host_signals: false,
+        host_signals: true,
         switch_models: SwitchType::COUNT,
-        edition: None,
+        edition,
     }
 }
 
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn every_factory_action_is_valid_on_the_keyboard() {
-        let capabilities = capabilities();
+        let capabilities = capabilities(None);
         for variant in 0..u8::try_from(LAYOUT_VARIANTS).unwrap() {
             for layer in Layer::ALL {
                 let keymap = KEYMAP.keymap(layer, variant);

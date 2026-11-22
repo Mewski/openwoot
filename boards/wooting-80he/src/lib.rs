@@ -19,7 +19,9 @@ use hal::{
     usb,
 };
 use openwoot::{
+    analog::Switch,
     lighting::Matrix,
+    profile::Unit,
     protocol::StockIdentity,
     usb::{Face, Identity, KeyboardFormat, Mode, PollingRate, serial_number_from_page},
 };
@@ -90,6 +92,7 @@ pub struct Board {
     pub storage: storage::Storage,
     pub usb: UsbDriver,
     pub leds: lighting::LedDriver,
+    pub unit: Unit<KEY_ROWS, KEY_COLUMNS>,
 }
 
 impl Board {
@@ -107,13 +110,7 @@ impl Board {
             &clocks,
             Irqs,
         );
-        if !scan::SCAN.install(scan::Scanner::new(
-            converter,
-            scan::ANSI,
-            scan::PARALLEL_ORDER,
-        )) {
-            hal::system::reset();
-        }
+        install_scanner(converter);
         let port_a = Port::<'A'>::new(peripherals.gpioa);
         let port_b = Port::<'B'>::new(peripherals.gpiob);
         let port_c = Port::<'C'>::new(peripherals.gpioc);
@@ -133,17 +130,7 @@ impl Board {
             Device::new(flash_bus, chip_select, clocks.system),
             storage::NOR_CAPACITY,
         );
-        let mut storage = block_on(storage::Storage::open(
-            nor,
-            storage::SETTINGS,
-            storage::DEVICE_INFO,
-            storage::LAYOUT_VARIANT,
-            bootloader.take_format_request(),
-        ));
-        let face = block_on(openwoot::profile::stored_face(
-            storage.settings.as_mut(),
-            FACE,
-        ));
+        let (storage, face) = open_storage(nor, bootloader.take_format_request());
         let usb = usb::Driver::new(
             usb::Core {
                 global: peripherals.hs_global,
@@ -184,6 +171,15 @@ impl Board {
             lighting::LED_DRIVER_RUNNING,
         );
         scan::select_layout(storage.layout_variant);
+        let unit = profiles::EDITION.unit(
+            Unit::regular(NAME, &profiles::FACTORY),
+            storage.device_info.as_ref(),
+        );
+        if unit.edition.is_some() {
+            let _ = scan::SCAN.with(|scanner| {
+                scanner.apply_switches(|_| Switch::new(unit.switch_type, None));
+            });
+        }
         Self {
             clocks,
             serial_number: serial_number(),
@@ -192,6 +188,7 @@ impl Board {
             storage,
             usb,
             leds,
+            unit,
         }
     }
 
@@ -200,7 +197,7 @@ impl Board {
         Identity {
             ids: USB_IDS,
             manufacturer: MANUFACTURER,
-            product: NAME,
+            product: self.unit.product,
             serial_number: self.serial_number,
         }
     }
@@ -219,6 +216,30 @@ impl Board {
 
 fn serial_number() -> Option<&'static str> {
     hal::flash::read(SERIAL_PAGE).and_then(serial_number_from_page)
+}
+
+#[inline(never)]
+fn install_scanner(converter: scan::Converter) {
+    if !scan::SCAN.install(|| scan::Scanner::new(converter, scan::ANSI, scan::PARALLEL_ORDER)) {
+        hal::system::reset();
+    }
+}
+
+#[inline(never)]
+fn open_storage(nor: storage::Nor, format: bool) -> (storage::Storage, Face) {
+    let mut storage = block_on(storage::Storage::open(
+        nor,
+        storage::SETTINGS_STORE.take(),
+        storage::SETTINGS,
+        storage::DEVICE_INFO,
+        storage::LAYOUT_VARIANT,
+        format,
+    ));
+    let face = block_on(openwoot::profile::stored_face(
+        storage.settings.as_deref_mut(),
+        FACE,
+    ));
+    (storage, face)
 }
 
 #[cfg(test)]

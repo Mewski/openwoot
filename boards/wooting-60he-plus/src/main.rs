@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+use embassy_executor::{SendSpawner, Spawner};
 use embassy_futures::block_on;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_usb::UsbDevice;
@@ -33,24 +34,18 @@ hal::app_descriptor!(DESCRIPTOR);
 
 #[entry]
 fn main() -> ! {
+    hal::executor::run(start)
+}
+
+#[inline(never)]
+fn start(spawner: Spawner, key_executor: SendSpawner) {
     let Some(peripherals) = hal::pac::Peripherals::take() else {
         hal::system::reset()
     };
     let mut board = Board::new(peripherals);
     let identity = board.identity();
     let variant = board.storage.layout_variant;
-    let model = MODEL.init(Mutex::new(block_on(Model::open(
-        STATE.keys(),
-        STATE.profile(),
-        board
-            .storage
-            .settings
-            .take()
-            .map(|settings| settings.with_diagnostics(STATE.diagnostics())),
-        &FACTORY,
-        variant,
-        PROFILES,
-    ))));
+    let model = open_model(&mut board);
     let handler = Handler::with_configuration(
         protocol::version(
             env!("CARGO_PKG_VERSION_MAJOR"),
@@ -79,26 +74,42 @@ fn main() -> ! {
     };
     let leds = board.leds;
     let bootloader = board.bootloader;
-    hal::executor::run(|spawner, key_executor| {
-        if let Ok(token) = scanning(firmware.keys) {
-            key_executor.spawn(token);
-        }
-        if let Ok(token) = device(firmware.device) {
-            spawner.spawn(token);
-        }
-        if let Ok(token) = channel(firmware.channel, handler, bootloader) {
-            spawner.spawn(token);
-        }
-        if let Ok(token) = reports(firmware.reports, firmware.key_reports) {
-            spawner.spawn(token);
-        }
-        if let Ok(token) = lights(firmware.lighting, leds, travels) {
-            spawner.spawn(token);
-        }
-        if let Ok(token) = profiles(profile_keys) {
-            spawner.spawn(token);
-        }
-    })
+    if let Ok(token) = scanning(firmware.keys) {
+        key_executor.spawn(token);
+    }
+    if let Ok(token) = device(firmware.device) {
+        spawner.spawn(token);
+    }
+    if let Ok(token) = channel(firmware.channel, handler, bootloader) {
+        spawner.spawn(token);
+    }
+    if let Ok(token) = reports(firmware.reports, firmware.key_reports) {
+        spawner.spawn(token);
+    }
+    if let Ok(token) = lights(firmware.lighting, leds, travels) {
+        spawner.spawn(token);
+    }
+    if let Ok(token) = profiles(profile_keys) {
+        spawner.spawn(token);
+    }
+}
+
+#[inline(never)]
+fn open_model(board: &mut Board) -> &'static Mutex<Mutual, ProfileModel> {
+    let model = MODEL.init(Mutex::new(Model::new(
+        STATE.keys(),
+        STATE.profile(),
+        board
+            .storage
+            .settings
+            .take()
+            .map(|settings| settings.with_diagnostics(STATE.diagnostics())),
+        &FACTORY,
+        board.storage.layout_variant,
+        PROFILES,
+    )));
+    block_on(model.get_mut().load());
+    model
 }
 
 #[embassy_executor::task]
