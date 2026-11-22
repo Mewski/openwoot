@@ -5,9 +5,10 @@ mod endpoint;
 mod error;
 mod message;
 mod report;
+pub mod stock;
 mod version;
 
-pub use endpoint::{ENDPOINT_LIST, GetVersion};
+pub use endpoint::{ENDPOINT_LIST, EnterUpdateMode, GetVersion};
 pub use error::Error;
 pub use message::{Message, decode_message, decode_response, encode_message, encode_request};
 pub use postcard_rpc::{

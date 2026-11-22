@@ -32,7 +32,8 @@ pub fn parse_report(report: &[u8]) -> Result<Contents<'_>, Error> {
 }
 
 pub fn seal_report(report: &mut [u8], frame_len: usize) -> Result<&[u8], Error> {
-    let (report_id, size) = report_for(frame_len).ok_or(Error::FrameTooLong)?;
+    let (report_id, size) =
+        smallest_report(FRAME_OFFSET - REPORT_ID_LEN + frame_len).ok_or(Error::FrameTooLong)?;
     let length = u16::try_from(frame_len).map_err(|_| Error::FrameTooLong)?;
     let report = report
         .get_mut(..REPORT_ID_LEN + size)
@@ -51,8 +52,7 @@ pub fn seal_report(report: &mut [u8], frame_len: usize) -> Result<&[u8], Error> 
     Ok(report)
 }
 
-fn report_for(frame_len: usize) -> Option<(u8, usize)> {
-    let data_len = FRAME_OFFSET - REPORT_ID_LEN + frame_len;
+pub(crate) fn smallest_report(data_len: usize) -> Option<(u8, usize)> {
     REPORT_SIZES
         .iter()
         .zip(1..)
