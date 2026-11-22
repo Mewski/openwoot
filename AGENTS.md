@@ -55,6 +55,19 @@ Optional features (light bar, host signals, editions, ...) and alternative behav
 - No stuttering: `keys::Index`, not `keys::KeyIndex`.
 - Enforced by clippy (`pedantic` with `module_name_repetitions`, `min_ident_chars`, `renamed_function_params`, `pub_underscore_fields`, `same_name_method`).
 
+## Messages and strings
+
+One voice everywhere a person reads text: errors, CLI output, help, `xtask` output, logs, panic messages, docs examples.
+
+- Errors (`Display` of error types, `anyhow` context, `bail!`): lowercase first word, no trailing period, say what failed and with what (`could not read \`image.hex\``, `reset vector 0x0800_0000 lies outside the image`). Context is added at each layer with `with_context`, and printed as one chain with `{error:#}` (`openwoot: could not read \`image.hex\`: No such file or directory`). Never `Error:`/`error:` prefixes inside messages and never `failed to`; prefer `could not <verb>`.
+- Error enums derive their messages with `thiserror` `#[error("...")]`, same rules; variants name the condition (`ResetVectorOutsideImage`), not the check.
+- Help text (clap `about`/`help`): sentence case, no trailing period, imperative (`Write a firmware image through the factory bootloader`).
+- CLI output: results to stdout as aligned `label: value` lines (labels lowercase, padded to one width per command), progress and diagnostics to stderr; every program prefixes its own fatal error with its name (`openwoot: ...`, `xtask: ...`).
+- Identifiers, paths, commands and values from input appear in backticks in messages (`` `wooting-80he` ``, `` `--dry-run` ``).
+- Numbers: addresses and register values as lowercase hex with `0x` and `_` every four digits (`0x0800_8000`); USB ids as `31e3:1400`; sizes with their unit spelled out (`3 blocks of 256 bytes`, `768 bytes`); durations with units (`250 ms`).
+- Names of products as their makers write them (`Wooting 80HE`, `Wooting 60HE+`, `GD32F425`); everything else lowercase in running text.
+- All user-facing strings of one kind live next to the type they describe (error enums, one `show`/output function per binary), never scattered `println!` with ad-hoc formats.
+
 ## Code style
 
 - Code documents itself: names, types and small functions carry the meaning. No comments, no doc comments and no commented-out code. The one exception is the `// SAFETY:` comment that every `unsafe` block or attribute requires.
@@ -63,4 +76,14 @@ Optional features (light bar, host signals, editions, ...) and alternative behav
   - Rust: `cargo +nightly fmt` (`rustfmt.toml`; import grouping, import merging and impl item ordering are nightly-only options, so formatting uses nightly while building uses the pinned stable toolchain).
   - TOML: `taplo fmt` (`taplo.toml`); `Cargo.toml` dependency and section order: `cargo sort --workspace`.
 - Before every commit: `cargo xtask check` and `cargo test --workspace`.
-- Modules are small and named for what they hold; one concept per file; public items first, helpers after.
+- Modules use the 2018+ file layout: a module `keys` with children is `src/keys.rs` plus `src/keys/actuation.rs`; no `mod.rs` anywhere (clippy `mod_module_files` is denied).
+- Every crate and every module with children is a facade: child modules are private (`mod actuation;`), and the parent re-exports the public API (`pub use actuation::{ActuationPoint, Actuation};`). Callers write `openwoot::keys::ActuationPoint`, never `openwoot::keys::actuation::ActuationPoint`. Items shared only inside the crate are `pub(crate)`; `unreachable_pub` warns about anything public that the facade does not export.
+- Small modules named for what they hold, one concept per file; public items first, private helpers after.
+
+## Tests
+
+Follows the Rust Book (ch. 11.3) for unit tests and matklad's "Delete Cargo Integration Tests" for integration tests:
+
+- Unit tests live in the file they test, in `#[cfg(test)] mod tests { use super::*; ... }` at the end of the file.
+- Integration tests: one integration test crate per package, `tests/it/main.rs`, declaring one module per behaviour area (`tests/it/keys.rs`, `tests/it/flash.rs`) and shared setup as a plain module (`tests/it/support.rs`). One binary links faster than one per file, and no `mod.rs` is needed.
+- Test names state the behaviour (`rapid_trigger_releases_after_upstroke`). No test-only code outside test modules and `tests/`.
