@@ -27,8 +27,9 @@ pub struct Spi {
     spi: pac::Spi1,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
+    #[error("the SPI DMA channel reported a transfer error")]
     Transfer,
 }
 
