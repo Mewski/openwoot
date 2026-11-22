@@ -1,8 +1,7 @@
 use openwoot::lighting::{
-    FADE_DIMMED, FADE_FULL, Indicator, Key, KeyEvent, Lighting, LockState, Overlay, OverlayId,
-    Span, from_rgb565, rgb,
+    Indicator, Key, KeyEvent, Lighting, LockState, Overlay, OverlayId, Span, from_rgb565, rgb,
 };
-use openwoot_protocol::lighting::{Color, Effects, Idle, Indicators, KeyColors, Rgb, Settings};
+use openwoot_protocol::lighting::{Color, Effects, Indicators, KeyColors, Rgb, Settings};
 
 use super::{
     COLUMNS, GEOMETRY, LENGTH, MAP, PAGES, ROWS, VARIANT, base_color,
@@ -10,22 +9,22 @@ use super::{
 };
 
 const GOLDEN: &str = include_str!("outputs.txt");
-const START_MS: u32 = 1000;
+pub(super) const START_MS: u32 = 1000;
 
-type TestLighting = Lighting<(), ROWS, COLUMNS, PAGES, LENGTH>;
+pub(super) type TestLighting = Lighting<(), ROWS, COLUMNS, PAGES, LENGTH>;
 
-struct Chip {
+pub(super) struct Chip {
     registers: [[u8; 256]; 2],
 }
 
 impl Chip {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             registers: [[0; 256]; 2],
         }
     }
 
-    fn drain(&mut self, lighting: &mut TestLighting) -> usize {
+    pub(super) fn drain(&mut self, lighting: &mut TestLighting) -> usize {
         let mut writes = 0;
         while let Some(write) = lighting.next_write() {
             let bank = usize::from(write.bank);
@@ -37,7 +36,7 @@ impl Chip {
         writes
     }
 
-    fn key(&self, row: usize, column: usize) -> Rgb {
+    pub(super) fn key(&self, row: usize, column: usize) -> Rgb {
         let Some(position) = VARIANT.led(row, column).and_then(|led| MAP.position(led)) else {
             return Rgb::default();
         };
@@ -93,7 +92,7 @@ fn settings(brightness: u8, effects: Effects) -> Settings {
     }
 }
 
-fn lighting(brightness: u8, effects: Effects) -> TestLighting {
+pub(super) fn lighting(brightness: u8, effects: Effects) -> TestLighting {
     let mut lighting = Lighting::new(&MAP, &VARIANT, GEOMETRY, (), START_MS);
     lighting.apply_settings(&settings(brightness, effects), START_MS);
     lighting.set_base_colors(&key_colors(base_color));
@@ -251,67 +250,11 @@ fn outputs_match_the_reference_firmware_through_fades_overlays_and_layers() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
-fn settle(lighting: &mut TestLighting, chip: &mut Chip, from_ms: u32, to_ms: u32) {
+pub(super) fn settle(lighting: &mut TestLighting, chip: &mut Chip, from_ms: u32, to_ms: u32) {
     for now_ms in from_ms..=to_ms {
         lighting.update(now_ms, &());
         chip.drain(lighting);
     }
-}
-
-#[test]
-fn idle_dims_then_switches_off_and_a_key_press_wakes_the_leds() {
-    let mut lighting = lighting(255, Effects::new());
-    lighting.set_idle(Some(Idle {
-        dim_after_minutes: 1,
-        off_after_minutes: 2,
-        off_enabled: true,
-    }));
-    let mut chip = Chip::new();
-    settle(&mut lighting, &mut chip, START_MS, START_MS + 59_000);
-    assert_eq!(lighting.fade_level(), FADE_FULL);
-    let bright = chip.key(2, 2);
-    settle(
-        &mut lighting,
-        &mut chip,
-        START_MS + 59_001,
-        START_MS + 63_000,
-    );
-    assert_eq!(lighting.fade_level(), FADE_DIMMED);
-    let dimmed = chip.key(2, 2);
-    assert!(dimmed.green < bright.green, "{dimmed:?} {bright:?}");
-    settle(
-        &mut lighting,
-        &mut chip,
-        START_MS + 63_001,
-        START_MS + 124_000,
-    );
-    assert!(lighting.is_idle_off());
-    assert_eq!(lighting.fade_level(), 0);
-    assert_eq!(chip.key(2, 2), Rgb::default());
-    lighting.key_event(Key::new(2, 2), KeyEvent::Pressed, START_MS + 124_001);
-    lighting.reset_idle_timer(START_MS + 124_001);
-    settle(
-        &mut lighting,
-        &mut chip,
-        START_MS + 124_001,
-        START_MS + 125_000,
-    );
-    assert_eq!(lighting.fade_level(), FADE_FULL);
-    assert!(!lighting.is_idle_off());
-}
-
-#[test]
-fn idle_without_switching_off_stays_dimmed() {
-    let mut lighting = lighting(255, Effects::new());
-    lighting.set_idle(Some(Idle {
-        dim_after_minutes: 1,
-        off_after_minutes: 1,
-        off_enabled: false,
-    }));
-    let mut chip = Chip::new();
-    settle(&mut lighting, &mut chip, START_MS, START_MS + 200_000);
-    assert_eq!(lighting.fade_level(), FADE_DIMMED);
-    assert!(!lighting.is_idle_off());
 }
 
 #[test]
@@ -326,52 +269,6 @@ fn brightness_steps_stop_at_the_limits_and_request_one_save() {
     assert_eq!(lighting.step_brightness(true, START_MS), 179);
     let mut dark = self::lighting(3, Effects::new());
     assert_eq!(dark.step_brightness(false, START_MS), 0);
-}
-
-#[test]
-fn num_lock_indicator_is_lit_while_num_lock_is_off_unless_not_inverted() {
-    let mut lighting = lighting(255, Effects::new());
-    let num_lock = Key::new(1, 15);
-    lighting.set_indicator_key(Indicator::NumLock, Some(num_lock), START_MS);
-    lighting.update_lock_indicators(LockState::default(), START_MS);
-    assert!(lighting.overlay_running(OverlayId::NumLock));
-    lighting.set_num_lock_inverted(false, START_MS);
-    assert!(!lighting.overlay_running(OverlayId::NumLock));
-    lighting.update_lock_indicators(
-        LockState {
-            num_lock: true,
-            ..LockState::default()
-        },
-        START_MS,
-    );
-    assert!(lighting.overlay_running(OverlayId::NumLock));
-}
-
-#[test]
-fn host_control_hides_the_host_indicators_and_drives_keys_directly() {
-    let mut lighting = lighting(255, Effects::new());
-    let caps = Key::new(3, 0);
-    lighting.set_indicator_key(Indicator::CapsLock, Some(caps), START_MS);
-    lighting.update_lock_indicators(
-        LockState {
-            caps_lock: true,
-            ..LockState::default()
-        },
-        START_MS,
-    );
-    assert!(lighting.overlay_running(OverlayId::CapsLock));
-    let magenta = rgb(200, 0, 200);
-    lighting.set_host_key_color(Key::new(0, 0), magenta, START_MS);
-    assert!(lighting.host_control());
-    assert!(!lighting.overlay_running(OverlayId::CapsLock));
-    assert_eq!(lighting.key_color(Key::new(0, 0)), Some(magenta));
-    lighting.reset_host_key_color(Key::new(0, 0));
-    assert_eq!(
-        lighting.key_color(Key::new(0, 0)),
-        Some(from_rgb565(base_color(0, 0)))
-    );
-    lighting.leave_host_control(START_MS);
-    assert!(lighting.overlay_running(OverlayId::CapsLock));
 }
 
 #[test]

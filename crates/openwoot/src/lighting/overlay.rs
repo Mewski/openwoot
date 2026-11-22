@@ -1,12 +1,13 @@
 use heapless::Vec;
 
-use super::{config::Rgb, effects::low_16, frame::Canvas, hooks::Lightbar, leds::Key};
+use super::{canvas::Canvas, config::Rgb, hooks::Lightbar, leds::Key, truncate::low_16};
 
 pub const OVERLAY_SLOTS: usize = 5;
 pub const MAX_LIGHTBAR_LEDS: usize = 16;
-pub(crate) const CLASS_KEYS: u8 = 0x01;
-pub(crate) const CLASS_GLOBAL: u8 = 0x02;
-pub(crate) const CLASS_ALL: u8 = CLASS_KEYS | CLASS_GLOBAL;
+pub const FADE_FULL: u8 = u8::MAX;
+pub(super) const CLASS_KEYS: u8 = 0x01;
+pub(super) const CLASS_GLOBAL: u8 = 0x02;
+pub(super) const CLASS_ALL: u8 = CLASS_KEYS | CLASS_GLOBAL;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OverlayId {
@@ -47,6 +48,16 @@ pub enum Span {
     Milliseconds(u16),
 }
 
+impl Overlay {
+    pub(super) const fn fade(from: u8, to: u8, duration_ms: u16) -> Self {
+        Self::Fade {
+            from,
+            to,
+            duration_ms,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Slot {
     id: OverlayId,
@@ -65,27 +76,27 @@ impl Slot {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Overlays {
+pub(super) struct Overlays {
     slots: Vec<Slot, OVERLAY_SLOTS>,
     dirty_classes: u8,
 }
 
-pub(crate) struct Pass<'a, const ROWS: usize, const COLUMNS: usize> {
-    pub(crate) restore: Option<&'a [[Rgb; COLUMNS]; ROWS]>,
-    pub(crate) classes: u8,
-    pub(crate) now_ms: u32,
-    pub(crate) elapsed_ms: u16,
+pub(super) struct Pass<'a, const ROWS: usize, const COLUMNS: usize> {
+    pub(super) restore: Option<&'a [[Rgb; COLUMNS]; ROWS]>,
+    pub(super) classes: u8,
+    pub(super) now_ms: u32,
+    pub(super) elapsed_ms: u16,
 }
 
 impl Overlays {
-    pub(crate) const fn new() -> Self {
+    pub(super) const fn new() -> Self {
         Self {
             slots: Vec::new(),
             dirty_classes: 0,
         }
     }
 
-    pub(crate) fn start(
+    pub(super) fn start(
         &mut self,
         id: OverlayId,
         span: Span,
@@ -116,19 +127,19 @@ impl Overlays {
         self.dirty_classes |= class;
     }
 
-    pub(crate) fn stop(&mut self, id: OverlayId) {
+    pub(super) fn stop(&mut self, id: OverlayId) {
         if let Some(slot) = self.slots.iter_mut().find(|slot| slot.id == id) {
             slot.span = Span::Milliseconds(0);
         }
     }
 
-    pub(crate) fn is_running(&self, id: OverlayId) -> bool {
+    pub(super) fn is_running(&self, id: OverlayId) -> bool {
         self.slots
             .iter()
             .any(|slot| slot.id == id && !slot.finished())
     }
 
-    pub(crate) fn needs_render(&self, since_ms: u16) -> bool {
+    pub(super) fn needs_render(&self, since_ms: u16) -> bool {
         if self.dirty_classes != 0 {
             return true;
         }
@@ -153,7 +164,7 @@ impl Overlays {
             })
     }
 
-    pub(crate) fn idle_fade_done(&self) -> bool {
+    pub(super) fn idle_fade_done(&self) -> bool {
         self.slots
             .iter()
             .find(|slot| slot.id == OverlayId::IdleFade)
@@ -164,7 +175,7 @@ impl Overlays {
             })
     }
 
-    pub(crate) fn render<const ROWS: usize, const COLUMNS: usize>(
+    pub(super) fn render<const ROWS: usize, const COLUMNS: usize>(
         &mut self,
         canvas: &mut impl Canvas,
         lightbar: &mut impl Lightbar,
@@ -214,7 +225,7 @@ fn finish<const ROWS: usize, const COLUMNS: usize>(
                 canvas.set_key(key.row(), key.column(), *color);
             }
         }
-        Overlay::Fade { .. } => *fade_level = u8::MAX,
+        Overlay::Fade { .. } => *fade_level = FADE_FULL,
         Overlay::Lightbar(_) => lightbar.clear_overlay(canvas),
     }
 }

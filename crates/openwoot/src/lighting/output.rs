@@ -1,73 +1,100 @@
-use core::future::Future;
+use super::{color::scale_channel, leds::FramePage};
 
-use embedded_hal::digital::OutputPin;
-use embedded_hal_async::i2c::I2c;
-use openwoot_drivers::{Is31fl3741, LedConfiguration, LedError, PwmBank};
+pub const GAMMA: [u8; 256] = [
+    0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 5, 5,
+    5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 8, 8, 8, 9, 9, 9, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 11,
+    12, 12, 13, 13, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 18, 18, 19, 19, 20, 20, 21, 21,
+    22, 22, 22, 22, 23, 24, 24, 25, 25, 26, 26, 26, 27, 27, 28, 29, 29, 30, 31, 32, 32, 33, 34, 35,
+    35, 36, 37, 38, 39, 39, 40, 41, 42, 42, 43, 43, 44, 44, 45, 45, 46, 47, 48, 49, 50, 50, 51, 51,
+    52, 52, 53, 54, 54, 55, 55, 56, 56, 57, 57, 58, 58, 59, 59, 60, 60, 61, 61, 62, 62, 63, 64, 65,
+    66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 77, 78, 79, 81, 82, 83, 85, 86, 87, 89, 90, 92, 93, 95,
+    96, 98, 99, 101, 102, 104, 105, 107, 109, 110, 112, 114, 115, 117, 119, 120, 122, 124, 126,
+    127, 129, 131, 133, 135, 137, 138, 140, 142, 144, 146, 148, 150, 152, 154, 156, 158, 160, 162,
+    164, 167, 169, 171, 173, 175, 177, 180, 182, 184, 186, 189, 191, 193, 196, 198, 200, 203, 205,
+    208, 210, 213, 215, 218, 220, 223, 225, 228, 231, 233, 236, 239, 241, 244, 247, 249, 252, 255,
+];
 
-pub trait LedMatrix {
-    type Error;
-
-    fn initialize(&mut self) -> impl Future<Output = Result<(), Self::Error>>;
-
-    fn set_running(&mut self, running: bool) -> impl Future<Output = Result<(), Self::Error>>;
-
-    fn write(
-        &mut self,
-        bank: u8,
-        first_register: u8,
-        values: &[u8],
-    ) -> impl Future<Output = Result<(), Self::Error>>;
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PageWrite<const LENGTH: usize> {
+    pub page: usize,
+    pub bank: u8,
+    pub first_register: u8,
+    values: [u8; LENGTH],
+    length: usize,
 }
 
-#[derive(Debug)]
-pub struct Matrix<I2C, Enable> {
-    driver: Is31fl3741<I2C, Enable>,
-    running: LedConfiguration,
+#[must_use]
+pub fn gamma(linear: u8) -> u8 {
+    GAMMA.get(usize::from(linear)).copied().unwrap_or(u8::MAX)
 }
 
-impl<I2C: I2c, Enable: OutputPin> Matrix<I2C, Enable> {
+#[must_use]
+pub fn output_scale(brightness: u8, fade_level: u8) -> u8 {
+    gamma((u16::from(brightness) * u16::from(fade_level) / 255).to_le_bytes()[0])
+}
+
+#[must_use]
+pub fn output_value(linear: u8, scale: u8) -> u8 {
+    scale_channel(gamma(linear), scale)
+}
+
+impl<const LENGTH: usize> PageWrite<LENGTH> {
     #[must_use]
-    pub const fn new(driver: Is31fl3741<I2C, Enable>, running: LedConfiguration) -> Self {
-        Self { driver, running }
+    pub fn values(&self) -> &[u8] {
+        self.values.get(..self.length).unwrap_or_default()
     }
 
-    pub fn release(self) -> Is31fl3741<I2C, Enable> {
-        self.driver
-    }
-}
-
-impl<I2C: I2c, Enable: OutputPin> LedMatrix for Matrix<I2C, Enable> {
-    type Error = LedError<I2C::Error, Enable::Error>;
-
-    async fn initialize(&mut self) -> Result<(), Self::Error> {
-        self.driver.initialize().await
+    pub fn values_mut(&mut self) -> &mut [u8] {
+        self.values.get_mut(..self.length).unwrap_or_default()
     }
 
-    async fn set_running(&mut self, running: bool) -> Result<(), Self::Error> {
-        if running {
-            self.driver.run(self.running).await
-        } else {
-            self.driver.shut_down().await
+    pub(super) fn new(page: usize, layout: FramePage, linear: &[u8; LENGTH], scale: u8) -> Self {
+        let length = usize::from(layout.length).min(LENGTH);
+        let mut values = [0; LENGTH];
+        for (value, linear) in values.iter_mut().zip(linear).take(length) {
+            *value = output_value(*linear, scale);
+        }
+        Self {
+            page,
+            bank: layout.bank,
+            first_register: layout.first_register,
+            values,
+            length,
         }
     }
+}
 
-    async fn write(
-        &mut self,
-        bank: u8,
-        first_register: u8,
-        values: &[u8],
-    ) -> Result<(), Self::Error> {
-        let bank = match bank {
-            0 => PwmBank::First,
-            1 => PwmBank::Second,
-            _ => {
-                return Err(LedError::OutsidePage {
-                    page: bank,
-                    first: usize::from(first_register),
-                    last: usize::from(first_register) + values.len().saturating_sub(1),
-                });
-            }
-        };
-        self.driver.write_pwm(bank, first_register, values).await
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_curve_starts_dark_and_ends_at_full() {
+        assert_eq!(GAMMA.len(), 256);
+        assert_eq!(gamma(0), 0);
+        assert_eq!(gamma(1), 0);
+        assert_eq!(gamma(2), 2);
+        assert_eq!(gamma(128), 50);
+        assert_eq!(gamma(255), 255);
+        assert!(GAMMA.windows(2).all(|pair| pair[0] <= pair[1]));
+    }
+
+    #[test]
+    fn outputs_apply_the_curve_then_the_brightness() {
+        assert_eq!(output_scale(255, 255), 255);
+        assert_eq!(output_scale(255, 127), 49);
+        assert_eq!(output_scale(0, 255), 0);
+        assert_eq!(output_value(255, 255), 255);
+        assert_eq!(output_value(128, 255), 50);
+        assert_eq!(output_value(255, 49), 49);
+        assert_eq!(output_value(0, 255), 0);
+    }
+
+    #[test]
+    fn page_writes_carry_gamma_corrected_scaled_values() {
+        let write = PageWrite::new(8, FramePage::new(1, 90, 4), &[255, 128, 0, 255, 7, 7], 255);
+        assert_eq!(write.bank, 1);
+        assert_eq!(write.first_register, 90);
+        assert_eq!(write.values(), &[255, 50, 0, 255]);
     }
 }

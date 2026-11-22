@@ -2,7 +2,7 @@ use embassy_futures::block_on;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use openwoot::{
     lighting::{Key, KeyActivity, KeyEvent, KeyEvents, LedMatrix, Lighting},
-    runtime::LightingTask,
+    runtime,
     usb::HostState,
 };
 use openwoot_protocol::lighting::{Effects, Indicators, Settings};
@@ -84,7 +84,7 @@ fn the_leds_wake_with_usb_and_every_page_is_sent_once() {
     let lighting = shared(Effects::new());
     let events = KeyEvents::new();
     let host = HostState::new();
-    let task = LightingTask {
+    let task = runtime::Lighting {
         lighting: &lighting,
         events: &events,
         host: &host,
@@ -108,7 +108,7 @@ fn key_presses_reach_the_effects_through_the_event_channel() {
     let lighting = shared(effects);
     let events = KeyEvents::new();
     let host = HostState::new();
-    let task = LightingTask {
+    let task = runtime::Lighting {
         lighting: &lighting,
         events: &events,
         host: &host,
@@ -136,7 +136,7 @@ fn a_failed_write_sends_every_page_again() {
     let lighting = shared(Effects::new());
     let events = KeyEvents::new();
     let host = HostState::new();
-    let task = LightingTask {
+    let task = runtime::Lighting {
         lighting: &lighting,
         events: &events,
         host: &host,

@@ -21,7 +21,7 @@ pub const fn rgb(red: u8, green: u8, blue: u8) -> Rgb {
     Rgb { red, green, blue }
 }
 
-pub(crate) const fn opaque(color: Color) -> Rgb {
+pub(super) const fn opaque(color: Color) -> Rgb {
     rgb(color.red, color.green, color.blue)
 }
 
@@ -78,7 +78,7 @@ pub const fn mix_level(base_level: u8, level: u8) -> u8 {
     (((base_level as u16) << 8).wrapping_add((255 - base_level as u16) * level as u16) >> 8) as u8
 }
 
-pub(crate) fn palette_color(index: u8) -> Rgb {
+pub(super) fn palette_color(index: u8) -> Rgb {
     usize::from(index)
         .checked_sub(1)
         .and_then(|index| PALETTE.get(index))

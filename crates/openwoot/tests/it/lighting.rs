@@ -7,7 +7,9 @@
 )]
 
 mod effects;
-mod renderer;
+mod engine;
+mod idle;
+mod indicators;
 mod task;
 
 use openwoot::lighting::{FramePage, Gains, Geometry, Key, Led, LedMap, LedPosition, Variant};

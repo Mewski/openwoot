@@ -1,9 +1,10 @@
-use super::{Cells, low_8, low_16, pick_press_color};
+use super::{cells::Cells, press_color::pick_press_color};
 use crate::lighting::{
+    canvas::Canvas,
     color::{palette_color, rgb, scale_channel},
     config::KeyRipple,
-    frame::Canvas,
     leds::Key,
+    truncate::{low_8, low_16},
 };
 
 const COLOR_MASK: u8 = 0x07;

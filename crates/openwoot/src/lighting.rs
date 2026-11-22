@@ -1,39 +1,37 @@
+mod brightness;
+mod canvas;
 mod color;
+mod dirty_pages;
 mod effects;
+mod engine;
 mod frame;
-mod gamma;
 mod hooks;
+mod idle;
+mod indicators;
 mod input;
+mod key_colors;
 mod leds;
+mod matrix;
 mod output;
 mod overlay;
-mod renderer;
+mod truncate;
 
+pub use brightness::{BRIGHTNESS_MAX_FAST_SCAN, BRIGHTNESS_SAVE_DELAY_MS, BRIGHTNESS_STEP};
+pub use canvas::{Canvas, Painter};
 pub use color::{
     BLACK, PALETTE, blend, from_rgb565, mix_level, rgb, scale, scale_channel, to_rgb565,
 };
+pub use dirty_pages::DirtyPages;
 pub use effects::Layers;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-pub use frame::{Canvas, DirtyPages, Frame, PageWrite, Painter};
-pub use gamma::{GAMMA, gamma, output_scale, output_value};
+pub use engine::{FRAME_PERIOD_MS, Lighting, OutputChange};
+pub use frame::Frame;
 pub use hooks::{Lightbar, Signals};
-pub use input::{KeyEvent, KeyTravel, TRAVEL_FULL};
+pub use idle::FADE_DIMMED;
+pub use indicators::{Indicator, LockState};
+pub use input::{KEY_EVENT_CAPACITY, KeyActivity, KeyEvent, KeyEvents, KeyTravel, TRAVEL_FULL};
+pub use key_colors::{KeyColorMap, LAYER_COLOR_MAPS};
 pub use leds::{FramePage, Gains, Geometry, Key, Led, LedMap, LedPosition, Variant};
+pub use matrix::{LedMatrix, Matrix};
 use openwoot_protocol::lighting as config;
-pub use output::{LedMatrix, Matrix};
-pub use overlay::{MAX_LIGHTBAR_LEDS, OVERLAY_SLOTS, Overlay, OverlayId, Span};
-pub use renderer::{
-    BRIGHTNESS_MAX_FAST_SCAN, BRIGHTNESS_SAVE_DELAY_MS, BRIGHTNESS_STEP, FADE_DIMMED, FADE_FULL,
-    FRAME_PERIOD_MS, Indicator, KeyColorMap, LAYER_COLOR_MAPS, Lighting, LockState, OutputChange,
-};
-
-pub const KEY_EVENT_CAPACITY: usize = 32;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct KeyActivity {
-    pub key: Key,
-    pub event: KeyEvent,
-    pub at_ms: u32,
-}
-
-pub type KeyEvents = Channel<CriticalSectionRawMutex, KeyActivity, KEY_EVENT_CAPACITY>;
+pub use output::{GAMMA, PageWrite, gamma, output_scale, output_value};
+pub use overlay::{FADE_FULL, MAX_LIGHTBAR_LEDS, OVERLAY_SLOTS, Overlay, OverlayId, Span};

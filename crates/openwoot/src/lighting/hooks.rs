@@ -1,4 +1,4 @@
-use super::{config::Rgb, frame::Canvas};
+use super::{canvas::Canvas, config::Rgb};
 
 pub trait Lightbar {
     fn needs_render(&self, since_render_ms: u16) -> bool {

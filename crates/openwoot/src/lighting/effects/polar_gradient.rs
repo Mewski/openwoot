@@ -1,10 +1,10 @@
 use libm::{atan2f, floorf, fmaf, sqrtf};
 
-use super::Cells;
+use super::cells::Cells;
 use crate::lighting::{
+    canvas::Canvas,
     color::{blend, opaque},
     config::PolarGradient,
-    frame::Canvas,
 };
 
 const PHASE_MODULUS: i64 = 65_535;

@@ -1,7 +1,7 @@
 use crate::lighting::{
+    canvas::Canvas,
     color::{blend, opaque},
     config::SimplexNoise,
-    frame::Canvas,
 };
 
 const SKEW: u64 = 1_431_655_764;

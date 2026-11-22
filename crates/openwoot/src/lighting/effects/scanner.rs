@@ -1,7 +1,7 @@
-use super::low_16;
 use crate::lighting::{
+    canvas::Canvas,
     config::{Scanner, ScannerDirection},
-    frame::Canvas,
+    truncate::low_16,
 };
 
 const STEPS_PER_SECOND_MAX: u8 = 60;

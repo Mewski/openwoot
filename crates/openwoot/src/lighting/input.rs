@@ -1,6 +1,11 @@
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
+
 use super::leds::Key;
 
 pub const TRAVEL_FULL: u16 = 4095;
+pub const KEY_EVENT_CAPACITY: usize = 32;
+
+pub type KeyEvents = Channel<CriticalSectionRawMutex, KeyActivity, KEY_EVENT_CAPACITY>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyEvent {
@@ -8,6 +13,13 @@ pub enum KeyEvent {
     Released,
     Actuated,
     Reset,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KeyActivity {
+    pub key: Key,
+    pub event: KeyEvent,
+    pub at_ms: u32,
 }
 
 pub trait KeyTravel {

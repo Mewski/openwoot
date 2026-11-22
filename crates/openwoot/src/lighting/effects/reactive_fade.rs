@@ -1,9 +1,10 @@
-use super::{Cells, low_8, low_16, pick_press_color};
+use super::{cells::Cells, press_color::pick_press_color};
 use crate::lighting::{
+    canvas::Canvas,
     color::{mix_level, opaque, palette_color, rgb, scale},
     config::{ReactiveColoring, ReactiveFade, Rgb},
-    frame::Canvas,
     leds::{Key, Variant},
+    truncate::{low_8, low_16},
 };
 
 const STEP_MS_MAX: u8 = 40;

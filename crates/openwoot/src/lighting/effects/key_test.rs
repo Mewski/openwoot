@@ -1,5 +1,5 @@
-use super::Cells;
-use crate::lighting::{color::rgb, config::KeyTest, frame::Canvas, input::KeyEvent, leds::Key};
+use super::cells::Cells;
+use crate::lighting::{canvas::Canvas, color::rgb, config::KeyTest, input::KeyEvent, leds::Key};
 
 const IDLE: u8 = 0;
 const ACTUATED: u8 = 1;

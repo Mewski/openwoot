@@ -1,5 +1,8 @@
-use super::low_16;
-use crate::lighting::{config::Breathing, frame::Canvas};
+use crate::lighting::{
+    canvas::Canvas,
+    config::Breathing,
+    truncate::{low_8, low_16},
+};
 
 const STEP_MS_MAX: u8 = 40;
 const LEVEL_MAX: u8 = 250;
@@ -59,8 +62,4 @@ impl State {
             }
         }
     }
-}
-
-const fn low_8(value: u32) -> u8 {
-    value.to_le_bytes()[0]
 }

@@ -1,5 +1,11 @@
-use super::{TRAVEL_FULL, low_8, travel_level_12};
-use crate::lighting::{config::LevelMeter, frame::Canvas, input::KeyTravel, leds::Key};
+use super::travel::travel_level_12;
+use crate::lighting::{
+    canvas::Canvas,
+    config::LevelMeter,
+    input::{KeyTravel, TRAVEL_FULL},
+    leds::Key,
+    truncate::low_8,
+};
 
 const ROW: usize = 1;
 const FIRST_COLUMN: usize = 1;
