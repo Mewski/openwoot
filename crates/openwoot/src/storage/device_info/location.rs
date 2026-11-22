@@ -1,7 +1,7 @@
 use embedded_storage_async::nor_flash::{NorFlashError, ReadNorFlash};
 use openwoot_image::Region;
 
-use super::{DEVICE_INFO_LEN, DeviceInfo, DeviceInfoError, Unmarked};
+use super::{DeviceInfo, DeviceInfoError, SECTOR_LEN, Unmarked};
 
 pub trait DeviceInfoSource {
     fn read<F: ReadNorFlash>(
@@ -23,10 +23,10 @@ pub struct McuPage {
 
 impl DeviceInfoSource for NorSector {
     async fn read<F: ReadNorFlash>(&self, nor: &mut F) -> Result<DeviceInfo, DeviceInfoError> {
-        let mut sector = [0; DEVICE_INFO_LEN];
+        let mut sector = [0; SECTOR_LEN];
         nor.read(self.offset, &mut sector)
             .await
-            .map_err(|error| DeviceInfoError::Read(error.kind()))?;
+            .map_err(|error| DeviceInfoError::Flash(error.kind()))?;
         DeviceInfo::from_sector(&sector, Unmarked::ShortFormat)
     }
 }

@@ -1,10 +1,10 @@
 use super::protobuf::{Fields, Malformed, Wire, is_well_formed};
 
-pub const AUX_CAPACITY: usize = 58;
+const CAPACITY: usize = 58;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuxRecord {
-    bytes: [u8; AUX_CAPACITY],
+    bytes: [u8; CAPACITY],
     len: usize,
 }
 
@@ -19,7 +19,7 @@ impl AuxRecord {
         if !has_first || !is_well_formed(message) {
             return Err(Malformed);
         }
-        let mut bytes = [0; AUX_CAPACITY];
+        let mut bytes = [0; CAPACITY];
         bytes
             .get_mut(..message.len())
             .ok_or(Malformed)?

@@ -4,15 +4,14 @@ mod protobuf;
 mod serial;
 mod serial_text;
 
-pub use aux_record::{AUX_CAPACITY, AuxRecord};
+pub use aux_record::AuxRecord;
 use embedded_storage_async::nor_flash::NorFlashErrorKind;
 pub use location::{DeviceInfoSource, McuPage, NorSector};
 use protobuf::{Fields, Malformed, Wire, narrow};
-pub use serial::{LEGACY_SERIAL_LEN, SERIAL_MESSAGE_CAPACITY, SerialMessage, SerialNumber};
-pub use serial_text::{SERIAL_TEXT_CAPACITY, SerialText};
+pub use serial::{LEGACY_SERIAL_LEN, SerialMessage, SerialNumber};
+pub use serial_text::SerialText;
 
-pub const DEVICE_INFO_LEN: usize = 4096;
-
+const SECTOR_LEN: usize = 4096;
 const AREA_LEN: usize = 0xFFC;
 const MAGIC_SHORT: u16 = 0x1337;
 const MAGIC_LONG: u16 = 0x1338;
@@ -20,8 +19,6 @@ const SHORT_PAYLOAD_MAX: usize = 254;
 const LONG_PAYLOAD_MAX: usize = 0xFFA;
 const BLANK_PROBE: usize = 30;
 const ERASED: u8 = 0xFF;
-const LOCK_MODE_MASK: u8 = 0xFD;
-const LOCKED: u8 = 1;
 const RAW_AUX_LEN_AT: usize = 12;
 const RAW_AUX_AT: usize = 13;
 const RAW_AUX_CAPACITY: usize = 44;
@@ -35,7 +32,7 @@ pub struct DeviceInfo {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Unmarked {
+enum Unmarked {
     ShortFormat,
     RawRecord,
 }
@@ -44,17 +41,17 @@ pub enum Unmarked {
 pub enum DeviceInfoError {
     #[error("the device information is blank")]
     Blank,
-    #[error("could not decode the device information")]
-    Decode,
+    #[error("the device information is malformed")]
+    Malformed,
     #[error("could not read the device information: {0:?}")]
-    Read(NorFlashErrorKind),
+    Flash(NorFlashErrorKind),
     #[error("the device information lies outside the readable flash")]
     OutsideFlash,
 }
 
 impl DeviceInfo {
-    pub fn from_sector(sector: &[u8], unmarked: Unmarked) -> Result<Self, DeviceInfoError> {
-        let area = sector.get(..AREA_LEN).ok_or(DeviceInfoError::Decode)?;
+    fn from_sector(sector: &[u8], unmarked: Unmarked) -> Result<Self, DeviceInfoError> {
+        let area = sector.get(..AREA_LEN).ok_or(DeviceInfoError::Malformed)?;
         let magic = sector
             .get(AREA_LEN..)
             .and_then(<[u8]>::first_chunk::<2>)
@@ -72,33 +69,28 @@ impl DeviceInfo {
         }
     }
 
-    #[must_use]
-    pub const fn is_locked(&self) -> bool {
-        matches!(self.lock_mode, Some(mode) if mode & LOCK_MODE_MASK == LOCKED)
-    }
-
     fn from_short(area: &[u8]) -> Result<Self, DeviceInfoError> {
-        let (&len, rest) = area.split_first().ok_or(DeviceInfoError::Decode)?;
+        let (&len, rest) = area.split_first().ok_or(DeviceInfoError::Malformed)?;
         let len = usize::from(len);
         if len == 0 || len > SHORT_PAYLOAD_MAX {
-            return Err(DeviceInfoError::Decode);
+            return Err(DeviceInfoError::Malformed);
         }
-        Self::decode(rest.get(..len).ok_or(DeviceInfoError::Decode)?)
+        Self::decode(rest.get(..len).ok_or(DeviceInfoError::Malformed)?)
     }
 
     fn from_long(area: &[u8]) -> Result<Self, DeviceInfoError> {
         let (len, rest) = area
             .split_first_chunk::<2>()
-            .ok_or(DeviceInfoError::Decode)?;
+            .ok_or(DeviceInfoError::Malformed)?;
         let len = usize::from(u16::from_le_bytes(*len));
         if len == 0 || len > LONG_PAYLOAD_MAX {
-            return Err(DeviceInfoError::Decode);
+            return Err(DeviceInfoError::Malformed);
         }
-        Self::decode(rest.get(..len).ok_or(DeviceInfoError::Decode)?)
+        Self::decode(rest.get(..len).ok_or(DeviceInfoError::Malformed)?)
     }
 
     fn from_raw(area: &[u8]) -> Result<Self, DeviceInfoError> {
-        let byte = |at: usize| area.get(at).copied().ok_or(DeviceInfoError::Decode);
+        let byte = |at: usize| area.get(at).copied().ok_or(DeviceInfoError::Malformed);
         let half = |at: usize| -> Result<u16, DeviceInfoError> {
             Ok(u16::from_le_bytes([byte(at)?, byte(at + 1)?]))
         };
@@ -116,7 +108,7 @@ impl DeviceInfo {
         let aux = if (1..=RAW_AUX_CAPACITY).contains(&aux_len) {
             let bytes = area
                 .get(RAW_AUX_AT..RAW_AUX_AT + aux_len)
-                .ok_or(DeviceInfoError::Decode)?;
+                .ok_or(DeviceInfoError::Malformed)?;
             Some(AuxRecord::from_message(bytes)?)
         } else {
             None
@@ -143,18 +135,18 @@ impl DeviceInfo {
                 (2, Wire::Bytes(bytes)) => info.aux = Some(AuxRecord::from_message(bytes)?),
                 (3, Wire::Varint(layout)) => info.physical_layout = Some(narrow(layout)?),
                 (4, Wire::Varint(mode)) => info.lock_mode = Some(narrow(mode)?),
-                (1..=4, _) => return Err(DeviceInfoError::Decode),
+                (1..=4, _) => return Err(DeviceInfoError::Malformed),
                 _ => {}
             }
         }
-        info.serial = serial.ok_or(DeviceInfoError::Decode)?;
+        info.serial = serial.ok_or(DeviceInfoError::Malformed)?;
         Ok(info)
     }
 }
 
 impl From<Malformed> for DeviceInfoError {
     fn from(_: Malformed) -> Self {
-        Self::Decode
+        Self::Malformed
     }
 }
 
@@ -172,7 +164,7 @@ mod tests {
     ];
 
     fn sector_with(prefix: &[u8], magic: Option<u16>) -> Vec<u8> {
-        let mut sector = vec![ERASED; DEVICE_INFO_LEN];
+        let mut sector = vec![ERASED; SECTOR_LEN];
         sector[..prefix.len()].copy_from_slice(prefix);
         if let Some(magic) = magic {
             sector[AREA_LEN..AREA_LEN + 2].copy_from_slice(&magic.to_le_bytes());
@@ -203,7 +195,6 @@ mod tests {
         assert_eq!(from_short, from_long);
         assert_eq!(from_short.physical_layout, Some(1));
         assert_eq!(from_short.lock_mode, Some(3));
-        assert!(from_short.is_locked());
         assert!(from_short.serial.is_programmed());
     }
 
@@ -237,7 +228,6 @@ mod tests {
         assert_eq!(info.serial.text().as_str(), "A02B2310W051P00042");
         assert_eq!(info.aux.unwrap().as_bytes(), aux);
         assert_eq!((info.physical_layout, info.lock_mode), (None, None));
-        assert!(!info.is_locked());
         raw[12] = 200;
         let beyond =
             DeviceInfo::from_sector(&sector_with(&raw, None), Unmarked::RawRecord).unwrap();
@@ -245,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn broken_records_do_not_decode() {
+    fn broken_records_are_malformed() {
         let missing_stage = &SERIAL_MESSAGE[..13];
         let too_wide = [
             0x08, 0x80, 0x80, 0x04, 0x10, 0x18, 0x18, 0x01, 0x20, 0x01, 0x28, 0x01, 0x30, 0x01,
@@ -265,19 +255,19 @@ mod tests {
                     &sector_with(&short, Some(MAGIC_SHORT)),
                     Unmarked::RawRecord
                 ),
-                Err(DeviceInfoError::Decode),
+                Err(DeviceInfoError::Malformed),
                 "{message:02x?}"
             );
         }
         let zero_length = sector_with(&[0x00, 0x0A], Some(MAGIC_SHORT));
         assert_eq!(
             DeviceInfo::from_sector(&zero_length, Unmarked::RawRecord),
-            Err(DeviceInfoError::Decode)
+            Err(DeviceInfoError::Malformed)
         );
         let too_long = sector_with(&[0xFB, 0x0F], Some(MAGIC_LONG));
         assert_eq!(
             DeviceInfo::from_sector(&too_long, Unmarked::RawRecord),
-            Err(DeviceInfoError::Decode)
+            Err(DeviceInfoError::Malformed)
         );
     }
 }

@@ -6,7 +6,7 @@ use openwoot::{
 use openwoot_protocol::diagnostics::{Storage, Usb};
 use serde::{Deserialize, Serialize};
 
-use super::{Blob, Brightness, PROFILES, SETTINGS_SECTORS, chip, filled, open};
+use super::support::{Blob, Brightness, PROFILES, SETTINGS_SECTORS, chip, filled, open};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Lighting {
@@ -158,7 +158,7 @@ fn an_encoding_that_fails_or_overflows_keeps_the_stored_record() {
     let key = Key::of::<Lighting>(Scope::Global);
     assert_eq!(
         block_on(settings.store_with(key, Lighting::VERSION, |_| None)),
-        Err(openwoot::storage::Error::Encoding)
+        Err(openwoot::storage::Error::Unencodable)
     );
     assert!(
         block_on(settings.store_with(key, Lighting::VERSION, |body| Some(body.len() + 1))).is_err()

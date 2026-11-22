@@ -1,8 +1,8 @@
 use super::protobuf::{Fields, Malformed, Wire, Writer, narrow};
 
 pub const LEGACY_SERIAL_LEN: usize = 11;
-pub const SERIAL_MESSAGE_CAPACITY: usize = 64;
 
+const MESSAGE_CAPACITY: usize = 64;
 const NOT_PROGRAMMED: u16 = 0xFFFF;
 const REQUIRED_FIELDS: u8 = 0x7F;
 const LEGACY_PRODUCT_ID_MAX: u32 = 0xFFFE;
@@ -23,7 +23,7 @@ pub struct SerialNumber {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SerialMessage {
-    bytes: [u8; SERIAL_MESSAGE_CAPACITY],
+    bytes: [u8; MESSAGE_CAPACITY],
     len: usize,
 }
 
@@ -72,7 +72,7 @@ impl SerialNumber {
 
     #[must_use]
     pub fn encode(self) -> SerialMessage {
-        let mut bytes = [0; SERIAL_MESSAGE_CAPACITY];
+        let mut bytes = [0; MESSAGE_CAPACITY];
         let mut writer = Writer::new(&mut bytes);
         for (field, value) in [
             (Field::Supplier, self.supplier.into()),

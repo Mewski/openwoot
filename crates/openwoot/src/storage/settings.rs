@@ -18,10 +18,9 @@ use super::{
 };
 use crate::diagnostics::Diagnostics;
 
-pub const MAX_PAGES: usize = 128;
-pub const MAX_KEYS: usize = 256;
-pub const MAX_VALUE_LEN: usize = 2048;
-
+const MAX_PAGES: usize = 128;
+const MAX_KEYS: usize = 256;
+const MAX_VALUE_LEN: usize = 2048;
 const BUFFER_LEN: usize = KEY_LEN + VERSION_LEN + MAX_VALUE_LEN;
 
 type SettingsCache = Cache<
@@ -51,9 +50,9 @@ pub enum Error {
     #[error("a setting is larger than {MAX_VALUE_LEN} bytes")]
     TooBig,
     #[error("could not encode a setting")]
-    Encoding,
+    Unencodable,
     #[error("the settings partition holds fewer than two or more than {MAX_PAGES} sectors")]
-    Layout,
+    SectorCountOutOfRange,
     #[error("the settings store reported an internal error")]
     Internal,
 }
@@ -142,7 +141,7 @@ impl<F: MultiwriteNorFlash> Settings<F> {
         let len = partition.len();
         let pages = usize::try_from(len).unwrap_or(usize::MAX) / F::ERASE_SIZE;
         if pages > MAX_PAGES {
-            return Err(Error::Layout);
+            return Err(Error::SectorCountOutOfRange);
         }
         self.map = Some(MapStorage::new(partition, config(len)?, cache()));
         self.len = len;
@@ -251,7 +250,7 @@ impl Error {
             store::Error::FullStorage => Self::Full,
             store::Error::Corrupted { .. } => Self::Corrupted,
             store::Error::ItemTooBig | store::Error::BufferTooSmall(_) => Self::TooBig,
-            store::Error::SerializationError(_) => Self::Encoding,
+            store::Error::SerializationError(_) => Self::Unencodable,
             _ => Self::Internal,
         }
     }
@@ -266,5 +265,5 @@ fn cache() -> SettingsCache {
 }
 
 fn config<F: NorFlash>(len: u32) -> Result<MapConfig<F>, Error> {
-    MapConfig::try_new(0..len).map_err(|_| Error::Layout)
+    MapConfig::try_new(0..len).map_err(|_| Error::SectorCountOutOfRange)
 }

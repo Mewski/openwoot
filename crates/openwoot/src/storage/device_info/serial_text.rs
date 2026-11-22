@@ -2,8 +2,7 @@ use core::fmt::{self, Write};
 
 use super::serial::SerialNumber;
 
-pub const SERIAL_TEXT_CAPACITY: usize = 48;
-
+const TEXT_CAPACITY: usize = 48;
 const PRODUCT_ID_DIGITS: usize = 5;
 const MINOR_REVISION_DIGITS: usize = 2;
 const STAGE_LETTERS: [char; 4] = ['P', 'T', 'E', 'X'];
@@ -11,7 +10,7 @@ const STAGE_OTHER: char = 'H';
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SerialText {
-    bytes: [u8; SERIAL_TEXT_CAPACITY],
+    bytes: [u8; TEXT_CAPACITY],
     len: usize,
 }
 
@@ -72,7 +71,7 @@ impl SerialNumber {
     #[must_use]
     pub fn text(&self) -> SerialText {
         let mut text = SerialText {
-            bytes: [0; SERIAL_TEXT_CAPACITY],
+            bytes: [0; TEXT_CAPACITY],
             len: 0,
         };
         let _ = write!(text, "{self}");

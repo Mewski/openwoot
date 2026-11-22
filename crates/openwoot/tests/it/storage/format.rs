@@ -1,7 +1,7 @@
 use embassy_futures::block_on;
 use openwoot::storage::{FormatReason, Opened, Scope};
 
-use super::{
+use super::support::{
     Blob, Brightness, SETTINGS_SECTORS, blob, chip, close, device_info_untouched, filled, open,
 };
 

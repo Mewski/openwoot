@@ -3,7 +3,8 @@ use embedded_storage_async::nor_flash::{NorFlash, ReadNorFlash};
 use openwoot::storage::{Partition, Scope};
 
 use super::{
-    SETTINGS_SECTORS, blob, chip, close, device_info_untouched, model::SECTOR, open, profile_of,
+    model::SECTOR,
+    support::{SETTINGS_SECTORS, blob, chip, close, device_info_untouched, open, profile_of},
 };
 
 #[test]

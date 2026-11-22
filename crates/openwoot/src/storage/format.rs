@@ -44,7 +44,7 @@ impl<F: MultiwriteNorFlash> Settings<F> {
         }
         match self.load::<Format>(Scope::Global).await {
             Ok(Some(format)) if format == CURRENT_FORMAT => Ok(Opened::Kept),
-            Ok(_) | Err(Error::Corrupted | Error::Encoding | Error::Internal) => {
+            Ok(_) | Err(Error::Corrupted | Error::Unencodable | Error::Internal) => {
                 self.format().await?;
                 Ok(Opened::Formatted(FormatReason::Unrecognised))
             }

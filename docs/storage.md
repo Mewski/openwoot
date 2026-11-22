@@ -44,7 +44,7 @@ Both boards carry an 8 MiB SPI NOR flash (W25Q64 or GD25Q64 class, 4096-byte sec
 The settings are a `sequential-storage` 8.0.2 map (`storage::Settings`) on the partition, with all three caches (page states and pointers for 128 sectors, pointers for 256 keys).
 
 - Key: 16 bits, the slot in the high byte (`Scope::Profile(n)` = `n`, `Scope::Global` = `0xff`) and the item in the low byte (`Key::new`, `Key::of::<R>`).
-- Value: the record version (`u16`, little endian) followed by the record in postcard. A record type implements `storage::Record` with its `ITEM` and `VERSION`; at most 2048 bytes (`MAX_VALUE_LEN`).
+- Value: the record version (`u16`, little endian) followed by the record in postcard. A record type implements `storage::Record` with its `ITEM` and `VERSION`; at most 2048 bytes.
 - Versions: when a record type changes, its `VERSION` goes up, the old type stays in the code, and `Record::migrate` turns an older body into the new type. A record with a newer version than the firmware knows, or one that does not decode, counts as absent and the caller uses its default.
 - Loading at start-up: `Settings::visit` walks every stored item once (several items per key may appear; the last one is current) and `Stored::decode` applies the version rules; single lookups (`Settings::load`) scan the used area when a key is absent, so the start-up path loads everything in one pass.
 - `Settings::store`, `Settings::remove` (marks the item erased; slow, scans the used area) and `Settings::factory_reset` (erases the partition, then writes the format record).
@@ -57,7 +57,7 @@ Switching from stock or C openwoot to this firmware therefore replaces the stock
 
 ## Device information
 
-The factory record is read once at start-up through a `storage::DeviceInfoSource` (`storage::NorSector` on the 80HE, `storage::McuPage` on the 60HE+) into `storage::DeviceInfo`: the serial number (`SerialNumber`, printed by `SerialNumber::text` as `A<supplier>B<year><week>W<product>[T<pcb design>]<revision>[<minor revision>][S<edition>]<stage letter><product id>`, as `storage_format_serial_string` in C), the auxiliary record (`AuxRecord`, at most 58 bytes, kept as bytes), the physical layout and the lock mode (`DeviceInfo::is_locked`: values 1 and 3).
+The factory record is read once at start-up through a `storage::DeviceInfoSource` (`storage::NorSector` on the 80HE, `storage::McuPage` on the 60HE+) into `storage::DeviceInfo`: the serial number (`SerialNumber`, printed by `SerialNumber::text` as `A<supplier>B<year><week>W<product>[T<pcb design>]<revision>[<minor revision>][S<edition>]<stage letter><product id>`, as `storage_format_serial_string` in C), the auxiliary record (`AuxRecord`, at most 58 bytes, kept as bytes), the physical layout and the lock mode (kept as its number).
 
 | Marker at `+0xffc` | Length prefix | Largest payload |
 | --- | --- | --- |
@@ -78,6 +78,6 @@ Start-up (`storage::Storage::open` with the board's `SETTINGS`, `DEVICE_INFO` an
 
 ## Power loss
 
-The host tests (`crates/openwoot/tests/it/storage.rs`) run the store on a NOR model that cuts the power at every program word and every eighth of a sector erase: a cut word is half programmed, a cut erase leaves the sector erased from its start up to the cut. For 150 fill levels of a four-sector partition, a cut at every step of the next store keeps every other setting, leaves the stored key at its old or its new value and opens the store again without formatting; a cut at any step of a factory reset leaves a working store. Wear over 3000 stores spreads within one erase per sector, and the device-information sector is never erased.
+The host tests (`crates/openwoot/tests/it/storage/`) run the store on a NOR model that cuts the power at every program word and every eighth of a sector erase: a cut word is half programmed, a cut erase leaves the sector erased from its start up to the cut. For 150 fill levels of a four-sector partition, a cut at every step of the next store keeps every other setting, leaves the stored key at its old or its new value and opens the store again without formatting; a cut at any step of a factory reset leaves a working store. Wear over 3000 stores spreads within one erase per sector, and the device-information sector is never erased.
 
 Not covered: a NOR part that leaves an interrupted erase with random or zero content can lose unrelated settings during the repair after the next start (sequential-storage issue 149, mitigation not released for 8.0.2). The consequence is settings falling back to defaults, never a brick or a lost device-information record.

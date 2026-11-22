@@ -1,7 +1,7 @@
 use embassy_futures::block_on;
 use openwoot::storage::{Opened, Scope};
 
-use super::{
+use super::support::{
     Blob, PROFILES, SETTINGS_SECTORS, blob, close, device_info_untouched, filled, open, profile_of,
 };
 
