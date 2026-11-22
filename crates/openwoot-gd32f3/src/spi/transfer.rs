@@ -9,13 +9,13 @@ use embassy_sync::waitqueue::AtomicWaker;
 
 use super::{
     Error,
-    registers::{CTL1_DMAREN, CTL1_DMATEN, STAT_RBNE, STAT_TRANS},
+    registers::{CTL1_DMAREN, CTL1_DMATEN, STAT_RBNE, STAT_TRANS, modify_ctl1},
 };
 use crate::{
     dma,
     interrupt::{Handler, typelevel},
     pac,
-    register::{clear_bits, read_bits, set_bits},
+    register::read_bits,
 };
 
 pub(super) type ReceiveChannel = dma::Channel<0, 3>;
@@ -96,11 +96,11 @@ impl<'s> Transfer<'s> {
         transmit.set_memory_address(source.address());
         transmit.set_count(count);
         compiler_fence(Ordering::SeqCst);
-        critical_section::with(|_| {
+        critical_section::with(|section| {
             receive.write_control(receive_control(sink) | dma::ENABLE);
             transmit.write_control(transmit_control(source) | dma::ENABLE);
+            modify_ctl1(section, spi, |bits| bits | CTL1_DMAREN | CTL1_DMATEN);
         });
-        set_bits(spi.ctl1(), CTL1_DMAREN | CTL1_DMATEN);
         Self { spi }
     }
 
@@ -125,10 +125,12 @@ impl Drop for Transfer<'_> {
         while read_bits(self.spi.stat()) & STAT_TRANS != 0 {
             spin_loop();
         }
-        clear_bits(self.spi.ctl1(), CTL1_DMAREN | CTL1_DMATEN);
         let receive = ReceiveChannel::new();
         let transmit = TransmitChannel::new();
-        critical_section::with(|_| {
+        critical_section::with(|section| {
+            modify_ctl1(section, self.spi, |bits| {
+                bits & !(CTL1_DMAREN | CTL1_DMATEN)
+            });
             receive.write_control(0);
             transmit.write_control(0);
         });

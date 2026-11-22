@@ -14,7 +14,7 @@ use openwoot::diagnostics::{Bus, Transfers};
 pub use pins::{ClockPin, DataPin};
 use registers::{
     APB1EN_I2C0EN, CTL0_ACKEN, CTL0_I2CEN, CTL0_SMBEN, CTL0_SRESET, CTL0_START, CTL1_DMAON,
-    CTL1_I2CCLK, OWN_ADDRESS, STAT0_ADDSEND, STAT0_BTC, STAT0_SBSEND, STAT1_I2CBSY,
+    OWN_ADDRESS, STAT0_ADDSEND, STAT0_BTC, STAT0_SBSEND, STAT1_I2CBSY, modify_ctl1, with_clock,
 };
 use timing::{Timing, timing};
 pub use transfer::InterruptHandler;
@@ -70,8 +70,8 @@ impl I2c {
 
     fn configure(&self) {
         let i2c = &self.i2c;
-        modify_bits(i2c.ctl1(), |bits| {
-            (bits & !CTL1_I2CCLK) | self.timing.clock_mhz
+        critical_section::with(|section| {
+            modify_ctl1(section, i2c, |bits| with_clock(bits, self.timing.clock_mhz));
         });
         write_bits(i2c.rt(), self.timing.rise_time);
         write_bits(i2c.ckcfg(), self.timing.clock_configuration);
@@ -106,7 +106,7 @@ impl I2c {
             .await?;
         let _ = read_bits(i2c.stat0());
         let _ = read_bits(i2c.stat1());
-        set_bits(i2c.ctl1(), CTL1_DMAON);
+        critical_section::with(|section| modify_ctl1(section, i2c, |bits| bits | CTL1_DMAON));
         for chunk in chunks.iter().filter(|chunk| !chunk.is_empty()) {
             transfer.send(chunk).await?;
         }

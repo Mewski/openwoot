@@ -1,3 +1,7 @@
+use critical_section::CriticalSection;
+
+use crate::{pac, register::modify_bits};
+
 pub(super) const APB1EN_SPI1EN: u32 = 1 << 14;
 pub(super) const CTL0_SPIEN: u32 = 1 << 6;
 pub(super) const CTL1_DMAREN: u32 = 1 << 0;
@@ -13,6 +17,14 @@ const CTL0_KEPT: u32 = 0x3040;
 
 pub(super) const fn control(ctl0: u32) -> u32 {
     (ctl0 & CTL0_KEPT) | CTL0_MASTER | CTL0_SWNSS | CTL0_SWNSSEN
+}
+
+pub(super) fn modify_ctl1(
+    _: CriticalSection<'_>,
+    spi: &pac::spi0::RegisterBlock,
+    change: impl FnOnce(u32) -> u32,
+) {
+    modify_bits(spi.ctl1(), change);
 }
 
 #[cfg(test)]

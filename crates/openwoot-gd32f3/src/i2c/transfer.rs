@@ -6,13 +6,15 @@ use embedded_hal_async::i2c::NoAcknowledgeSource;
 
 use super::{
     Error,
-    registers::{CTL0_STOP, CTL1_DMAON, CTL1_ERRIE, CTL1_EVIE, STAT1_MASTER, registers},
+    registers::{
+        CTL0_STOP, CTL1_DMAON, CTL1_ERRIE, CTL1_EVIE, STAT1_MASTER, modify_ctl1, registers,
+    },
 };
 use crate::{
     dma,
     interrupt::{Handler, typelevel},
     pac,
-    register::{clear_bits, read_bits, set_bits},
+    register::{read_bits, set_bits},
 };
 
 pub(super) type Channel = dma::Channel<0, 5>;
@@ -52,7 +54,9 @@ impl<'t> Transfer<'t> {
             if status & flag != 0 {
                 return Poll::Ready(Ok(()));
             }
-            critical_section::with(|_| set_bits(i2c.ctl1(), CTL1_EVIE | CTL1_ERRIE));
+            critical_section::with(|section| {
+                modify_ctl1(section, i2c, |bits| bits | CTL1_EVIE | CTL1_ERRIE);
+            });
             Poll::Pending
         })
         .await
@@ -87,9 +91,9 @@ impl<'t> Transfer<'t> {
             if flags & dma::FLAG_FULL_TRANSFER != 0 {
                 return Poll::Ready(Ok(()));
             }
-            critical_section::with(|_| {
+            critical_section::with(|section| {
                 channel.set_control(dma::INTERRUPTS);
-                set_bits(i2c.ctl1(), CTL1_ERRIE);
+                modify_ctl1(section, i2c, |bits| bits | CTL1_ERRIE);
             });
             Poll::Pending
         })
@@ -108,8 +112,10 @@ impl<'t> Transfer<'t> {
 
     fn release_dma(&self) {
         let channel = Channel::new();
-        critical_section::with(|_| {
-            clear_bits(self.i2c.ctl1(), CTL1_DMAON | CTL1_EVIE | CTL1_ERRIE);
+        critical_section::with(|section| {
+            modify_ctl1(section, self.i2c, |bits| {
+                bits & !(CTL1_DMAON | CTL1_EVIE | CTL1_ERRIE)
+            });
             channel.clear_control(dma::ENABLE | dma::INTERRUPTS);
         });
         let mut spins = 0;
@@ -136,7 +142,9 @@ impl Drop for Transfer<'_> {
 impl Handler<typelevel::I2C0_EV> for InterruptHandler {
     // SAFETY: clearing the event interrupt enable and waking has no requirement on the caller.
     unsafe fn on_interrupt() {
-        clear_bits(registers().ctl1(), CTL1_EVIE);
+        critical_section::with(|section| {
+            modify_ctl1(section, registers(), |bits| bits & !CTL1_EVIE);
+        });
         WAKER.wake();
     }
 }
@@ -144,7 +152,11 @@ impl Handler<typelevel::I2C0_EV> for InterruptHandler {
 impl Handler<typelevel::I2C0_ER> for InterruptHandler {
     // SAFETY: clearing the error interrupt enable and waking has no requirement on the caller.
     unsafe fn on_interrupt() {
-        clear_bits(registers().ctl1(), CTL1_ERRIE | CTL1_EVIE);
+        critical_section::with(|section| {
+            modify_ctl1(section, registers(), |bits| {
+                bits & !(CTL1_ERRIE | CTL1_EVIE)
+            });
+        });
         WAKER.wake();
     }
 }
