@@ -43,7 +43,7 @@ Both boards carry an 8 MiB SPI NOR flash (W25Q64 or GD25Q64 class, 4096-byte sec
 
 The settings are a `sequential-storage` 8.0.2 map (`storage::Settings`) on the partition, with all three caches (page states and pointers for 128 sectors, pointers for 256 keys).
 
-- Key: 16 bits, the slot in the high byte (`Scope::Profile(n)` = `n`, `Scope::Global` = `0xff`) and the item in the low byte (`Key::new`, `Key::of::<R>`).
+- Key: 16 bits, the slot in the high byte (`Scope::Profile(n)` = `n`, `Scope::Global` = `0xff`) and the item in the low byte (`RecordKey::new`, `RecordKey::of::<R>`).
 - Value: the record version (`u16`, little endian) followed by the record in postcard. A record type implements `storage::Record` with its `ITEM` and `VERSION`; at most 2048 bytes.
 - Versions: when a record type changes, its `VERSION` goes up, the old type stays in the code, and `Record::migrate` turns an older body into the new type. A record with a newer version than the firmware knows, or one that does not decode, counts as absent and the caller uses its default.
 - Loading at start-up: `Settings::visit` walks every stored item once (several items per key may appear; the last one is current) and `Stored::decode` applies the version rules; single lookups (`Settings::load`) scan the used area when a key is absent, so the start-up path loads everything in one pass.
