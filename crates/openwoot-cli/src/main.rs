@@ -9,6 +9,7 @@ use openwoot_cli::{
     hid::{self, Hid, Interface, UpdateMode},
     image::Content,
     keyboard::{self, Identity, MODE_CHANGE_TIMEOUT, Running},
+    status::Status,
 };
 use openwoot_image::{Hex, Image};
 
@@ -29,6 +30,8 @@ struct Cli {
 enum Command {
     #[command(about = "Print the firmware and protocol version of the connected keyboard")]
     Version,
+    #[command(about = "Print the diagnostic counters and states of the connected keyboard")]
+    Status,
     #[command(about = "Write a firmware image to the keyboard through its factory bootloader")]
     Flash(FlashArgs),
 }
@@ -57,6 +60,7 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Version => block_on(version()),
+        Command::Status => block_on(status()),
         Command::Flash(args) => flash(&args),
     }
 }
@@ -68,6 +72,20 @@ async fn version() -> Result<()> {
     show("device", hid::describe(&device));
     show("firmware", version.firmware);
     show("protocol", version.protocol);
+    Ok(())
+}
+
+async fn status() -> Result<()> {
+    let (device, report) = keyboard::diagnostics(&Hid::default())
+        .await
+        .context("could not read the diagnostics")?;
+    print!(
+        "{}",
+        Status {
+            device: hid::describe(&device),
+            report,
+        }
+    );
     Ok(())
 }
 

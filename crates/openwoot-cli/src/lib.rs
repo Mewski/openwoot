@@ -4,5 +4,6 @@ pub mod hid;
 pub mod image;
 pub mod keyboard;
 mod report;
+pub mod status;
 pub mod stock;
 pub mod transfer;

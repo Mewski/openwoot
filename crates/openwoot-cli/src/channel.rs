@@ -1,8 +1,10 @@
 use std::time::{Duration, Instant};
 
 use openwoot_protocol::{
-    Endpoint, Version, decode_response, encode_request,
-    endpoints::{EnterUpdateMode, GetVersion},
+    Endpoint, Version, decode_response,
+    diagnostics::Report,
+    encode_request,
+    endpoints::{EnterUpdateMode, GetDiagnostics, GetVersion},
     report,
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -29,6 +31,10 @@ pub(crate) async fn firmware_version(reports: &mut impl Reports) -> Result<Optio
 pub(crate) async fn enter_update_mode(reports: &mut impl Reports) -> Result<(), Error> {
     request::<EnterUpdateMode>(reports, &()).await?;
     Ok(())
+}
+
+pub async fn diagnostics(reports: &mut impl Reports) -> Result<Option<Report>, Error> {
+    request::<GetDiagnostics>(reports, &()).await
 }
 
 async fn request<E>(

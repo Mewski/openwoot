@@ -6,7 +6,7 @@ use std::time::Duration;
 use async_hid::{Device, DeviceInfo};
 pub use firmware::{Firmware, Running};
 pub use identity::Identity;
-use openwoot_protocol::Version;
+use openwoot_protocol::{Version, WireError, diagnostics::Report};
 
 use crate::{
     channel,
@@ -40,6 +40,8 @@ pub enum Error {
     NoChannelAnswer,
     #[error("the firmware did not answer the version query; nothing was changed")]
     NoVersionAnswer,
+    #[error("this openwoot firmware does not report diagnostics; flash a newer image")]
+    NoDiagnostics,
     #[error(
         "openwoot firmware {0} does not support the update-mode request; unplug the keyboard, \
          hold the recovery key combination while plugging it in, then run `openwoot flash` again"
@@ -52,17 +54,23 @@ pub enum Error {
 }
 
 pub async fn firmware_version(hid: &Hid) -> Result<(DeviceInfo, Version), Error> {
-    let Some(device) = hid.find(identity::is_any_firmware).await? else {
-        if hid.find(identity::is_any_update_mode).await?.is_some() {
-            return Err(Error::InUpdateMode);
-        }
-        return Err(Error::NotFound);
-    };
-    let mut interface = Interface::open(&device).await?;
+    let (device, mut interface) = open_running(hid).await?;
     let version = channel::firmware_version(&mut interface)
         .await?
         .ok_or(Error::NoChannelAnswer)?;
-    Ok((device.to_device_info(), version))
+    Ok((device, version))
+}
+
+pub async fn diagnostics(hid: &Hid) -> Result<(DeviceInfo, Report), Error> {
+    let (device, mut interface) = open_running(hid).await?;
+    let report = match channel::diagnostics(&mut interface).await {
+        Ok(report) => report.ok_or(Error::NoChannelAnswer)?,
+        Err(channel::Error::Response(openwoot_protocol::Error::Device(WireError::UnknownKey))) => {
+            return Err(Error::NoDiagnostics);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    Ok((device, report))
 }
 
 pub async fn find_update_mode(hid: &Hid, identity: Identity) -> Result<Option<Device>, Error> {
@@ -95,4 +103,15 @@ pub async fn wait_for_firmware(hid: &Hid, identity: Identity) -> Result<Device, 
     )
     .await?
     .ok_or(Error::FirmwareDidNotAppear)
+}
+
+async fn open_running(hid: &Hid) -> Result<(DeviceInfo, Interface), Error> {
+    let Some(device) = hid.find(identity::is_any_firmware).await? else {
+        if hid.find(identity::is_any_update_mode).await?.is_some() {
+            return Err(Error::InUpdateMode);
+        }
+        return Err(Error::NotFound);
+    };
+    let interface = Interface::open(&device).await?;
+    Ok((device.to_device_info(), interface))
 }

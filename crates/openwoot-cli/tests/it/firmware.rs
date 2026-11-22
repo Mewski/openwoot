@@ -2,8 +2,14 @@ mod fake;
 
 use fake::Keyboard;
 use futures_lite::future::block_on;
-use openwoot_cli::keyboard::{Error, Firmware, Running};
-use openwoot_protocol::{FirmwareVersion, PROTOCOL_VERSION, Version};
+use openwoot_cli::{
+    channel,
+    keyboard::{Error, Firmware, Running},
+};
+use openwoot_protocol::{
+    FirmwareVersion, PROTOCOL_VERSION, Version, WireError,
+    diagnostics::{Keys, Report, Scan},
+};
 
 const OPENWOOT: Version = Version {
     protocol: PROTOCOL_VERSION,
@@ -54,4 +60,37 @@ fn a_keyboard_that_answers_nothing_is_left_alone() {
         Err(Error::NoVersionAnswer)
     ));
     assert_eq!(keyboard.0.borrow().feature_commands, [(1, 0)]);
+}
+
+#[test]
+fn diagnostics_come_back_over_the_configuration_channel() {
+    let report = Report {
+        scan: Scan {
+            cycles: 7,
+            recoveries: 0,
+            overruns: None,
+        },
+        keys: Keys {
+            passes: 7,
+            reports: 1,
+        },
+        ..Report::default()
+    };
+    let mut keyboard = Keyboard::openwoot(OPENWOOT, true);
+    keyboard.0.borrow_mut().diagnostics = Some(report);
+    assert_eq!(
+        block_on(channel::diagnostics(&mut keyboard)).unwrap(),
+        Some(report)
+    );
+}
+
+#[test]
+fn firmware_without_diagnostics_answers_the_request_as_unknown() {
+    let mut keyboard = Keyboard::openwoot(OPENWOOT, true);
+    assert!(matches!(
+        block_on(channel::diagnostics(&mut keyboard)),
+        Err(channel::Error::Response(openwoot_protocol::Error::Device(
+            WireError::UnknownKey
+        )))
+    ));
 }

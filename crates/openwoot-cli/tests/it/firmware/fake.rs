@@ -2,8 +2,10 @@ use std::{cell::RefCell, collections::VecDeque, future::ready, rc::Rc, time::Dur
 
 use openwoot_cli::transfer::{self, Reports};
 use openwoot_protocol::{
-    ERROR_KEY, Endpoint, VarKey, Version, WireError, decode_message, encode_message,
-    endpoints::{EnterUpdateMode, GetVersion},
+    ERROR_KEY, Endpoint, VarKey, Version, WireError, decode_message,
+    diagnostics::Report,
+    encode_message,
+    endpoints::{EnterUpdateMode, GetDiagnostics, GetVersion},
     report,
     stock::{Command, Request, Status, encode_reply},
 };
@@ -15,6 +17,7 @@ pub(super) struct State {
     pub stock_version: Option<[u8; 3]>,
     pub update_mode_requests: usize,
     pub feature_commands: Vec<(u8, u32)>,
+    pub diagnostics: Option<Report>,
     pending: VecDeque<Vec<u8>>,
 }
 
@@ -60,6 +63,15 @@ impl State {
             encode_message(
                 &message.reply_header(EnterUpdateMode::RESP_KEY),
                 &(),
+                &mut reply,
+            )
+        } else if let Some(diagnostics) = self
+            .diagnostics
+            .filter(|_| key == VarKey::Key8(GetDiagnostics::REQ_KEY))
+        {
+            encode_message(
+                &message.reply_header(GetDiagnostics::RESP_KEY),
+                &diagnostics,
                 &mut reply,
             )
         } else {

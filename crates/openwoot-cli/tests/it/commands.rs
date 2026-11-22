@@ -3,7 +3,7 @@ use predicates::{prelude::PredicateBooleanExt, str::contains};
 use crate::support::openwoot;
 
 #[test]
-fn help_lists_exactly_version_and_flash() {
+fn help_lists_exactly_version_status_and_flash() {
     let assert = openwoot().arg("--help").assert().success();
     let output = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
     let commands: Vec<&str> = output
@@ -13,7 +13,7 @@ fn help_lists_exactly_version_and_flash() {
         .take_while(|line| !line.is_empty())
         .filter_map(|line| line.split_whitespace().next())
         .collect();
-    assert_eq!(commands, ["version", "flash", "help"]);
+    assert_eq!(commands, ["version", "status", "flash", "help"]);
 }
 
 #[test]
@@ -57,6 +57,15 @@ fn flash_takes_only_dry_run() {
 fn version_takes_no_arguments() {
     openwoot()
         .args(["version", "extra"])
+        .assert()
+        .failure()
+        .stderr(contains("unexpected argument 'extra'"));
+}
+
+#[test]
+fn status_takes_no_arguments() {
+    openwoot()
+        .args(["status", "extra"])
         .assert()
         .failure()
         .stderr(contains("unexpected argument 'extra'"));
