@@ -7,10 +7,11 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-serde = { workspace = true }
-
-[dev-dependencies]
 postcard = { workspace = true }
+postcard-rpc = { workspace = true }
+postcard-schema = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true
