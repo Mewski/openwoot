@@ -5,6 +5,7 @@ mod basepri;
 mod descriptor;
 #[cfg(target_os = "none")]
 pub mod executor;
+pub mod flash;
 pub mod gpio;
 pub mod interrupt;
 pub mod rcu;
