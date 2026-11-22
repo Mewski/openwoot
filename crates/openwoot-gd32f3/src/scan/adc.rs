@@ -16,45 +16,43 @@ use crate::{
 pub(super) const MAX_RANKS: usize = 16;
 
 const SETTLE_US: u16 = 1000;
-
 const APB2EN_ADC0EN: u32 = 1 << 9;
 const APB2EN_ADC1EN: u32 = 1 << 10;
 const CFG0_ADCPSC: u32 = 0b11 << 14;
 const CFG0_ADCPSC_APB2_DIV4: u32 = 0b01 << 14;
 const CFG0_ADCPSC_2: u32 = 1 << 28;
 const CFG1_ADCPSC_3: u32 = 1 << 29;
-
-const ADC_STAT_EOC: u32 = 1 << 1;
-const ADC_CTL0_EOCIE: u32 = 1 << 5;
-const ADC_CTL0_DISRC: u32 = 1 << 11;
-const ADC_CTL0_DISIC: u32 = 1 << 12;
-const ADC_CTL0_DISNUM_SHIFT: u32 = 13;
-const ADC_CTL0_DISNUM: u32 = 0b111 << ADC_CTL0_DISNUM_SHIFT;
-const ADC_CTL0_SYNCM: u32 = 0xF << 16;
-const ADC_CTL0_SYNCM_REGULAR_PARALLEL: u32 = 6 << 16;
-const ADC_CTL1_ADCON: u32 = 1 << 0;
-const ADC_CTL1_CLB: u32 = 1 << 2;
-const ADC_CTL1_RSTCLB: u32 = 1 << 3;
-const ADC_CTL1_DMA: u32 = 1 << 8;
-const ADC_CTL1_DAL: u32 = 1 << 11;
-const ADC_CTL1_ETSRC: u32 = 0b111 << 17;
-const ADC_CTL1_ETSRC_TIMER1_CH1: u32 = 3 << 17;
-const ADC_CTL1_ETSRC_SOFTWARE: u32 = 7 << 17;
-const ADC_CTL1_ETERC: u32 = 1 << 20;
-const ADC_RSQ0_RL_SHIFT: u32 = 20;
-const ADC_RSQ0_RL: u32 = 0xF << ADC_RSQ0_RL_SHIFT;
-const ADC_OVSAMPCTL_OVSEN: u32 = 1 << 0;
-const ADC_OVSAMPCTL_OVSR_SHIFT: u32 = 2;
-const ADC_OVSAMPCTL_OVSR: u32 = 0b111 << ADC_OVSAMPCTL_OVSR_SHIFT;
-const ADC_OVSAMPCTL_OVSS_SHIFT: u32 = 5;
-const ADC_OVSAMPCTL_OVSS: u32 = 0xF << ADC_OVSAMPCTL_OVSS_SHIFT;
-const ADC_OVSAMPCTL_TOVS: u32 = 1 << 9;
-const ADC_OVSAMPCTL_DRES: u32 = 0b11 << 12;
-const ADC_RANK_BITS: u32 = 5;
-const ADC_RANK_MASK: u32 = 0x1F;
-const ADC_SAMPLE_TIME_BITS: u32 = 3;
-const ADC_SAMPLE_TIME_MASK: u32 = 0b111;
-const ADC_SAMPLE_TIME_SPLIT: u8 = 10;
+const STAT_EOC: u32 = 1 << 1;
+const CTL0_EOCIE: u32 = 1 << 5;
+const CTL0_DISRC: u32 = 1 << 11;
+const CTL0_DISIC: u32 = 1 << 12;
+const CTL0_DISNUM_SHIFT: u32 = 13;
+const CTL0_DISNUM: u32 = 0b111 << CTL0_DISNUM_SHIFT;
+const CTL0_SYNCM: u32 = 0xF << 16;
+const CTL0_SYNCM_REGULAR_PARALLEL: u32 = 6 << 16;
+const CTL1_ADCON: u32 = 1 << 0;
+const CTL1_CLB: u32 = 1 << 2;
+const CTL1_RSTCLB: u32 = 1 << 3;
+const CTL1_DMA: u32 = 1 << 8;
+const CTL1_DAL: u32 = 1 << 11;
+const CTL1_ETSRC: u32 = 0b111 << 17;
+const CTL1_ETSRC_TIMER1_CH1: u32 = 3 << 17;
+const CTL1_ETSRC_SOFTWARE: u32 = 7 << 17;
+const CTL1_ETERC: u32 = 1 << 20;
+const RSQ0_RL_SHIFT: u32 = 20;
+const RSQ0_RL: u32 = 0xF << RSQ0_RL_SHIFT;
+const OVSAMPCTL_OVSEN: u32 = 1 << 0;
+const OVSAMPCTL_OVSR_SHIFT: u32 = 2;
+const OVSAMPCTL_OVSR: u32 = 0b111 << OVSAMPCTL_OVSR_SHIFT;
+const OVSAMPCTL_OVSS_SHIFT: u32 = 5;
+const OVSAMPCTL_OVSS: u32 = 0xF << OVSAMPCTL_OVSS_SHIFT;
+const OVSAMPCTL_TOVS: u32 = 1 << 9;
+const OVSAMPCTL_DRES: u32 = 0b11 << 12;
+const RANK_BITS: u32 = 5;
+const RANK_MASK: u32 = 0x1F;
+const SAMPLE_TIME_BITS: u32 = 3;
+const SAMPLE_TIME_MASK: u32 = 0b111;
+const SAMPLE_TIME_SPLIT: u8 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SampleTime {
@@ -88,10 +86,10 @@ pub(super) enum Trigger {
 
 impl Trigger {
     #[inline(always)]
-    const fn bits(self) -> u32 {
+    const fn source(self) -> u32 {
         match self {
-            Self::Timer => ADC_CTL1_ETSRC_TIMER1_CH1,
-            Self::Software => ADC_CTL1_ETSRC_SOFTWARE,
+            Self::Timer => CTL1_ETSRC_TIMER1_CH1,
+            Self::Software => CTL1_ETSRC_SOFTWARE,
         }
     }
 }
@@ -101,15 +99,12 @@ macro_rules! configure_sequence {
         let adc = $adc;
         let last: u32 = ($length as u32).saturating_sub(1);
         modify_bits(adc.rsq0(), |bits| {
-            (bits & !ADC_RSQ0_RL) | (last << ADC_RSQ0_RL_SHIFT) & ADC_RSQ0_RL
+            (bits & !RSQ0_RL) | (last << RSQ0_RL_SHIFT) & RSQ0_RL
         });
-        clear_bits(adc.ctl0(), ADC_CTL0_DISRC | ADC_CTL0_DISIC);
-        clear_bits(adc.ctl0(), ADC_CTL0_DISNUM);
-        set_bits(
-            adc.ctl0(),
-            (last << ADC_CTL0_DISNUM_SHIFT) & ADC_CTL0_DISNUM,
-        );
-        set_bits(adc.ctl0(), ADC_CTL0_DISRC);
+        clear_bits(adc.ctl0(), CTL0_DISRC | CTL0_DISIC);
+        clear_bits(adc.ctl0(), CTL0_DISNUM);
+        set_bits(adc.ctl0(), (last << CTL0_DISNUM_SHIFT) & CTL0_DISNUM);
+        set_bits(adc.ctl0(), CTL0_DISRC);
     }};
 }
 
@@ -119,8 +114,8 @@ macro_rules! convert_at_rank {
         let rank = u32::from($rank);
         let channel: u8 = $channel;
         let channel_field = |slot: u32| {
-            let shift = ADC_RANK_BITS * slot;
-            move |bits: u32| (bits & !(ADC_RANK_MASK << shift)) | u32::from(channel) << shift
+            let shift = RANK_BITS * slot;
+            move |bits: u32| (bits & !(RANK_MASK << shift)) | u32::from(channel) << shift
         };
         match rank {
             0..6 => modify_bits(adc.rsq2(), channel_field(rank)),
@@ -129,13 +124,13 @@ macro_rules! convert_at_rank {
         }
         let sample_time: u32 = $sample_time;
         let time_field = |slot: u8| {
-            let shift = ADC_SAMPLE_TIME_BITS * u32::from(slot);
-            move |bits: u32| (bits & !(ADC_SAMPLE_TIME_MASK << shift)) | sample_time << shift
+            let shift = SAMPLE_TIME_BITS * u32::from(slot);
+            move |bits: u32| (bits & !(SAMPLE_TIME_MASK << shift)) | sample_time << shift
         };
-        if channel < ADC_SAMPLE_TIME_SPLIT {
+        if channel < SAMPLE_TIME_SPLIT {
             modify_bits(adc.sampt1(), time_field(channel));
         } else {
-            modify_bits(adc.sampt0(), time_field(channel - ADC_SAMPLE_TIME_SPLIT));
+            modify_bits(adc.sampt0(), time_field(channel - SAMPLE_TIME_SPLIT));
         }
     }};
 }
@@ -144,28 +139,28 @@ macro_rules! configure_oversampling {
     ($adc:expr, $shift:expr) => {{
         let adc = $adc;
         let shift: u32 = $shift;
-        clear_bits(adc.ovsampctl(), ADC_OVSAMPCTL_TOVS);
-        clear_bits(adc.ovsampctl(), ADC_OVSAMPCTL_OVSR | ADC_OVSAMPCTL_OVSS);
+        clear_bits(adc.ovsampctl(), OVSAMPCTL_TOVS);
+        clear_bits(adc.ovsampctl(), OVSAMPCTL_OVSR | OVSAMPCTL_OVSS);
         set_bits(
             adc.ovsampctl(),
-            (shift << ADC_OVSAMPCTL_OVSS_SHIFT) & ADC_OVSAMPCTL_OVSS
-                | ((shift - 1) << ADC_OVSAMPCTL_OVSR_SHIFT) & ADC_OVSAMPCTL_OVSR,
+            (shift << OVSAMPCTL_OVSS_SHIFT) & OVSAMPCTL_OVSS
+                | ((shift - 1) << OVSAMPCTL_OVSR_SHIFT) & OVSAMPCTL_OVSR,
         );
-        set_bits(adc.ovsampctl(), ADC_OVSAMPCTL_OVSEN);
+        set_bits(adc.ovsampctl(), OVSAMPCTL_OVSEN);
     }};
 }
 
 macro_rules! enable_and_calibrate {
     ($adc:expr) => {{
         let adc = $adc;
-        if read_bits(adc.ctl1()) & ADC_CTL1_ADCON == 0 {
-            set_bits(adc.ctl1(), ADC_CTL1_ADCON);
+        if read_bits(adc.ctl1()) & CTL1_ADCON == 0 {
+            set_bits(adc.ctl1(), CTL1_ADCON);
         }
         wait_microseconds(SETTLE_US);
-        set_bits(adc.ctl1(), ADC_CTL1_RSTCLB);
-        while read_bits(adc.ctl1()) & ADC_CTL1_RSTCLB != 0 {}
-        set_bits(adc.ctl1(), ADC_CTL1_CLB);
-        while read_bits(adc.ctl1()) & ADC_CTL1_CLB != 0 {}
+        set_bits(adc.ctl1(), CTL1_RSTCLB);
+        while read_bits(adc.ctl1()) & CTL1_RSTCLB != 0 {}
+        set_bits(adc.ctl1(), CTL1_CLB);
+        while read_bits(adc.ctl1()) & CTL1_CLB != 0 {}
     }};
 }
 
@@ -185,34 +180,34 @@ pub(super) fn configure(
     });
     let adc = adc();
     let reference = reference_adc();
-    clear_bits(adc.ovsampctl(), ADC_OVSAMPCTL_DRES);
-    clear_bits(reference.ovsampctl(), ADC_OVSAMPCTL_DRES);
+    clear_bits(adc.ovsampctl(), OVSAMPCTL_DRES);
+    clear_bits(reference.ovsampctl(), OVSAMPCTL_DRES);
     modify_bits(adc.ctl0(), |bits| {
-        (bits & !ADC_CTL0_SYNCM) | ADC_CTL0_SYNCM_REGULAR_PARALLEL
+        (bits & !CTL0_SYNCM) | CTL0_SYNCM_REGULAR_PARALLEL
     });
-    clear_bits(adc.ctl1(), ADC_CTL1_DAL);
-    clear_bits(reference.ctl1(), ADC_CTL1_DAL);
-    clear_bits(adc.rsq0(), ADC_RSQ0_RL);
-    clear_bits(reference.rsq0(), ADC_RSQ0_RL);
+    clear_bits(adc.ctl1(), CTL1_DAL);
+    clear_bits(reference.ctl1(), CTL1_DAL);
+    clear_bits(adc.rsq0(), RSQ0_RL);
+    clear_bits(reference.rsq0(), RSQ0_RL);
     for rank in 0..inputs as u8 {
         convert_at_rank!(reference, rank, reference_channel, sample_time);
     }
     modify_bits(adc.ctl1(), |bits| {
-        (bits & !ADC_CTL1_ETSRC) | Trigger::Timer.bits()
+        (bits & !CTL1_ETSRC) | Trigger::Timer.source()
     });
     modify_bits(reference.ctl1(), |bits| {
-        (bits & !ADC_CTL1_ETSRC) | Trigger::Software.bits()
+        (bits & !CTL1_ETSRC) | Trigger::Software.source()
     });
-    set_bits(adc.ctl1(), ADC_CTL1_ETERC);
-    set_bits(reference.ctl1(), ADC_CTL1_ETERC);
+    set_bits(adc.ctl1(), CTL1_ETERC);
+    set_bits(reference.ctl1(), CTL1_ETERC);
     let shift = oversampling_shift(oversampling);
     configure_oversampling!(adc, shift);
     configure_oversampling!(reference, shift);
     interrupt::enable(pac::Interrupt::ADC0_1, Priority::SCAN);
-    set_bits(adc.ctl0(), ADC_CTL0_EOCIE);
+    set_bits(adc.ctl0(), CTL0_EOCIE);
     enable_and_calibrate!(adc);
     enable_and_calibrate!(reference);
-    set_bits(adc.ctl1(), ADC_CTL1_DMA);
+    set_bits(adc.ctl1(), CTL1_DMA);
 }
 
 #[inline(always)]
@@ -234,23 +229,21 @@ pub(super) fn configure_reference_sequence(length: usize, channel: u8, sample_ti
 
 #[inline(always)]
 pub(super) fn acknowledge() {
-    clear_bits(adc().stat(), ADC_STAT_EOC);
+    clear_bits(adc().stat(), STAT_EOC);
 }
 
 #[inline(always)]
 pub(super) fn clear_trigger() {
-    clear_bits(adc().ctl1(), ADC_CTL1_ETSRC);
+    clear_bits(adc().ctl1(), CTL1_ETSRC);
 }
 
 #[inline(always)]
 pub(super) fn set_trigger(trigger: Trigger) {
-    set_bits(adc().ctl1(), trigger.bits());
+    set_bits(adc().ctl1(), trigger.source());
 }
 
 pub(super) fn select_trigger(trigger: Trigger) {
-    modify_bits(adc().ctl1(), |bits| {
-        (bits & !ADC_CTL1_ETSRC) | trigger.bits()
-    });
+    modify_bits(adc().ctl1(), |bits| (bits & !CTL1_ETSRC) | trigger.source());
 }
 
 pub(super) fn sample_address() -> u32 {

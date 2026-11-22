@@ -146,7 +146,7 @@ impl PllMultiplier {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Config {
+pub struct ClockTree {
     pub pll_multiplier: PllMultiplier,
     pub ahb_divider: AhbDivider,
     pub apb1_divider: ApbDivider,
@@ -164,7 +164,7 @@ pub struct Clocks {
     pub apb2_timers: Hertz,
 }
 
-impl Config {
+impl ClockTree {
     #[must_use]
     pub const fn clocks(&self) -> Clocks {
         let system = PLL_INPUT.0 * self.pll_multiplier.get() as u32;
@@ -212,8 +212,8 @@ pub(crate) fn with_registers<Output>(
     change: impl FnOnce(&pac::rcu::RegisterBlock) -> Output,
 ) -> Output {
     critical_section::with(|_| {
-        // SAFETY: `Config::configure` consumed the `Rcu` peripheral; afterwards its registers are
-        // changed only here, inside a critical section, so no two read-modify-writes overlap.
+        // SAFETY: `ClockTree::configure` consumed the `Rcu` peripheral; afterwards its registers
+        // are changed only here, inside a critical section, so no two read-modify-writes overlap.
         change(unsafe { &*pac::Rcu::ptr() })
     })
 }
@@ -262,7 +262,7 @@ fn hang() -> ! {
 mod tests {
     use super::*;
 
-    const C_BUILD: Config = Config {
+    const C_BUILD: ClockTree = ClockTree {
         pll_multiplier: PllMultiplier::new::<30>(),
         ahb_divider: AhbDivider::By1,
         apb1_divider: ApbDivider::By2,

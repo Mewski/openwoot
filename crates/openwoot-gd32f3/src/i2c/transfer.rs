@@ -5,7 +5,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 use embedded_hal_async::i2c::NoAcknowledgeSource;
 
 use super::{
-    error::Error,
+    Error,
     registers::{CTL0_STOP, CTL1_DMAON, CTL1_ERRIE, CTL1_EVIE, STAT1_MASTER, registers},
 };
 use crate::{

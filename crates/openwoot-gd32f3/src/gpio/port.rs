@@ -1,5 +1,5 @@
 use super::{
-    pin::{Pin, Unconfigured},
+    Pin, Unconfigured,
     registers::{enable_clock, port_index},
 };
 use crate::pac;

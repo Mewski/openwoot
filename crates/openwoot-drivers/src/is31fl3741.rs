@@ -89,17 +89,17 @@ pub enum Error<BusError: core::fmt::Debug, PinError: core::fmt::Debug> {
 }
 
 #[derive(Debug)]
-pub struct Is31fl3741<I2C, Enable> {
-    bus: I2C,
+pub struct Is31fl3741<Bus, Enable> {
+    bus: Bus,
     enable: Enable,
     address: SevenBitAddress,
     page: Option<Page>,
     buffer: [u8; LONGEST_PAGE + 1],
 }
 
-impl<I2C: I2c, Enable: OutputPin> Is31fl3741<I2C, Enable> {
+impl<Bus: I2c, Enable: OutputPin> Is31fl3741<Bus, Enable> {
     #[must_use]
-    pub const fn new(bus: I2C, enable: Enable, address: SevenBitAddress) -> Self {
+    pub const fn new(bus: Bus, enable: Enable, address: SevenBitAddress) -> Self {
         Self {
             bus,
             enable,
@@ -119,7 +119,7 @@ impl<I2C: I2c, Enable: OutputPin> Is31fl3741<I2C, Enable> {
         self.page
     }
 
-    pub async fn initialize(&mut self) -> Result<(), Error<I2C::Error, Enable::Error>> {
+    pub async fn initialize(&mut self) -> Result<(), Error<Bus::Error, Enable::Error>> {
         self.write_register(Page::Function, FUNCTION_RESET, RESET_KEY)
             .await?;
         self.page = None;
@@ -141,12 +141,12 @@ impl<I2C: I2c, Enable: OutputPin> Is31fl3741<I2C, Enable> {
     pub async fn run(
         &mut self,
         configuration: Configuration,
-    ) -> Result<(), Error<I2C::Error, Enable::Error>> {
+    ) -> Result<(), Error<Bus::Error, Enable::Error>> {
         self.write_register(Page::Function, FUNCTION_CONFIGURATION, configuration.bits())
             .await
     }
 
-    pub async fn shut_down(&mut self) -> Result<(), Error<I2C::Error, Enable::Error>> {
+    pub async fn shut_down(&mut self) -> Result<(), Error<Bus::Error, Enable::Error>> {
         self.write_register(Page::Function, FUNCTION_CONFIGURATION, SHUTDOWN)
             .await
     }
@@ -156,7 +156,7 @@ impl<I2C: I2c, Enable: OutputPin> Is31fl3741<I2C, Enable> {
         bank: PwmBank,
         first: u8,
         values: &[u8],
-    ) -> Result<(), Error<I2C::Error, Enable::Error>> {
+    ) -> Result<(), Error<Bus::Error, Enable::Error>> {
         self.write_registers(bank.page(), first, values).await
     }
 
@@ -165,7 +165,7 @@ impl<I2C: I2c, Enable: OutputPin> Is31fl3741<I2C, Enable> {
         page: Page,
         first: u8,
         values: &[u8],
-    ) -> Result<(), Error<I2C::Error, Enable::Error>> {
+    ) -> Result<(), Error<Bus::Error, Enable::Error>> {
         let start = usize::from(first);
         let end = start + values.len();
         let outside = Error::OutsidePage {
@@ -194,7 +194,7 @@ impl<I2C: I2c, Enable: OutputPin> Is31fl3741<I2C, Enable> {
             .map_err(Error::Bus)
     }
 
-    pub fn release(self) -> (I2C, Enable) {
+    pub fn release(self) -> (Bus, Enable) {
         (self.bus, self.enable)
     }
 
@@ -203,11 +203,11 @@ impl<I2C: I2c, Enable: OutputPin> Is31fl3741<I2C, Enable> {
         page: Page,
         register: u8,
         value: u8,
-    ) -> Result<(), Error<I2C::Error, Enable::Error>> {
+    ) -> Result<(), Error<Bus::Error, Enable::Error>> {
         self.write_registers(page, register, &[value]).await
     }
 
-    async fn select(&mut self, page: Page) -> Result<(), Error<I2C::Error, Enable::Error>> {
+    async fn select(&mut self, page: Page) -> Result<(), Error<Bus::Error, Enable::Error>> {
         if self.page == Some(page) {
             return Ok(());
         }

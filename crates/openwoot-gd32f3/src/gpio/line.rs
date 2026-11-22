@@ -1,12 +1,13 @@
 #![allow(
     clippy::inline_always,
-    reason = "the level writes run in the scan interrupt, inlined as the C HAL's always_inline \
-              helpers"
+    reason = "the level writes run inside the scan interrupt as the C HAL's always_inline helpers"
 )]
 
 use super::{
-    pin::{Level, Speed},
-    registers::{self, INPUT_ANALOG, OUTPUT_PUSH_PULL, enable_clock, set_mode, set_reset},
+    Level, Speed,
+    registers::{
+        self, INPUT_ANALOG, OUTPUT_PUSH_PULL, enable_clock, port_index, set_mode, set_reset,
+    },
 };
 use crate::register::write_bits;
 
@@ -16,6 +17,12 @@ pub struct Line {
     pin: u8,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Levels {
+    port: u8,
+    set_reset: u32,
+}
+
 impl Line {
     #[must_use]
     pub const fn new(port: char, pin: u8) -> Self {
@@ -23,10 +30,7 @@ impl Line {
             port >= 'A' && port <= 'G' && pin < 16,
             "a pin of ports A to G"
         );
-        Self {
-            port: registers::port_index(port),
-            pin,
-        }
+        Self::from_index(port_index(port), pin)
     }
 
     pub(crate) const fn from_index(port: u8, pin: u8) -> Self {
@@ -66,20 +70,12 @@ impl Line {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Levels {
-    port: u8,
-    set_reset: u32,
-}
-
 impl Levels {
     pub(crate) fn new(port: u8, pins: impl IntoIterator<Item = (u8, Level)>) -> Self {
-        Self {
-            port,
-            set_reset: pins
-                .into_iter()
-                .fold(0, |bits, (pin, level)| bits | set_reset(pin, level)),
-        }
+        let set_reset = pins
+            .into_iter()
+            .fold(0, |bits, (pin, level)| bits | set_reset(pin, level));
+        Self { port, set_reset }
     }
 
     #[inline(always)]
@@ -93,7 +89,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lines_name_their_port_from_a() {
+    fn lines_count_ports_from_a() {
         assert_eq!(Line::new('C', 5), Line::from_index(2, 5));
     }
 

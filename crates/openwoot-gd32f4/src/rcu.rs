@@ -154,7 +154,7 @@ pub struct Pll {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Config {
+pub struct ClockTree {
     pub crystal: Hertz,
     pub pll: Pll,
     pub ahb_divider: AhbDivider,
@@ -176,7 +176,7 @@ pub struct Clocks {
     pub apb2_timers: Hertz,
 }
 
-impl Config {
+impl ClockTree {
     #[must_use]
     pub const fn clocks(&self) -> Clocks {
         let pll_input = self.crystal.0 / self.pll.input_divider as u32;
@@ -250,8 +250,8 @@ pub(crate) fn with_registers<Output>(
     change: impl FnOnce(&pac::rcu::RegisterBlock) -> Output,
 ) -> Output {
     critical_section::with(|_| {
-        // SAFETY: `Config::configure` consumed the `Rcu` peripheral; afterwards its registers are
-        // changed only here, inside a critical section, so no two read-modify-writes overlap.
+        // SAFETY: `ClockTree::configure` consumed the `Rcu` peripheral; afterwards its registers
+        // are changed only here, inside a critical section, so no two read-modify-writes overlap.
         change(unsafe { &*pac::Rcu::ptr() })
     })
 }
@@ -294,7 +294,7 @@ fn hang() -> ! {
 mod tests {
     use super::*;
 
-    const C_BUILD: Config = Config {
+    const C_BUILD: ClockTree = ClockTree {
         crystal: Hertz::from_mhz(25),
         pll: Pll {
             input_divider: 25,
@@ -334,13 +334,13 @@ mod tests {
 
     #[test]
     fn timers_follow_the_timer_clock_selection() {
-        let doubled = Config {
+        let doubled = ClockTree {
             timer_multiplier: TimerMultiplier::Double,
             ..C_BUILD
         };
         assert_eq!(doubled.clocks().apb1_timers, Hertz::from_mhz(100));
         assert_eq!(doubled.clocks().apb2_timers, Hertz::from_mhz(200));
-        let slow_apb1 = Config {
+        let slow_apb1 = ClockTree {
             apb1_divider: ApbDivider::By8,
             ..C_BUILD
         };

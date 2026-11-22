@@ -9,7 +9,7 @@ use embedded_hal::digital::OutputPin;
 use super::{
     bus::Bus,
     control_pipe::ControlPipe,
-    endpoint::{Dir, Endpoint, In, Out},
+    endpoint::{DirectionMarker, Endpoint, In, Out},
     endpoint_slots::Slots,
     events::InterruptHandler,
     packet_memory::{self, Allocator, Buffer, CONTROL_PACKET_LIMIT},
@@ -44,15 +44,17 @@ pub struct Driver<PullUp> {
 }
 
 impl<PullUp: OutputPin<Error = Infallible>> Driver<PullUp> {
+    #[must_use]
     #[expect(
         clippy::needless_pass_by_value,
-        reason = "taking the peripherals hands the controller and its packet memory to the driver for good"
+        reason = "taking the peripherals hands the controller and its packet memory to the driver \
+                  for good"
     )]
     pub fn new(
         core: Core,
         afio: &pac::Afio,
         mut pull_up: PullUp,
-        _interrupts: impl Binding<typelevel::USBD_HP_CAN0_TX, InterruptHandler>
+        _irqs: impl Binding<typelevel::USBD_HP_CAN0_TX, InterruptHandler>
         + Binding<typelevel::USBD_LP_CAN0_RX0, InterruptHandler>,
         clocks: &Clocks,
     ) -> Self {
@@ -80,7 +82,7 @@ impl<PullUp: OutputPin<Error = Infallible>> Driver<PullUp> {
         }
     }
 
-    fn alloc_endpoint<D: Dir>(
+    fn alloc_endpoint<D: DirectionMarker>(
         &mut self,
         ep_type: EndpointType,
         ep_addr: Option<EndpointAddress>,

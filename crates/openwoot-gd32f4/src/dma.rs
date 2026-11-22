@@ -49,8 +49,8 @@ pub(crate) const fn request(number: u32) -> u32 {
 macro_rules! channels {
     ($(
         $controller:literal, $index:literal: $registers:ident, $clock:ident,
-        $ctl:ident, $cnt:ident, $paddr:ident, $m0addr:ident, $m1addr:ident, $fctl:ident,
-        $intf:ident, $intc:ident;
+        $control:ident, $count:ident, $peripheral:ident, $memory:ident, $second_memory:ident,
+        $fifo_control:ident, $flags:ident, $flag_clear:ident;
     )*) => {
         $(
             #[expect(
@@ -66,55 +66,55 @@ macro_rules! channels {
                 }
 
                 pub(crate) fn control(&self) -> u32 {
-                    read_bits($registers().$ctl())
+                    read_bits($registers().$control())
                 }
 
                 pub(crate) fn write_control(&self, value: u32) {
-                    write_bits($registers().$ctl(), value);
+                    write_bits($registers().$control(), value);
                 }
 
                 pub(crate) fn modify_control(&self, change: impl FnOnce(u32) -> u32) {
-                    modify_bits($registers().$ctl(), change);
+                    modify_bits($registers().$control(), change);
                 }
 
                 pub(crate) fn set_control(&self, mask: u32) {
-                    set_bits($registers().$ctl(), mask);
+                    set_bits($registers().$control(), mask);
                 }
 
                 pub(crate) fn clear_control(&self, mask: u32) {
-                    clear_bits($registers().$ctl(), mask);
+                    clear_bits($registers().$control(), mask);
                 }
 
                 pub(crate) fn set_peripheral_address(&self, address: u32) {
-                    write_bits($registers().$paddr(), address);
+                    write_bits($registers().$peripheral(), address);
                 }
 
                 pub(crate) fn set_memory_address(&self, address: u32) {
-                    write_bits($registers().$m0addr(), address);
+                    write_bits($registers().$memory(), address);
                 }
 
                 pub(crate) fn set_second_memory_address(&self, address: u32) {
-                    write_bits($registers().$m1addr(), address);
+                    write_bits($registers().$second_memory(), address);
                 }
 
                 pub(crate) fn set_count(&self, count: u32) {
-                    write_bits($registers().$cnt(), count);
+                    write_bits($registers().$count(), count);
                 }
 
                 pub(crate) fn write_fifo_control(&self, value: u32) {
-                    write_bits($registers().$fctl(), value);
+                    write_bits($registers().$fifo_control(), value);
                 }
 
                 pub(crate) fn clear_fifo_control(&self, mask: u32) {
-                    clear_bits($registers().$fctl(), mask);
+                    clear_bits($registers().$fifo_control(), mask);
                 }
 
                 pub(crate) fn flags(&self) -> u32 {
-                    (read_bits($registers().$intf()) >> Self::FLAG_SHIFT) & ALL_FLAGS
+                    (read_bits($registers().$flags()) >> Self::FLAG_SHIFT) & ALL_FLAGS
                 }
 
                 pub(crate) fn clear_flags(&self) {
-                    write_bits($registers().$intc(), ALL_FLAGS << Self::FLAG_SHIFT);
+                    write_bits($registers().$flag_clear(), ALL_FLAGS << Self::FLAG_SHIFT);
                 }
             }
         )*

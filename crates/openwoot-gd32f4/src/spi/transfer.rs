@@ -47,21 +47,6 @@ pub(super) struct Transfer<'s> {
     spi: &'s pac::Spi0,
 }
 
-impl Handler<typelevel::DMA1_Channel2> for InterruptHandler {
-    // SAFETY: the handler only reads the flags of the receive channel and clears that channel's
-    // interrupt enables, which no other code changes while a transfer runs.
-    unsafe fn on_interrupt() {
-        let receive = ReceiveChannel::new();
-        if receive.flags()
-            & (dma::FLAG_FULL_TRANSFER | dma::FLAG_TRANSFER_ERROR | dma::FLAG_SINGLE_DATA_ERROR)
-            != 0
-        {
-            receive.clear_control(dma::INTERRUPTS);
-            RECEIVED.wake();
-        }
-    }
-}
-
 impl Source {
     pub(super) fn advanced(self, offset: usize) -> Self {
         match self {
@@ -155,6 +140,21 @@ impl Drop for Transfer<'_> {
         receive.clear_flags();
         transmit.clear_flags();
         compiler_fence(Ordering::SeqCst);
+    }
+}
+
+impl Handler<typelevel::DMA1_Channel2> for InterruptHandler {
+    // SAFETY: the handler only reads the flags of the receive channel and clears that channel's
+    // interrupt enables, which no other code changes while a transfer runs.
+    unsafe fn on_interrupt() {
+        let receive = ReceiveChannel::new();
+        if receive.flags()
+            & (dma::FLAG_FULL_TRANSFER | dma::FLAG_TRANSFER_ERROR | dma::FLAG_SINGLE_DATA_ERROR)
+            != 0
+        {
+            receive.clear_control(dma::INTERRUPTS);
+            RECEIVED.wake();
+        }
     }
 }
 

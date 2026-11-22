@@ -17,15 +17,15 @@ pub enum In {}
 #[derive(Debug)]
 pub enum Out {}
 
-pub(super) trait Dir {
+pub(super) trait DirectionMarker {
     const DIRECTION: Direction;
 }
 
-impl Dir for In {
+impl DirectionMarker for In {
     const DIRECTION: Direction = Direction::In;
 }
 
-impl Dir for Out {
+impl DirectionMarker for Out {
     const DIRECTION: Direction = Direction::Out;
 }
 

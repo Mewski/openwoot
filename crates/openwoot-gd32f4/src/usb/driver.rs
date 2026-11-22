@@ -52,7 +52,7 @@ impl Driver {
         _core: Core,
         pins: UlpiPins,
         mut phy_reset: Pin<PORT, INDEX, Output>,
-        _interrupt: impl Binding<typelevel::USBHS, InterruptHandler>,
+        _irqs: impl Binding<typelevel::USBHS, InterruptHandler>,
         limit: SpeedLimit,
     ) -> Self {
         rcu::with_registers(|rcu| set_bits(rcu.apb2en(), APB2EN_SYSCFGEN));

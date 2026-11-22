@@ -42,7 +42,7 @@ impl Spi {
         clock: impl ClockPin,
         data_out: impl DataOutPin,
         data_in: impl DataInPin,
-        _irq: impl Binding<typelevel::DMA1_Channel2, InterruptHandler>,
+        _irqs: impl Binding<typelevel::DMA1_Channel2, InterruptHandler>,
     ) -> Self {
         rcu::with_registers(|rcu| set_bits(rcu.apb2en(), APB2EN_SPI0EN));
         ReceiveChannel::new().enable_clock();

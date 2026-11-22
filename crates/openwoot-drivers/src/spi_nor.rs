@@ -36,7 +36,7 @@ pub struct Identification {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error<E> {
-    #[error("could not transfer over the spi bus: {0:?}")]
+    #[error("could not transfer over the SPI bus: {0:?}")]
     Bus(E),
     #[error("the flash access is not aligned to the program or erase size")]
     NotAligned,

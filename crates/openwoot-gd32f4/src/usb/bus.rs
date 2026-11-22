@@ -10,18 +10,18 @@ const ALL_TRANSMIT_FIFOS: u8 = 0x10;
 
 pub struct Bus<'d> {
     inner: OtgBus<'d>,
-    initialised: bool,
+    initialized: bool,
 }
 
 impl<'d> Bus<'d> {
     pub(super) const fn new(inner: OtgBus<'d>) -> Self {
         Self {
             inner,
-            initialised: false,
+            initialized: false,
         }
     }
 
-    fn initialise_core(&mut self) {
+    fn initialize_core(&mut self) {
         let registers = registers();
         while !registers.grstctl().read().ahbidl() {
             spin_loop();
@@ -51,7 +51,7 @@ impl fmt::Debug for Bus<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Bus")
-            .field("initialised", &self.initialised)
+            .field("initialized", &self.initialized)
             .finish_non_exhaustive()
     }
 }
@@ -66,9 +66,9 @@ impl BusTrait for Bus<'_> {
     }
 
     async fn poll(&mut self) -> Event {
-        if !self.initialised {
-            self.initialise_core();
-            self.initialised = true;
+        if !self.initialized {
+            self.initialize_core();
+            self.initialized = true;
         }
         let event = self.inner.poll().await;
         if event == Event::Reset {

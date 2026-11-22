@@ -41,10 +41,10 @@ impl<const CONTROLLER: u8, const INDEX: u8> Channel<CONTROLLER, INDEX> {
 macro_rules! channels {
     ($($index:literal: $control:ident, $count:ident, $peripheral:ident, $memory:ident;)*) => {
         $(
-            #[allow(
+            #[expect(
                 dead_code,
-                reason = "every channel gets the full set of accessors; each driver uses its own \
-                          subset"
+                reason = "every channel offers the full register set, and each driver uses the \
+                          accesses it needs"
             )]
             impl Channel<0, $index> {
                 pub(crate) fn enable_clock(&self) {

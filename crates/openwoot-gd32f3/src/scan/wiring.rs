@@ -1,4 +1,4 @@
-use super::adc::{Oversampling, SampleTime};
+use super::{Oversampling, SampleTime};
 use crate::{gpio::Line, pac};
 
 pub(super) const ADDRESS_LINES: usize = 4;

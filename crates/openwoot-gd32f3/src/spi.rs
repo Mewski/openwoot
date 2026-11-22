@@ -10,7 +10,7 @@ use embedded_hal::spi::{ErrorKind, ErrorType};
 use embedded_hal_async::spi::SpiBus;
 use openwoot::diagnostics::{Bus, BusError, Transfers};
 pub use pins::{ClockPin, DataInPin, DataOutPin};
-use registers::{CTL0_SPIEN, I2SCTL_I2SSEL, STAT_TRANS, control};
+use registers::{APB1EN_SPI1EN, CTL0_SPIEN, I2SCTL_I2SSEL, STAT_TRANS, control};
 pub use transfer::InterruptHandler;
 use transfer::{ReceiveChannel, Sink, Source, Transfer};
 
@@ -20,7 +20,6 @@ use crate::{
     register::{clear_bits, modify_bits, read_bits, set_bits},
 };
 
-const APB1EN_SPI1EN: u32 = 1 << 14;
 const MAX_TRANSFER: usize = 0xFFFF;
 
 static TRANSFERS: Transfers = Transfers::new();
@@ -43,7 +42,7 @@ impl Spi {
         clock: impl ClockPin,
         data_out: impl DataOutPin,
         data_in: impl DataInPin,
-        _irq: impl Binding<typelevel::DMA0_Channel3, InterruptHandler>,
+        _irqs: impl Binding<typelevel::DMA0_Channel3, InterruptHandler>,
     ) -> Self {
         rcu::with_registers(|rcu| set_bits(rcu.apb1en(), APB1EN_SPI1EN));
         ReceiveChannel::new().enable_clock();

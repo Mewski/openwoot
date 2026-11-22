@@ -13,8 +13,8 @@ pub use error::Error;
 use openwoot::diagnostics::{Bus, Transfers};
 pub use pins::{ClockPin, DataPin};
 use registers::{
-    CTL0_ACKEN, CTL0_I2CEN, CTL0_SMBEN, CTL0_SRESET, CTL0_START, CTL1_DMAON, CTL1_I2CCLK,
-    STAT0_ADDSEND, STAT0_BTC, STAT0_SBSEND, STAT1_I2CBSY,
+    APB1EN_I2C0EN, CTL0_ACKEN, CTL0_I2CEN, CTL0_SMBEN, CTL0_SRESET, CTL0_START, CTL1_DMAON,
+    CTL1_I2CCLK, OWN_ADDRESS, STAT0_ADDSEND, STAT0_BTC, STAT0_SBSEND, STAT1_I2CBSY,
 };
 use timing::{Timing, timing};
 pub use transfer::InterruptHandler;
@@ -28,8 +28,6 @@ use crate::{
 };
 
 const TRANSFER_TIMEOUT: Duration = Duration::from_millis(10);
-const APB1EN_I2C0EN: u32 = 1 << 21;
-const OWN_ADDRESS: u32 = 0xFF;
 const MAX_TRANSFER: usize = 0xFFFF;
 
 static TRANSFERS: Transfers = Transfers::new();

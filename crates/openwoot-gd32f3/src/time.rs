@@ -1,10 +1,3 @@
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::inline_always,
-    reason = "the microsecond count is read as its low 16 bits as in the C HAL, and the read is \
-              inlined into the scan interrupt as the C HAL's always_inline helpers"
-)]
-
 #[cfg(target_os = "none")]
 mod driver;
 #[cfg_attr(
@@ -53,11 +46,21 @@ pub const fn prescaler(timer_clock: Hertz) -> u32 {
     timer_clock.0 / TICK_HZ - 1
 }
 
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::inline_always,
+    reason = "the scan reads the microsecond count as its low 16 bits as in the C HAL, inlined into \
+              the scan interrupt as the C HAL's always_inline helper"
+)]
 #[inline(always)]
 pub(crate) fn microseconds() -> u16 {
     read_bits(registers().cnt()) as u16
 }
 
+#[allow(
+    clippy::inline_always,
+    reason = "the scan's microsecond read runs inside the scan interrupt"
+)]
 #[inline(always)]
 fn registers() -> &'static pac::timer1::RegisterBlock {
     // SAFETY: `start` consumed the `Timer4` peripheral; from then on only the time driver writes

@@ -1,5 +1,7 @@
 use crate::pac;
 
+pub(super) const APB1EN_I2C0EN: u32 = 1 << 21;
+pub(super) const OWN_ADDRESS: u32 = 0xFF;
 pub(super) const CTL0_I2CEN: u32 = 1 << 0;
 pub(super) const CTL0_SMBEN: u32 = 1 << 1;
 pub(super) const CTL0_START: u32 = 1 << 8;

@@ -1,6 +1,6 @@
 # openwoot-gd32f3
 
-Chip HAL for the GigaDevice GD32F303 (Wooting 60HE+) on `gd32f303-pac`: clocks, GPIO, interrupts with type-level binding, the embassy-time driver and executors, the backup-register mailbox of the factory bootloader, and the USB full-speed device controller (`usb`).
+Chip HAL for the GigaDevice GD32F303 (Wooting 60HE+) on `gd32f303-pac`: clocks (`rcu::ClockTree`), GPIO, interrupts with type-level binding, the embassy-time driver and executors, the I2C master of the LED bus and the SPI master of the NOR flash (both by DMA), the hall-sensor converter (`scan`, with the reference converter and oversampling), memory-mapped flash reads and the user option byte, the hardware diagnostics, the backup-register mailbox of the factory bootloader, and the USB full-speed device controller (`usb`).
 
 ## USB
 

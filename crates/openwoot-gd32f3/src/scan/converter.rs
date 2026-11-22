@@ -11,10 +11,10 @@ use cortex_m::peripheral::NVIC;
 use openwoot::scan::{self, Sample};
 
 use super::{
-    adc::{self, MAX_RANKS},
-    conversion::{Conversion, InterruptHandler},
+    Conversion, InterruptHandler, Peripherals, Wiring,
+    adc::{self, MAX_RANKS, Trigger},
     transport, trigger,
-    wiring::{ADDRESS_LINES, Peripherals, Wiring},
+    wiring::ADDRESS_LINES,
 };
 use crate::{
     gpio::{Level, Levels, Line},
@@ -89,9 +89,10 @@ impl<const INPUTS: usize> Converter<INPUTS> {
 
     #[inline(always)]
     fn convert_at_rank(&self, rank: u8, input: u8) {
-        if let Some(&channel) = self.channels.get(usize::from(input)) {
-            adc::convert_at_rank(rank, channel, self.sample_time);
-        }
+        let Some(&channel) = self.channels.get(usize::from(input)) else {
+            return;
+        };
+        adc::convert_at_rank(rank, channel, self.sample_time);
     }
 
     fn reference_sequence(&self, length: usize) {
@@ -187,7 +188,7 @@ impl<const INPUTS: usize> scan::Converter for Converter<INPUTS> {
         trigger::set_counter(0);
         trigger::set_compare(u32::from(delay_us));
         adc::clear_trigger();
-        adc::set_trigger(adc::Trigger::Timer);
+        adc::set_trigger(Trigger::Timer);
         trigger::start();
     }
 
@@ -200,13 +201,13 @@ impl<const INPUTS: usize> scan::Converter for Converter<INPUTS> {
             trigger::set_counter(u32::from(compare).wrapping_sub(1));
         }
         trigger::set_compare(u32::from(compare));
-        adc::select_trigger(adc::Trigger::Timer);
+        adc::select_trigger(Trigger::Timer);
         trigger::start();
     }
 
     fn end_cycle(&mut self, period_us: u16) {
         adc::clear_trigger();
-        adc::set_trigger(adc::Trigger::Software);
+        adc::set_trigger(Trigger::Software);
         trigger::clear_flags();
         trigger::set_counter(0);
         trigger::set_compare(u32::from(period_us));

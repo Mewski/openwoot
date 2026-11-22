@@ -65,8 +65,8 @@ pub(crate) fn microseconds() -> u16 {
 fn registers() -> &'static pac::timer1::RegisterBlock {
     // SAFETY: `start` consumed the `Timer4` peripheral; from then on only the time driver writes
     // these registers, and every read-modify-write runs inside a critical section or in the timer
-    // interrupt, which the critical section masks. The scan only reads the counter, which changes
-    // nothing.
+    // interrupt, which the critical section masks. `microseconds` only reads the counter, which
+    // changes nothing.
     unsafe { &*pac::Timer4::ptr() }
 }
 

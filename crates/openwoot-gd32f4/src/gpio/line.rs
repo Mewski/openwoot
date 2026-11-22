@@ -72,6 +72,7 @@ impl Line {
         write_bits(registers::port(self.port).bc(), self.mask());
     }
 
+    #[inline(always)]
     const fn mask(self) -> u32 {
         1 << self.pin
     }

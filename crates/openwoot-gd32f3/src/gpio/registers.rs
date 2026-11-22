@@ -1,7 +1,6 @@
 #![allow(
     clippy::inline_always,
-    reason = "the port accessor is inlined into the scan interrupt as the C HAL's always_inline \
-              helpers"
+    reason = "the port accessor runs inside the scan interrupt as the C HAL's always_inline helpers"
 )]
 
 use super::Level;
@@ -52,10 +51,10 @@ pub(super) fn set_mode(port: &pac::gpioa::RegisterBlock, pin: u8, nibble: u32) {
     }
 }
 
-pub(super) const fn set_reset(pin: u8, level: Level) -> u32 {
+pub(super) const fn set_reset(index: u8, level: Level) -> u32 {
     match level {
-        Level::High => 1 << pin,
-        Level::Low => 1 << (pin + RESET_SHIFT),
+        Level::High => 1 << index,
+        Level::Low => 1 << (index + RESET_SHIFT),
     }
 }
 
@@ -67,6 +66,7 @@ pub(super) const fn level_of(register: u32, index: u8) -> Level {
     }
 }
 
+#[inline(always)]
 const fn port_offset(index: u8) -> usize {
     index as usize * PORT_STRIDE
 }
@@ -99,7 +99,7 @@ mod tests {
     }
 
     #[test]
-    fn high_levels_set_and_low_levels_reset() {
+    fn low_levels_are_written_through_the_reset_half() {
         assert_eq!(set_reset(3, Level::High), 0x0008);
         assert_eq!(set_reset(3, Level::Low), 0x0008 << 16);
     }

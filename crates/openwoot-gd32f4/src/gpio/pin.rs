@@ -83,7 +83,7 @@ impl<const PORT: char, const INDEX: u8, Mode> Pin<PORT, INDEX, Mode> {
     #[must_use]
     pub fn into_input(self, pull: Pull) -> Pin<PORT, INDEX, Input> {
         critical_section::with(|_| {
-            let port = block::<PORT>();
+            let port = port::<PORT>();
             modify_two_bit_field(port.pud(), INDEX, pull.field());
             modify_two_bit_field(port.ctl(), INDEX, MODE_INPUT);
         });
@@ -100,7 +100,7 @@ impl<const PORT: char, const INDEX: u8, Mode> Pin<PORT, INDEX, Mode> {
         let mut pin = Pin::new();
         pin.set_level(level);
         critical_section::with(|_| {
-            let port = block::<PORT>();
+            let port = port::<PORT>();
             modify_output_type(port, INDEX, output_type);
             modify_two_bit_field(port.ospd(), INDEX, speed.field());
             modify_two_bit_field(port.pud(), INDEX, Pull::None.field());
@@ -118,7 +118,7 @@ impl<const PORT: char, const INDEX: u8, Mode> Pin<PORT, INDEX, Mode> {
     ) -> Pin<PORT, INDEX, Alternate<FUNCTION>> {
         const { assert!(FUNCTION < 16) };
         critical_section::with(|_| {
-            let port = block::<PORT>();
+            let port = port::<PORT>();
             if INDEX < 8 {
                 modify_bits(port.afsel0(), |bits| alternate_field(bits, INDEX, FUNCTION));
             } else {
@@ -137,7 +137,7 @@ impl<const PORT: char, const INDEX: u8, Mode> Pin<PORT, INDEX, Mode> {
     #[must_use]
     pub fn into_analog(self) -> Pin<PORT, INDEX, Analog> {
         critical_section::with(|_| {
-            let port = block::<PORT>();
+            let port = port::<PORT>();
             modify_two_bit_field(port.pud(), INDEX, Pull::None.field());
             modify_two_bit_field(port.ctl(), INDEX, MODE_ANALOG);
         });
@@ -152,19 +152,19 @@ impl<const PORT: char, const INDEX: u8, Mode> Pin<PORT, INDEX, Mode> {
 
 impl<const PORT: char, const INDEX: u8> Pin<PORT, INDEX, Output> {
     pub fn set_level(&mut self, level: Level) {
-        write_bits(block::<PORT>().bop(), set_reset(INDEX, level));
+        write_bits(port::<PORT>().bop(), set_reset(INDEX, level));
     }
 
     #[must_use]
     pub fn output_level(&self) -> Level {
-        level_of(read_bits(block::<PORT>().octl()), INDEX)
+        level_of(read_bits(port::<PORT>().octl()), INDEX)
     }
 }
 
 impl<const PORT: char, const INDEX: u8> Pin<PORT, INDEX, Input> {
     #[must_use]
     pub fn level(&self) -> Level {
-        level_of(read_bits(block::<PORT>().istat()), INDEX)
+        level_of(read_bits(port::<PORT>().istat()), INDEX)
     }
 }
 
@@ -204,7 +204,7 @@ impl<const PORT: char, const INDEX: u8> InputPin for Pin<PORT, INDEX, Input> {
     }
 }
 
-fn block<const PORT: char>() -> &'static pac::gpioa::RegisterBlock {
+fn port<const PORT: char>() -> &'static pac::gpioa::RegisterBlock {
     registers::port(port_index(PORT))
 }
 

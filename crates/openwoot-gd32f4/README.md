@@ -1,6 +1,6 @@
 # openwoot-gd32f4
 
-Chip HAL for the GigaDevice GD32F425 (Wooting 80HE) on `gd32f425-pac`: clocks, GPIO, interrupts with type-level binding, the embassy-time driver and executors, the backup-register mailbox of the factory bootloader, and the USB high-speed controller (`usb`).
+Chip HAL for the GigaDevice GD32F425 (Wooting 80HE) on `gd32f425-pac`: clocks (`rcu::ClockTree`), GPIO, interrupts with type-level binding, the embassy-time driver and executors, the I2C master of the LED bus and the SPI master of the NOR flash (both by DMA), the hall-sensor converter (`scan`), memory-mapped flash reads, the hardware diagnostics, the backup-register mailbox of the factory bootloader, and the USB high-speed controller (`usb`).
 
 ## USB
 
