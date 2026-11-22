@@ -1,4 +1,4 @@
-use super::{Curve, SwitchType};
+use super::{Curve, SwitchModel};
 
 const TRAVEL_MAX: u16 = 4095;
 const MIN_BOTTOM_DISTANCE: u32 = 50;
@@ -6,7 +6,7 @@ const TRAVEL_PER_TENTH_MILLIMETRE_UNITS: u32 = 0x1FFE;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Switch {
-    kind: SwitchType,
+    kind: SwitchModel,
     travel_offset: Option<u8>,
     curve: Curve,
     curve_end: u32,
@@ -18,7 +18,7 @@ impl Switch {
     pub(crate) const REST_MARGIN: u16 = 5;
 
     #[must_use]
-    pub fn new(kind: SwitchType, travel_offset: Option<u8>) -> Self {
+    pub fn new(kind: SwitchModel, travel_offset: Option<u8>) -> Self {
         let curve = kind.curve();
         let strength = u32::from(kind.learn_strength());
         let (curve_end, learn_strength) = match travel_offset {
@@ -41,7 +41,7 @@ impl Switch {
     }
 
     #[must_use]
-    pub const fn kind(&self) -> SwitchType {
+    pub const fn kind(&self) -> SwitchModel {
         self.kind
     }
 

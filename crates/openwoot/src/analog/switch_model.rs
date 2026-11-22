@@ -1,9 +1,9 @@
 use super::Curve;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct SwitchType(u8);
+pub struct SwitchModel(u8);
 
-impl SwitchType {
+impl SwitchModel {
     pub const COUNT: u8 = 49;
     pub const DEFAULT: Self = Self(0);
 
@@ -63,7 +63,7 @@ struct Specification {
     nominal_bottom: u16,
 }
 
-const SPECIFICATIONS: [Specification; SwitchType::COUNT as usize] = [
+const SPECIFICATIONS: [Specification; SwitchModel::COUNT as usize] = [
     Specification {
         travel: 80,
         group: 0,

@@ -24,7 +24,7 @@ pub enum Scope {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Key(u16);
+pub struct RecordKey(u16);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stored<'a> {
@@ -39,7 +39,7 @@ pub(super) struct Encoder<F> {
     pub(super) encode: F,
 }
 
-impl Key {
+impl RecordKey {
     #[must_use]
     pub const fn new(scope: Scope, item: u8) -> Self {
         let slot = match scope {
@@ -80,7 +80,7 @@ impl Stored<'_> {
     }
 }
 
-impl map::Key for Key {
+impl map::Key for RecordKey {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         <u16 as map::Key>::serialize_into(&self.0, buffer)
     }
@@ -179,12 +179,12 @@ mod tests {
     }
 
     #[test]
-    fn keys_hold_the_slot_in_the_high_byte_and_the_item_in_the_low_byte() {
-        let global = Key::of::<Brightness>(Scope::Global);
-        assert_eq!(global, Key(0xFF07));
+    fn record_keys_hold_the_slot_in_the_high_byte_and_the_item_in_the_low_byte() {
+        let global = RecordKey::of::<Brightness>(Scope::Global);
+        assert_eq!(global, RecordKey(0xFF07));
         assert_eq!((global.scope(), global.item()), (Scope::Global, 7));
-        let profile = Key::new(Scope::Profile(3), 0x21);
-        assert_eq!(profile, Key(0x0321));
+        let profile = RecordKey::new(Scope::Profile(3), 0x21);
+        assert_eq!(profile, RecordKey(0x0321));
         assert_eq!(profile.scope(), Scope::Profile(3));
     }
 
