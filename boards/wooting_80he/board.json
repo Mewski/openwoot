@@ -1,0 +1,6 @@
+{
+  "name": "Wooting 80HE",
+  "usb": { "vendor_id": "0x31E3", "product_id_base": "0x1400" },
+  "image": { "base": "0x08008000", "end": "0x080FE000", "stack_top": "0x20030000", "vectors": 98 },
+  "update": { "supported": true, "product_id": "0x140F", "block_size": 256 }
+}
