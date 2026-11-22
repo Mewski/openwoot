@@ -3,7 +3,7 @@ use core::convert::Infallible;
 use embassy_futures::block_on;
 use embedded_hal_async::spi::{ErrorType, Operation, SpiDevice};
 use embedded_storage_async::nor_flash::{NorFlash, ReadNorFlash};
-use openwoot_drivers::{GIGADEVICE, NorError, NorIdentification, SpiNor, WINBOND};
+use openwoot_drivers::spi_nor::{Error, GIGADEVICE, Identification, SpiNor, WINBOND};
 
 const CAPACITY: u32 = 64 * 1024;
 const BUSY_POLLS: u32 = 3;
@@ -194,7 +194,7 @@ fn identification_and_unique_id_use_the_c_command_bytes() {
     let id = block_on(flash.identification()).unwrap();
     assert_eq!(
         id,
-        NorIdentification {
+        Identification {
             manufacturer: WINBOND,
             device: 0x16
         }
@@ -209,24 +209,21 @@ fn misaligned_and_outside_accesses_are_refused_without_bus_traffic() {
     let mut flash = SpiNor::new(Chip::new(), CAPACITY);
     assert_eq!(
         block_on(flash.write(0x101, &[0; 4])),
-        Err(NorError::NotAligned)
+        Err(Error::NotAligned)
     );
     assert_eq!(
         block_on(flash.write(0x100, &[0; 3])),
-        Err(NorError::NotAligned)
+        Err(Error::NotAligned)
     );
-    assert_eq!(
-        block_on(flash.erase(0x800, 0x1000)),
-        Err(NorError::NotAligned)
-    );
+    assert_eq!(block_on(flash.erase(0x800, 0x1000)), Err(Error::NotAligned));
     assert_eq!(
         block_on(flash.erase(CAPACITY, CAPACITY + 0x1000)),
-        Err(NorError::OutOfBounds)
+        Err(Error::OutOfBounds)
     );
     let mut buffer = [0; 8];
     assert_eq!(
         block_on(flash.read(CAPACITY - 4, &mut buffer)),
-        Err(NorError::OutOfBounds)
+        Err(Error::OutOfBounds)
     );
     assert_eq!(flash.release().commands, Vec::<Vec<u8>>::new());
 }

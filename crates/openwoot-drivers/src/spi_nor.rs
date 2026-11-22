@@ -15,12 +15,12 @@ const STATUS_BUSY: u8 = 1 << 0;
 const DUMMY: u8 = 0xFF;
 const UNIQUE_ID_DUMMY_BYTES: usize = 4;
 
-pub const NOR_PAGE_SIZE: u32 = 256;
-pub const NOR_SECTOR_SIZE: u32 = 4096;
+pub const PAGE_SIZE: u32 = 256;
+pub const SECTOR_SIZE: u32 = 4096;
 pub const WINBOND: u8 = 0xEF;
 pub const GIGADEVICE: u8 = 0xC8;
 pub const DEVICE_64_MBIT: u8 = 0x16;
-pub const NOR_UNIQUE_ID_LEN: usize = 8;
+pub const UNIQUE_ID_LEN: usize = 8;
 
 #[derive(Debug)]
 pub struct SpiNor<D> {
@@ -29,13 +29,13 @@ pub struct SpiNor<D> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct NorIdentification {
+pub struct Identification {
     pub manufacturer: u8,
     pub device: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum NorError<E> {
+pub enum Error<E> {
     #[error("could not transfer over the spi bus: {0:?}")]
     Bus(E),
     #[error("the flash access is not aligned to the program or erase size")]
@@ -44,7 +44,7 @@ pub enum NorError<E> {
     OutOfBounds,
 }
 
-impl NorIdentification {
+impl Identification {
     #[must_use]
     pub const fn is_known(self) -> bool {
         matches!(self.manufacturer, WINBOND | GIGADEVICE) && self.device == DEVICE_64_MBIT
@@ -61,7 +61,7 @@ impl<D: SpiDevice> SpiNor<D> {
         self.device
     }
 
-    pub async fn identification(&mut self) -> Result<NorIdentification, NorError<D::Error>> {
+    pub async fn identification(&mut self) -> Result<Identification, Error<D::Error>> {
         self.wait_ready().await?;
         let mut id = [0; 2];
         self.device
@@ -70,17 +70,17 @@ impl<D: SpiDevice> SpiNor<D> {
                 Operation::Read(&mut id),
             ])
             .await
-            .map_err(NorError::Bus)?;
+            .map_err(Error::Bus)?;
         let [manufacturer, device] = id;
-        Ok(NorIdentification {
+        Ok(Identification {
             manufacturer,
             device,
         })
     }
 
-    pub async fn unique_id(&mut self) -> Result<[u8; NOR_UNIQUE_ID_LEN], NorError<D::Error>> {
+    pub async fn unique_id(&mut self) -> Result<[u8; UNIQUE_ID_LEN], Error<D::Error>> {
         self.wait_ready().await?;
-        let mut id = [0; NOR_UNIQUE_ID_LEN];
+        let mut id = [0; UNIQUE_ID_LEN];
         self.device
             .transaction(&mut [
                 Operation::Write(&command(UNIQUE_ID, 0)),
@@ -88,18 +88,18 @@ impl<D: SpiDevice> SpiNor<D> {
                 Operation::Read(&mut id),
             ])
             .await
-            .map_err(NorError::Bus)?;
+            .map_err(Error::Bus)?;
         Ok(id)
     }
 
-    pub async fn wait_ready(&mut self) -> Result<(), NorError<D::Error>> {
+    pub async fn wait_ready(&mut self) -> Result<(), Error<D::Error>> {
         while self.status().await? & STATUS_BUSY != 0 {
             yield_now().await;
         }
         Ok(())
     }
 
-    async fn status(&mut self) -> Result<u8, NorError<D::Error>> {
+    async fn status(&mut self) -> Result<u8, Error<D::Error>> {
         let mut status = [0];
         self.device
             .transaction(&mut [
@@ -107,19 +107,16 @@ impl<D: SpiDevice> SpiNor<D> {
                 Operation::Read(&mut status),
             ])
             .await
-            .map_err(NorError::Bus)?;
+            .map_err(Error::Bus)?;
         let [status] = status;
         Ok(status)
     }
 
-    async fn enable_write(&mut self) -> Result<(), NorError<D::Error>> {
-        self.device
-            .write(&[WRITE_ENABLE])
-            .await
-            .map_err(NorError::Bus)
+    async fn enable_write(&mut self) -> Result<(), Error<D::Error>> {
+        self.device.write(&[WRITE_ENABLE]).await.map_err(Error::Bus)
     }
 
-    async fn program_page(&mut self, address: u32, bytes: &[u8]) -> Result<(), NorError<D::Error>> {
+    async fn program_page(&mut self, address: u32, bytes: &[u8]) -> Result<(), Error<D::Error>> {
         self.wait_ready().await?;
         self.enable_write().await?;
         self.device
@@ -128,22 +125,22 @@ impl<D: SpiDevice> SpiNor<D> {
                 Operation::Write(bytes),
             ])
             .await
-            .map_err(NorError::Bus)?;
+            .map_err(Error::Bus)?;
         self.wait_ready().await
     }
 
-    async fn erase_sector(&mut self, address: u32) -> Result<(), NorError<D::Error>> {
+    async fn erase_sector(&mut self, address: u32) -> Result<(), Error<D::Error>> {
         self.wait_ready().await?;
         self.enable_write().await?;
         self.device
             .write(&command(SECTOR_ERASE, address))
             .await
-            .map_err(NorError::Bus)?;
+            .map_err(Error::Bus)?;
         self.wait_ready().await
     }
 }
 
-impl<E: core::fmt::Debug> NorFlashError for NorError<E> {
+impl<E: core::fmt::Debug> NorFlashError for Error<E> {
     fn kind(&self) -> NorFlashErrorKind {
         match self {
             Self::Bus(_) => NorFlashErrorKind::Other,
@@ -154,7 +151,7 @@ impl<E: core::fmt::Debug> NorFlashError for NorError<E> {
 }
 
 impl<D: SpiDevice> ErrorType for SpiNor<D> {
-    type Error = NorError<D::Error>;
+    type Error = Error<D::Error>;
 }
 
 impl<D: SpiDevice> ReadNorFlash for SpiNor<D> {
@@ -173,7 +170,7 @@ impl<D: SpiDevice> ReadNorFlash for SpiNor<D> {
                 Operation::Read(bytes),
             ])
             .await
-            .map_err(NorError::Bus)
+            .map_err(Error::Bus)
     }
 
     fn capacity(&self) -> usize {
@@ -182,18 +179,18 @@ impl<D: SpiDevice> ReadNorFlash for SpiNor<D> {
 }
 
 impl<D: SpiDevice> NorFlash for SpiNor<D> {
-    const ERASE_SIZE: usize = NOR_SECTOR_SIZE as usize;
+    const ERASE_SIZE: usize = SECTOR_SIZE as usize;
     const WRITE_SIZE: usize = 4;
 
     async fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
         if to < from {
-            return Err(NorError::OutOfBounds);
+            return Err(Error::OutOfBounds);
         }
-        self.check(from, (to - from) as usize, NOR_SECTOR_SIZE)?;
+        self.check(from, (to - from) as usize, SECTOR_SIZE)?;
         let mut address = from;
         while address < to {
             self.erase_sector(address).await?;
-            address += NOR_SECTOR_SIZE;
+            address += SECTOR_SIZE;
         }
         Ok(())
     }
@@ -203,7 +200,7 @@ impl<D: SpiDevice> NorFlash for SpiNor<D> {
         let mut address = offset;
         let mut rest = bytes;
         while !rest.is_empty() {
-            let room = NOR_PAGE_SIZE - address % NOR_PAGE_SIZE;
+            let room = PAGE_SIZE - address % PAGE_SIZE;
             let (page, next) = rest.split_at(rest.len().min(room as usize));
             self.program_page(address, page).await?;
             address += room;
@@ -221,14 +218,14 @@ const fn command(opcode: u8, address: u32) -> [u8; 4] {
 }
 
 impl<D> SpiNor<D> {
-    fn check<E>(&self, offset: u32, len: usize, alignment: u32) -> Result<(), NorError<E>> {
-        let len = u32::try_from(len).map_err(|_| NorError::OutOfBounds)?;
+    fn check<E>(&self, offset: u32, len: usize, alignment: u32) -> Result<(), Error<E>> {
+        let len = u32::try_from(len).map_err(|_| Error::OutOfBounds)?;
         if !offset.is_multiple_of(alignment) || !len.is_multiple_of(alignment) {
-            return Err(NorError::NotAligned);
+            return Err(Error::NotAligned);
         }
         match offset.checked_add(len) {
             Some(end) if end <= self.capacity => Ok(()),
-            _ => Err(NorError::OutOfBounds),
+            _ => Err(Error::OutOfBounds),
         }
     }
 }
@@ -251,7 +248,7 @@ mod tests {
             (WINBOND, 0x15, false),
             (0x20, DEVICE_64_MBIT, false),
         ] {
-            let id = NorIdentification {
+            let id = Identification {
                 manufacturer,
                 device,
             };

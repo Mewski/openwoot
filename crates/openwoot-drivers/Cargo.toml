@@ -13,8 +13,5 @@ embedded-hal-async = { workspace = true }
 embedded-storage-async = { workspace = true }
 thiserror = { workspace = true }
 
-[dev-dependencies]
-embassy-futures = { workspace = true }
-
 [lints]
 workspace = true
