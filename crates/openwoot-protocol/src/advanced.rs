@@ -3,7 +3,7 @@ use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::{Capabilities, Invalid, Validate},
+    configuration::{Capabilities, Invalid, Validate},
     keys::{Action, Distance, Index, Layer},
 };
 
@@ -95,12 +95,12 @@ impl ModTap {
     pub const DEFAULT_HOLD_TIME_MS: u16 = 200;
 }
 
-impl Key {
-    pub fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
-        capabilities.check_key(self.key)?;
+impl Validate for Key {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        self.key.validate(capabilities)?;
         match &self.behaviour {
             Behaviour::DynamicKeystroke(keystroke) => {
-                keystroke.bottom_out.map_or(Ok(()), Distance::validate)?;
+                keystroke.bottom_out.validate(capabilities)?;
                 keystroke
                     .strokes
                     .iter()
@@ -116,7 +116,7 @@ impl Key {
             Behaviour::Toggle(action) => action.validate(capabilities),
             Behaviour::DepthPriority(DepthPriority { other, .. })
             | Behaviour::Socd(Socd { other, .. }) => {
-                capabilities.check_key(*other)?;
+                other.validate(capabilities)?;
                 if *other == self.key {
                     Err(Invalid::KeyPairedWithItself(other.get()))
                 } else {

@@ -2,7 +2,7 @@ use heapless::Vec;
 use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Capabilities, Invalid, MAX_KEYS, Validate};
+use crate::configuration::{Capabilities, Invalid, MAX_KEYS, Validate};
 
 pub const MAX_MODELS: usize = 64;
 
@@ -26,8 +26,8 @@ pub struct Model {
     pub group: u8,
 }
 
-impl Switch {
-    pub fn validate(self, capabilities: &Capabilities) -> Result<(), Invalid> {
+impl Validate for Switch {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
         if self.model < capabilities.switch_models {
             Ok(())
         } else {

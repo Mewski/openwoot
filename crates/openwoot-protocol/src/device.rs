@@ -1,7 +1,7 @@
 use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Capabilities, Invalid, Validate};
+use crate::configuration::{Capabilities, Invalid, Validate};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
 pub struct Settings {

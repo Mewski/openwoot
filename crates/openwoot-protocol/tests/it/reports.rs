@@ -42,7 +42,7 @@ fn stock_traffic_is_foreign() {
         report::parse(&stock),
         Ok(Contents::Foreign {
             report_id: 1,
-            data: &stock[1..]
+            payload: &stock[1..]
         })
     );
     assert_eq!(decode_message(&stock), Ok(None));

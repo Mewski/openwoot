@@ -15,19 +15,19 @@ const LARGEST: usize = match SIZES {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Contents<'a> {
     Frame(&'a [u8]),
-    Foreign { report_id: u8, data: &'a [u8] },
+    Foreign { report_id: u8, payload: &'a [u8] },
 }
 
 pub fn parse(report: &[u8]) -> Result<Contents<'_>, Error> {
-    let (&report_id, data) = report.split_first().ok_or(Error::MalformedReport)?;
-    match data {
+    let (&report_id, payload) = report.split_first().ok_or(Error::MalformedReport)?;
+    match payload {
         [first, second, low, high, rest @ ..] if [*first, *second] == MAGIC => {
             let frame_len = usize::from(u16::from_le_bytes([*low, *high]));
             rest.get(..frame_len)
                 .map(Contents::Frame)
                 .ok_or(Error::MalformedReport)
         }
-        _ => Ok(Contents::Foreign { report_id, data }),
+        _ => Ok(Contents::Foreign { report_id, payload }),
     }
 }
 

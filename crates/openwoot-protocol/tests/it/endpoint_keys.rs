@@ -212,6 +212,16 @@ const PINNED_KEYS: &[(&str, u64, u64)] = &[
         0xbef9_06c9_21c8_bcea,
     ),
     (
+        "openwoot/key-reports/set",
+        0x206f_5cdb_be83_e0a9,
+        0x6bec_2089_5560_99b2,
+    ),
+    (
+        "openwoot/gamepad-detection/set",
+        0x0c5c_4407_d920_ae6a,
+        0xe750_83d8_df2e_4dd4,
+    ),
+    (
         "openwoot/save",
         0xc14f_75e9_d701_b350,
         0x7cb6_efc6_54c3_4d37,

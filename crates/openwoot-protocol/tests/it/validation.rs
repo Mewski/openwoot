@@ -1,6 +1,6 @@
 use openwoot_protocol::{
     advanced::{self, Behaviour, Interrupt, ModTap, Resolution, Socd},
-    config::{Invalid, MAX_KEYS, Rejection, Validate},
+    configuration::{Invalid, MAX_KEYS, Rejection, Validate},
     device::Layout,
     keys::{
         self, Action, Distance, Function, Index, Layer, Override, Position, RapidTrigger,

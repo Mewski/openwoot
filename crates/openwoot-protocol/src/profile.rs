@@ -3,7 +3,7 @@ use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::{Capabilities, Invalid, Validate},
+    configuration::{Capabilities, Invalid, Validate},
     keys::Layer,
     lighting::Rgb,
 };
@@ -58,13 +58,17 @@ impl Slot {
 
 impl Validate for Slot {
     fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
-        capabilities.check_profile(*self)
+        if self.0 < capabilities.profiles {
+            Ok(())
+        } else {
+            Err(Invalid::ProfileOutsideRange(self.0))
+        }
     }
 }
 
 impl Validate for LayerRef {
     fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
-        capabilities.check_profile(self.profile)
+        self.profile.validate(capabilities)
     }
 }
 
@@ -76,14 +80,14 @@ impl Validate for Info {
 
 impl<T: Validate> Validate for Change<T> {
     fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
-        capabilities.check_profile(self.profile)?;
+        self.profile.validate(capabilities)?;
         self.value.validate(capabilities)
     }
 }
 
 impl<T: Validate> Validate for LayerChange<T> {
     fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
-        capabilities.check_profile(self.profile)?;
+        self.profile.validate(capabilities)?;
         self.value.validate(capabilities)
     }
 }

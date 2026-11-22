@@ -3,7 +3,7 @@ use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::{Capabilities, Invalid, MAX_KEYS, Validate},
+    configuration::{Capabilities, Invalid, MAX_KEYS, Validate},
     gamepad::Control,
     profile::Slot,
 };
@@ -150,24 +150,6 @@ impl Layer {
 impl Action {
     pub const CONSUMER_USAGES: core::ops::RangeInclusive<u16> = 0x0001..=0x02A2;
     pub const KEYBOARD_USAGES: [core::ops::RangeInclusive<u8>; 2] = [0x04..=0xDD, 0xE0..=0xE7];
-
-    pub fn validate(self, capabilities: &Capabilities) -> Result<(), Invalid> {
-        match self {
-            Self::Keyboard(usage)
-                if !Self::KEYBOARD_USAGES
-                    .iter()
-                    .any(|usages| usages.contains(&usage)) =>
-            {
-                Err(Invalid::KeyboardUsage(usage))
-            }
-            Self::Consumer(usage) if !Self::CONSUMER_USAGES.contains(&usage) => {
-                Err(Invalid::ConsumerUsage(usage))
-            }
-            Self::Layer(Layer::Base) => Err(Invalid::MomentaryBaseLayer),
-            Self::Function(Function::Profile(profile)) => capabilities.check_profile(profile),
-            _ => Ok(()),
-        }
-    }
 }
 
 impl Distance {
@@ -182,33 +164,6 @@ impl Distance {
     pub const fn fraction(self) -> u16 {
         self.0
     }
-
-    pub fn validate(self) -> Result<(), Invalid> {
-        if self.0 == 0 {
-            Err(Invalid::ZeroDistance)
-        } else {
-            Ok(())
-        }
-    }
-}
-
-impl RapidTrigger {
-    pub fn validate(&self) -> Result<(), Invalid> {
-        self.press.validate()?;
-        self.release.map_or(Ok(()), Distance::validate)
-    }
-}
-
-impl Override {
-    pub fn validate(&self) -> Result<(), Invalid> {
-        self.actuation.map_or(Ok(()), Distance::validate)?;
-        match &self.rapid_trigger {
-            RapidTriggerOverride::With(rapid_trigger) => rapid_trigger.validate(),
-            RapidTriggerOverride::Profile
-            | RapidTriggerOverride::Off
-            | RapidTriggerOverride::On => Ok(()),
-        }
-    }
 }
 
 impl TapDuration {
@@ -218,6 +173,78 @@ impl TapDuration {
             Self::OneMillisecond => 1,
             Self::TwentyMilliseconds => 20,
             Self::FortyMilliseconds => 40,
+        }
+    }
+}
+
+impl Validate for Index {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        if usize::from(self.0) < capabilities.key_count() {
+            Ok(())
+        } else {
+            Err(Invalid::KeyOutsideMatrix(self.0))
+        }
+    }
+}
+
+impl Validate for Position {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        if self.row < capabilities.key_rows && self.column < capabilities.key_columns {
+            Ok(())
+        } else {
+            Err(Invalid::PositionOutsideMatrix {
+                row: self.row,
+                column: self.column,
+            })
+        }
+    }
+}
+
+impl Validate for Action {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        match *self {
+            Self::Keyboard(usage)
+                if !Self::KEYBOARD_USAGES
+                    .iter()
+                    .any(|usages| usages.contains(&usage)) =>
+            {
+                Err(Invalid::KeyboardUsage(usage))
+            }
+            Self::Consumer(usage) if !Self::CONSUMER_USAGES.contains(&usage) => {
+                Err(Invalid::ConsumerUsage(usage))
+            }
+            Self::Layer(Layer::Base) => Err(Invalid::MomentaryBaseLayer),
+            Self::Function(Function::Profile(profile)) => profile.validate(capabilities),
+            _ => Ok(()),
+        }
+    }
+}
+
+impl Validate for Distance {
+    fn validate(&self, _: &Capabilities) -> Result<(), Invalid> {
+        if self.0 == 0 {
+            Err(Invalid::ZeroDistance)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Validate for RapidTrigger {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        self.press.validate(capabilities)?;
+        self.release.validate(capabilities)
+    }
+}
+
+impl Validate for Override {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        self.actuation.validate(capabilities)?;
+        match &self.rapid_trigger {
+            RapidTriggerOverride::With(rapid_trigger) => rapid_trigger.validate(capabilities),
+            RapidTriggerOverride::Profile
+            | RapidTriggerOverride::Off
+            | RapidTriggerOverride::On => Ok(()),
         }
     }
 }
@@ -233,14 +260,15 @@ impl Validate for Keymap {
 impl Validate for Overrides {
     fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
         capabilities.check_key_count(self.len())?;
-        self.iter().try_for_each(Override::validate)
+        self.iter()
+            .try_for_each(|entry| entry.validate(capabilities))
     }
 }
 
 impl Validate for Settings {
-    fn validate(&self, _: &Capabilities) -> Result<(), Invalid> {
-        self.actuation.validate()?;
-        self.rapid_trigger.validate()
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        self.actuation.validate(capabilities)?;
+        self.rapid_trigger.validate(capabilities)
     }
 }
 

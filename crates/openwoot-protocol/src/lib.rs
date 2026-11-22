@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod advanced;
-pub mod config;
+pub mod configuration;
 pub mod device;
 pub mod diagnostics;
 pub mod endpoints;

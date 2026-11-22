@@ -3,9 +3,10 @@ use crate::{Error, report::smallest_holding};
 pub const MAGIC: [u8; 2] = [0xD1, 0xDA];
 pub const FEATURE_REPORT_ID: u8 = 1;
 pub const REQUEST_LEN: usize = 7;
-pub const REPLY_HEADER_LEN: usize = 6;
 pub const COMMAND_COUNT: u8 = 89;
 pub const FIRST_CURRENT_COMMAND: u8 = 38;
+
+const REPLY_HEADER_LEN: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -81,9 +82,9 @@ impl Request {
         }
     }
 
-    pub fn parse(data: &[u8]) -> Result<Self, WrongMagic> {
+    pub fn parse(payload: &[u8]) -> Result<Self, WrongMagic> {
         let mut request = [0; REQUEST_LEN];
-        for (byte, received) in request.iter_mut().zip(data) {
+        for (byte, received) in request.iter_mut().zip(payload) {
             *byte = *received;
         }
         let [first, second, command, argument @ ..] = request;

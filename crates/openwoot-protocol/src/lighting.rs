@@ -2,7 +2,7 @@ use heapless::Vec;
 use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Capabilities, Invalid, MAX_KEYS, Validate};
+use crate::configuration::{Capabilities, Invalid, MAX_KEYS, Validate};
 
 pub const MAX_EFFECTS: usize = 6;
 
@@ -204,8 +204,8 @@ impl Color {
     }
 }
 
-impl Effect {
-    pub fn validate(&self) -> Result<(), Invalid> {
+impl Validate for Effect {
+    fn validate(&self, _: &Capabilities) -> Result<(), Invalid> {
         match self {
             Self::RainbowWave(RainbowWave { period, .. })
             | Self::HueCycle(HueCycle { period, .. }) => in_range(*period, 1, u8::MAX),
@@ -228,8 +228,10 @@ impl Effect {
 }
 
 impl Validate for Settings {
-    fn validate(&self, _: &Capabilities) -> Result<(), Invalid> {
-        self.effects.iter().try_for_each(Effect::validate)
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        self.effects
+            .iter()
+            .try_for_each(|effect| effect.validate(capabilities))
     }
 }
 

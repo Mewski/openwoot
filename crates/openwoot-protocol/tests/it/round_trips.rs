@@ -1,6 +1,6 @@
 use openwoot_protocol::{
     advanced::{self, Behaviour, DepthPriority, Interrupt, ModTap, Resolution, Socd},
-    config::{MAX_KEYS, Rejection},
+    configuration::{MAX_KEYS, Rejection},
     device::{self, Layout},
     endpoints::{
         GetAdvancedKeys, GetCapabilities, GetKeyColors, GetKeymap, GetLightbar, GetSwitches,

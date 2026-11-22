@@ -3,7 +3,7 @@ use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::{Capabilities, Invalid, Validate},
+    configuration::{Capabilities, Invalid, Validate},
     keys::Position,
     lighting::{Color, Rgb},
 };
@@ -199,8 +199,8 @@ pub struct HostSignal {
     pub value: f32,
 }
 
-impl Range {
-    pub fn validate(self, capabilities: &Capabilities) -> Result<(), Invalid> {
+impl Validate for Range {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
         if self.first <= self.last && self.last < capabilities.lightbar_leds {
             Ok(())
         } else {
@@ -213,15 +213,15 @@ impl Range {
     }
 }
 
-impl KeyRect {
-    pub fn validate(self, capabilities: &Capabilities) -> Result<(), Invalid> {
-        capabilities.check_position(self.first)?;
-        capabilities.check_position(self.last)
+impl Validate for KeyRect {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        self.first.validate(capabilities)?;
+        self.last.validate(capabilities)
     }
 }
 
-impl Target {
-    pub fn validate(self, capabilities: &Capabilities) -> Result<(), Invalid> {
+impl Validate for Target {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
         match self {
             Self::Lightbar(range) => range.validate(capabilities),
             Self::Keys(rect) => rect.validate(capabilities),
@@ -229,8 +229,8 @@ impl Target {
     }
 }
 
-impl Signal {
-    pub fn validate(self, capabilities: &Capabilities) -> Result<(), Invalid> {
+impl Validate for Signal {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
         match self {
             Self::Host(_) if !capabilities.host_signals => Err(Invalid::NoHostSignals),
             Self::Builtin(_) | Self::Host(_) => Ok(()),
@@ -238,8 +238,8 @@ impl Signal {
     }
 }
 
-impl Term {
-    pub fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+impl Validate for Term {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
         match self {
             Self::Trigger { signal, .. } => signal.validate(capabilities),
             Self::Compare(comparison) => {
@@ -253,8 +253,8 @@ impl Term {
     }
 }
 
-impl Effect {
-    pub fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+impl Validate for Effect {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
         match self {
             Self::Meter(meter) => {
                 meter.signal.validate(capabilities)?;
@@ -294,15 +294,18 @@ impl Effect {
     }
 }
 
-impl Entry {
-    pub fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
-        if let Some(condition) = &self.condition {
-            condition
-                .groups
-                .iter()
-                .flat_map(|group| group.terms.iter())
-                .try_for_each(|term| term.validate(capabilities))?;
-        }
+impl Validate for Condition {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        self.groups
+            .iter()
+            .flat_map(|group| group.terms.iter())
+            .try_for_each(|term| term.validate(capabilities))
+    }
+}
+
+impl Validate for Entry {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        self.condition.validate(capabilities)?;
         self.effect.validate(capabilities)
     }
 }

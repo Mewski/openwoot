@@ -1,6 +1,6 @@
 use openwoot_protocol::{
     advanced::{self, Behaviour, DynamicKeystroke, Stroke, StrokeEvent},
-    config::{Capabilities, Rejection},
+    configuration::{Capabilities, Rejection},
     device::Layout,
     gamepad::{self, CurvePoint, Normalization},
     heapless::Vec,

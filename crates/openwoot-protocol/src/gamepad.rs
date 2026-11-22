@@ -2,7 +2,7 @@ use heapless::Vec;
 use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Capabilities, Invalid, MAX_KEYS, Validate};
+use crate::configuration::{Capabilities, Invalid, MAX_KEYS, Validate};
 
 pub const CURVE_POINTS: usize = 4;
 
@@ -71,32 +71,6 @@ pub enum Normalization {
     #[default]
     Circular,
     Square,
-}
-
-impl Control {
-    #[must_use]
-    pub const fn is_analog(self) -> bool {
-        matches!(
-            self,
-            Self::LeftStickUp
-                | Self::LeftStickDown
-                | Self::LeftStickLeft
-                | Self::LeftStickRight
-                | Self::RightStickUp
-                | Self::RightStickDown
-                | Self::RightStickLeft
-                | Self::RightStickRight
-                | Self::LeftTrigger
-                | Self::RightTrigger
-                | Self::Accelerator
-                | Self::Rudder
-                | Self::Trigger
-                | Self::RxNegative
-                | Self::RxPositive
-                | Self::RyNegative
-                | Self::RyPositive
-        )
-    }
 }
 
 impl Validate for Mapping {

@@ -2,7 +2,7 @@ use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::{Capabilities, Invalid, Validate},
+    configuration::{Capabilities, Invalid, Validate},
     lighting::Idle,
 };
 
