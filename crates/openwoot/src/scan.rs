@@ -9,6 +9,7 @@
 
 mod converter;
 mod events;
+mod lower_rest;
 mod map;
 mod mode;
 mod position;
@@ -25,6 +26,7 @@ mod travel;
 
 pub use converter::{Converter, Sample};
 pub use events::{Event, Events};
+use lower_rest::LowerRest;
 pub use map::Map;
 pub use mode::Mode;
 use position::Grid;

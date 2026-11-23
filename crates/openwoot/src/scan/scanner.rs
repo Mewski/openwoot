@@ -306,6 +306,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
             settling: self.settling,
             rebound_filter: self.rebound_filter,
             mode: self.mode,
+            now_ms: self.now_ms as u16,
         }
     }
 

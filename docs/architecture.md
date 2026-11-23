@@ -98,8 +98,8 @@ instant (regular parallel mode) and both converters average 8 conversions.
 `openwoot::scan::Scanner` is the scan state machine: the start-up sweep (rest level and noise
 band of both scan modes per sensor), single-input and parallel scanning, the mode switch with its
 settling cycles, magnitude, dead band and hysteresis, and the per-key work of the interrupt
-(idle noise recalibration, bottom-out learning, release-rebound filter, travel). Features and
-strategies are types the board binds through `scan::Sensing`:
+(idle noise recalibration, lowering of the rest level, bottom-out learning, release-rebound
+filter, travel). Features and strategies are types the board binds through `scan::Sensing`:
 
 | Slot | Wooting 80HE | Wooting 60HE+ |
 | --- | --- | --- |
@@ -124,6 +124,15 @@ dropped. A rest level above the nominal bottom-out level gives a bottom level of
 single-input scan skips a multiplexer without keys. The parallel scan maps each converter rank
 through the board's multiplexer order (both boards use the identity). The noise statistics and
 the plateau mean use a separate multiply and add, not a fused multiply-add.
+
+A key held down during the start-up sweep is calibrated with the held level as its rest level.
+Each sensor therefore lowers its rest level on its own (`src/scan/lower_rest.rs`): when its
+filtered value stays at least 4 noise bands + 10 below the rest level, with a spread of at most
+one noise band, for at least 64 ms and 32 samples, the highest value of that window becomes the
+rest level of the current scan mode, the bottom level is derived again from it, and the bottom-out
+learning starts over, since the old rest level bounded what it learned. A single sample, a bounce
+or a shorter dip leaves the rest level alone, and the rest level is never raised this way; raising
+it is left to idle recalibration.
 
 ## Real time
 

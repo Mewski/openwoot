@@ -1,4 +1,4 @@
-use super::{Converter, Mode};
+use super::{Converter, LowerRest, Mode};
 use crate::analog::{
     BottomOut, Calibration, NoiseState, NoiseStatistics, Rebound, ReboundState, Switch, SwitchModel,
 };
@@ -19,6 +19,7 @@ pub(super) struct Context {
     pub(super) settling: bool,
     pub(super) rebound_filter: bool,
     pub(super) mode: Mode,
+    pub(super) now_ms: u16,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -45,6 +46,7 @@ pub struct Sensor<Noise> {
     reported: bool,
     unstable_windows: u8,
     still_samples: u16,
+    lower_rest: LowerRest,
 }
 
 impl<Noise: NoiseStatistics> Default for Sensor<Noise> {
@@ -77,6 +79,7 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
             reported: false,
             unstable_windows: 0,
             still_samples: 0,
+            lower_rest: LowerRest::new(),
         }
     }
 
@@ -153,6 +156,7 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
         self.rebound = Rebound::new();
         self.recalibrating = false;
         self.unstable_windows = 0;
+        self.lower_rest.clear();
     }
 
     pub(super) const fn track_sweep(&mut self, magnitude: u16) {
@@ -201,6 +205,7 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
         self.value = 0;
         self.filtered = 0;
         self.unstable_windows = 0;
+        self.lower_rest.clear();
     }
 
     pub(super) const fn stop_recalibrating(&mut self) {
@@ -273,6 +278,7 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
             activity: false,
         };
         if context.raw_scanning {
+            self.lower_rest.clear();
             self.value = magnitude;
             return if core::mem::take(&mut self.reported) {
                 Update {
@@ -292,7 +298,14 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
         };
         let mut activity = self.recalibrating && self.feed_noise(magnitude, context.mode);
         if context.settling {
+            self.lower_rest.clear();
             return Update { activity, ..quiet };
+        }
+        if let Some(rest_level) =
+            self.lower_rest
+                .observe(value, self.rest_level, self.noise_band, context.now_ms)
+        {
+            self.lower_rest_level(rest_level, context.mode);
         }
 
         let threshold = self.rest_threshold();
@@ -339,6 +352,14 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
             }
             NoiseState::Idle | NoiseState::Sampling => false,
         }
+    }
+
+    #[inline(never)]
+    fn lower_rest_level(&mut self, rest_level: u16, mode: Mode) {
+        self.rest_level = rest_level;
+        self.calibration_mut(mode).rest_level = rest_level;
+        self.bottom_level = self.switch.bottom_level(rest_level);
+        self.bottom_out.reset();
     }
 
     #[inline(never)]
