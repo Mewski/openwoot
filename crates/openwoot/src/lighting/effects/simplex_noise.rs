@@ -41,8 +41,10 @@ impl State {
         Self { config, time: 0 }
     }
 
-    pub(super) const fn update(&mut self, config: SimplexNoise) {
-        *self = Self::new(config);
+    pub(super) fn update(&mut self, config: SimplexNoise) {
+        if config != self.config {
+            *self = Self::new(config);
+        }
     }
 
     pub(super) fn render<const ROWS: usize, const COLUMNS: usize>(

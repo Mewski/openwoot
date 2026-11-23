@@ -25,6 +25,7 @@ enum Call {
 struct Recorder {
     calls: Vec<Call>,
     failing_writes: bool,
+    failing_shut_down: bool,
 }
 
 #[expect(
@@ -41,7 +42,11 @@ impl LedMatrix for Recorder {
 
     async fn set_running(&mut self, running: bool) -> Result<(), ()> {
         self.calls.push(Call::Running(running));
-        Ok(())
+        if !running && self.failing_shut_down {
+            Err(())
+        } else {
+            Ok(())
+        }
     }
 
     async fn write(&mut self, bank: u8, first_register: u8, values: &[u8]) -> Result<(), ()> {
@@ -172,11 +177,11 @@ fn a_failed_write_sends_every_page_again() {
         failing_writes: true,
         ..Recorder::default()
     };
-    block_on(task.step(&mut matrix, &(), 1, true));
+    assert!(!block_on(task.step(&mut matrix, &(), 1, true)));
     assert_eq!(writes(&matrix.calls), 1);
     matrix.failing_writes = false;
     matrix.calls.clear();
-    block_on(task.step(&mut matrix, &(), 2, true));
+    assert!(block_on(task.step(&mut matrix, &(), 2, true)));
     assert_eq!(writes(&matrix.calls), PAGES);
     let report = diagnostics
         .report(Usb::default(), Hardware::default())
@@ -185,4 +190,64 @@ fn a_failed_write_sends_every_page_again() {
         (report.frames, report.page_writes, report.failed_page_writes),
         (2, u32::try_from(PAGES).unwrap(), 1)
     );
+}
+
+#[test]
+fn a_late_initialisation_wakes_the_reset_chip_and_sends_every_page() {
+    let lighting = shared(Effects::new());
+    let events = KeyEvents::new();
+    let host = HostState::new();
+    let task = runtime::Lighting {
+        lighting: &lighting,
+        events: &events,
+        notices: &runtime::KeyNotices::new(),
+        host: &host,
+        host_control: &HostControl::new(),
+        diagnostics: &Diagnostics::new(),
+        profile: &profile::Shared::new(),
+    };
+    let mut matrix = Recorder::default();
+    block_on(task.step(&mut matrix, &(), 1, true));
+    matrix.calls.clear();
+    assert!(block_on(task.initialize(&mut matrix)));
+    assert!(block_on(task.step(&mut matrix, &(), 2, true)));
+    assert_eq!(
+        matrix.calls.get(..2),
+        Some(&[Call::Initialize, Call::Running(true)][..])
+    );
+    assert_eq!(writes(&matrix.calls), PAGES);
+}
+
+#[test]
+fn a_failed_shut_down_is_retried_until_the_chip_stops() {
+    let lighting = shared(Effects::new());
+    let events = KeyEvents::new();
+    let host = HostState::new();
+    let task = runtime::Lighting {
+        lighting: &lighting,
+        events: &events,
+        notices: &runtime::KeyNotices::new(),
+        host: &host,
+        host_control: &HostControl::new(),
+        diagnostics: &Diagnostics::new(),
+        profile: &profile::Shared::new(),
+    };
+    let mut matrix = Recorder {
+        failing_shut_down: true,
+        ..Recorder::default()
+    };
+    block_on(task.step(&mut matrix, &(), 1, true));
+    matrix.calls.clear();
+    for now_ms in 2..6 {
+        assert!(!block_on(task.step(&mut matrix, &(), now_ms, false)));
+    }
+    assert_eq!(matrix.calls, vec![Call::Running(false); 4]);
+    assert!(block_on(lighting.lock()).output_enabled());
+    matrix.failing_shut_down = false;
+    matrix.calls.clear();
+    for now_ms in 6..10 {
+        assert!(block_on(task.step(&mut matrix, &(), now_ms, false)));
+    }
+    assert_eq!(matrix.calls, [Call::Running(false)]);
+    assert!(!block_on(lighting.lock()).output_enabled());
 }

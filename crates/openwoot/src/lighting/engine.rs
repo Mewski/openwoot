@@ -16,7 +16,8 @@ use super::{
     input::KeyEvent,
     key_colors::{LayerColors, paint},
     leds::{Geometry, LedMap, Variant},
-    overlay::{CLASS_GLOBAL, FADE_FULL, Overlay, OverlayId, Overlays, Span},
+    overlay::{CLASS_KEYS, FADE_FULL, Overlay, OverlayId, Overlays, Span},
+    signals::HeldKeys,
 };
 use crate::keys::Key;
 
@@ -54,6 +55,7 @@ pub struct Lighting<
     fade_level: u8,
     indicators: LockIndicators,
     idle: idle::Timer,
+    held: HeldKeys,
     host_control: bool,
     fast_scan: bool,
     output_enabled: bool,
@@ -89,6 +91,7 @@ where
             fade_level: FADE_FULL,
             indicators: LockIndicators::new(),
             idle: idle::Timer::new(now_ms),
+            held: HeldKeys::new(),
             host_control: false,
             fast_scan: false,
             output_enabled: false,
@@ -202,13 +205,7 @@ where
     }
 
     pub fn start_overlay(&mut self, id: OverlayId, span: Span, overlay: Overlay, now_ms: u32) {
-        let lightbar_class = if self.hooks.owns_global_overlays() {
-            CLASS_GLOBAL
-        } else {
-            0
-        };
-        self.overlays
-            .start(id, span, overlay, now_ms, lightbar_class);
+        self.overlays.start(id, span, overlay, now_ms);
     }
 
     pub fn stop_overlay(&mut self, id: OverlayId) {
@@ -235,26 +232,43 @@ where
     pub fn wake(&mut self, now_ms: u32) {
         self.effect_stamp_ms = now_ms;
         if !self.host_control {
+            self.overlays.remove(OverlayId::IdleFade);
             self.start_overlay(
                 OverlayId::WakeFade,
                 Span::Milliseconds(DRIVER_WAKE_FADE_MS),
-                Overlay::fade(0, FADE_FULL, DRIVER_WAKE_FADE_MS),
+                Overlay::fade(0, self.idle.level(), DRIVER_WAKE_FADE_MS),
                 now_ms,
             );
         }
     }
 
     pub fn key_event(&mut self, key: Key, event: KeyEvent, now_ms: u32) {
-        if !self.host_control {
+        match event {
+            KeyEvent::Pressed => self.held.set(key, true),
+            KeyEvent::Released => self.held.set(key, false),
+            KeyEvent::Actuated | KeyEvent::Reset => {}
+        }
+        if self.effects_enabled() {
             self.effects.event(key, event, now_ms, self.variant);
+        } else if !self.host_control {
+            self.effects.key_test_event(key, event);
         }
     }
 
     pub fn reset_idle_timer(&mut self, now_ms: u32) {
-        if let Some(fade) = self.idle.reset()
+        if let Some(fade) = self.idle.reset(self.fade_level)
             && !self.host_control
         {
             self.start_overlay(OverlayId::IdleFade, fade.span, fade.overlay, now_ms);
+        }
+    }
+
+    pub fn hold_idle_timer(&mut self, deepest_travel: u16, now_ms: u32) {
+        if deepest_travel == 0 {
+            self.held = HeldKeys::new();
+        }
+        if self.held.any() {
+            self.reset_idle_timer(now_ms);
         }
     }
 
@@ -276,8 +290,18 @@ where
         if force || !covered {
             let colors = *self.colors.base();
             paint(&mut self.main_canvas(), &colors);
+            self.overlays.mark_dirty(CLASS_KEYS);
         }
         self.apply_brightness_change();
+    }
+
+    fn set_fade_level(&mut self, level: u8) {
+        if self.fade_level != level {
+            self.fade_level = level;
+            if (self.hooks.brightness() | self.brightness.applied()) != 0 {
+                self.dirty.push_all();
+            }
+        }
     }
 
     fn apply_brightness_change(&mut self) {

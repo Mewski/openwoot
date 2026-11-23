@@ -559,3 +559,431 @@ fn built_in_signals_follow_keys_locks_layers_and_the_key_rate() {
         ["000000", "ffffff", "ffffff", "000000"]
     );
 }
+
+static GAINED_MAP: LedMap<BAR_PAGES> = LedMap {
+    positions: &POSITIONS,
+    pages: pages(),
+    gains: Gains {
+        red: 232,
+        green: 255,
+        blue: 255,
+    },
+};
+
+fn solid_on(first: u8, last: u8, condition: Option<Condition>) -> Entry {
+    Entry {
+        condition,
+        effect: Effect::Solid(Solid {
+            color: color_of(rgb_of("ff0000")),
+            target: Target::Lightbar(Range { first, last }),
+        }),
+    }
+}
+
+const fn compare(
+    signal: Signal,
+    comparator: Comparator,
+    operand: Operand,
+    hold_ms: Option<u32>,
+) -> Term {
+    Term::Compare(Comparison {
+        signal,
+        comparator,
+        operand,
+        hold_ms,
+    })
+}
+
+fn condition_of(logic: Logic, group_logic: Logic, terms: &[Term]) -> Condition {
+    Condition {
+        logic,
+        groups: Bounded::from_iter([Group {
+            logic: group_logic,
+            terms: terms.iter().copied().collect(),
+        }]),
+    }
+}
+
+fn caps_is_on(logic: Logic, group_logic: Logic) -> Condition {
+    condition_of(
+        logic,
+        group_logic,
+        &[compare(
+            Signal::Builtin(Builtin::CapsLock),
+            Comparator::Equal,
+            Operand::Constant(1.0),
+            None,
+        )],
+    )
+}
+
+fn profile_of(entries: impl IntoIterator<Item = Entry>) -> Settings {
+    let mut settings = lightbar_profile(None);
+    settings.entries = entries.into_iter().collect();
+    settings
+}
+
+fn with_engine(bar: Bar) -> Lighting<Bar, ROWS, COLUMNS, BAR_PAGES, LENGTH> {
+    let mut lighting = Lighting::new(&BAR_MAP, &VARIANT, GEOMETRY, bar, 0);
+    let white = color_of(rgb_of("ffffff"));
+    lighting.apply_settings(
+        &openwoot_protocol::lighting::Settings {
+            brightness: 255,
+            indicators: openwoot_protocol::lighting::Indicators {
+                caps_lock: white,
+                scroll_lock: white,
+                num_lock: white,
+                layer_lock: white,
+            },
+            effects: Bounded::new(),
+        },
+        0,
+    );
+    let base: openwoot_protocol::lighting::KeyColors =
+        core::iter::repeat_n(rgb_of("0a141e"), ROWS * COLUMNS).collect();
+    lighting.set_base_colors(&base);
+    lighting
+}
+
+#[test]
+fn a_profile_indicator_on_one_led_is_drawn_and_then_rests() {
+    let mut bar = Bar::new(&BAR_LEDS, &BAR_MAP, COLUMNS);
+    let settings = profile_of([Entry {
+        condition: None,
+        effect: Effect::ProfileIndicator(ProfileIndicator {
+            range: Range { first: 0, last: 0 },
+            background: Background::Transparent,
+            segments: 1,
+        }),
+    }]);
+    bar.configure(&settings, &Entries::new(), 255);
+    bar.profile_changed(ProfileState {
+        slot: 0,
+        count: 1,
+        color: rgb_of("ff2828"),
+    });
+    let mut frame = Frame::<BAR_PAGES, LENGTH>::new();
+    let mut canvas = Painter::new(&mut frame, &BAR_MAP, &VARIANT, None);
+    let mut asked = 0;
+    for _ in 0..100 {
+        if bar.needs_render(16) {
+            asked += 1;
+            bar.render(&mut canvas, 16);
+        }
+    }
+    assert_eq!(asked, 1);
+    assert_eq!(canvas.led(BAR_LEDS[0]), Some(rgb_of("ff2828")));
+    assert_eq!(canvas.led(BAR_LEDS[1]), Some(rgb_of("000000")));
+}
+
+#[test]
+fn keys_painted_by_an_entry_get_their_colours_back_when_its_condition_falls() {
+    let mut lighting = with_engine(Bar::new(&BAR_LEDS, &BAR_MAP, COLUMNS));
+    let mut settings = lightbar_profile(None);
+    settings.use_global = false;
+    settings
+        .entries
+        .push(Entry {
+            condition: Some(caps_is_on(Logic::All, Logic::All)),
+            effect: Effect::Solid(Solid {
+                color: color_of(rgb_of("ff0000")),
+                target: Target::Keys(KeyRect {
+                    first: Position { row: 1, column: 1 },
+                    last: Position { row: 1, column: 3 },
+                }),
+            }),
+        })
+        .unwrap();
+    lighting
+        .hooks_mut()
+        .configure(&settings, &Entries::new(), 255);
+    let key = Key::new(1, 2);
+    for now in (0..200).step_by(4) {
+        lighting.update(now, &());
+    }
+    assert_eq!(lighting.key_color(key), Some(rgb_of("0a141e")));
+    lighting.hooks_mut().locks_changed(LockState {
+        caps_lock: true,
+        ..LockState::default()
+    });
+    for now in (200..400).step_by(4) {
+        lighting.update(now, &());
+    }
+    assert_eq!(lighting.key_color(key), Some(rgb_of("ff0000")));
+    lighting.hooks_mut().locks_changed(LockState::default());
+    for now in (400..600).step_by(4) {
+        lighting.update(now, &());
+    }
+    assert_eq!(lighting.key_color(key), Some(rgb_of("0a141e")));
+    assert!(!lighting.hooks().has_stale_keys());
+}
+
+#[test]
+fn the_brightness_signal_follows_the_key_brightness_from_the_start() {
+    let mut lighting = with_engine(Bar::new(&BAR_LEDS, &BAR_MAP, COLUMNS));
+    let settings = profile_of([meter(Signal::Builtin(Builtin::Brightness), 100.0, 0, 9)]);
+    let key_brightness = lighting.brightness();
+    lighting
+        .hooks_mut()
+        .configure(&settings, &Entries::new(), key_brightness);
+    assert_eq!(bar_colors(lighting.hooks_mut()), ["ffffff"; 10]);
+    lighting.step_brightness(false, 200);
+    let stepped = bar_colors(lighting.hooks_mut());
+    assert_eq!(stepped[..9], ["ffffff"; 9]);
+    assert_ne!(stepped[9], "ffffff");
+}
+
+#[test]
+fn host_values_reach_meters_bound_later_and_survive_binding_again() {
+    let shared = profile::Shared::<CriticalSectionRawMutex>::new();
+    let mut lighting = Lighting::<_, ROWS, COLUMNS, BAR_PAGES, LENGTH>::new(
+        &BAR_MAP,
+        &VARIANT,
+        GEOMETRY,
+        Bar::new(&BAR_LEDS, &BAR_MAP, COLUMNS),
+        0,
+    );
+    let mut settings = lightbar_profile(None);
+    settings
+        .entries
+        .push(meter(Signal::Host(42), 1.0, 0, 3))
+        .unwrap();
+    shared.edit(|appearance| appearance.lightbar = settings);
+    shared.activate(false);
+    shared
+        .host_signals()
+        .set(&[HostSignal { id: 42, value: 1.0 }]);
+    shared.apply(&mut lighting, 0);
+    assert_eq!(bar_colors(lighting.hooks_mut())[..4], ["ffffff"; 4]);
+
+    shared.activate(false);
+    shared.apply(&mut lighting, 4);
+    assert_eq!(bar_colors(lighting.hooks_mut())[..4], ["ffffff"; 4]);
+    assert_eq!(shared.host_signals().ids().as_slice(), &[42]);
+}
+
+#[test]
+fn a_comparison_on_a_host_signal_hears_a_first_value_of_zero() {
+    let mut bar = Bar::new(&BAR_LEDS, &BAR_MAP, COLUMNS);
+    let is_zero = condition_of(
+        Logic::All,
+        Logic::All,
+        &[compare(
+            Signal::Host(1),
+            Comparator::Equal,
+            Operand::Constant(0.0),
+            None,
+        )],
+    );
+    bar.configure(
+        &profile_of([solid_on(0, 9, Some(is_zero))]),
+        &Entries::new(),
+        255,
+    );
+    assert_eq!(bar_colors(&mut bar)[0], "000000");
+    bar.set_host_signals(&[HostSignal { id: 1, value: 0.0 }]);
+    assert!(bar.needs_render(16));
+    assert_eq!(bar_colors(&mut bar)[0], "ff0000");
+}
+
+#[test]
+fn a_meter_far_over_its_maximum_stays_full() {
+    let mut bar = Bar::new(&BAR_LEDS, &BAR_MAP, COLUMNS);
+    let settings = profile_of([meter(Signal::Builtin(Builtin::KeyRate), 1.0, 0, 9)]);
+    bar.configure(&settings, &Entries::new(), 255);
+    for value in [25.0, 25.8, 1000.0] {
+        bar.publish(Signal::Builtin(Builtin::KeyRate), value);
+        assert_eq!(bar_colors(&mut bar), ["ffffff"; 10], "value {value}");
+    }
+}
+
+#[test]
+fn fast_scan_unbinds_a_comparison_with_a_key_signal_on_either_side() {
+    let key_on_the_right = condition_of(
+        Logic::All,
+        Logic::All,
+        &[compare(
+            Signal::Builtin(Builtin::CapsLock),
+            Comparator::NotEqual,
+            Operand::Signal(Signal::Builtin(Builtin::KeyPressed)),
+            None,
+        )],
+    );
+    let key_on_the_left = condition_of(
+        Logic::All,
+        Logic::All,
+        &[compare(
+            Signal::Builtin(Builtin::KeyPressed),
+            Comparator::NotEqual,
+            Operand::Signal(Signal::Builtin(Builtin::CapsLock)),
+            None,
+        )],
+    );
+    let mut bar = Bar::new(&BAR_LEDS, &BAR_MAP, COLUMNS);
+    let settings = profile_of([
+        solid_on(0, 4, Some(key_on_the_right)),
+        solid_on(5, 9, Some(key_on_the_left)),
+    ]);
+    bar.configure(&settings, &Entries::new(), 255);
+    bar.set_fast_scan(true);
+    let _ = bar_colors(&mut bar);
+    bar.key_event(Key::new(2, 3), KeyEvent::Pressed);
+    assert!(!bar.needs_render(16));
+    assert_eq!(bar_colors(&mut bar), ["000000"; 10]);
+}
+
+#[test]
+fn every_entry_hears_a_signal_whatever_the_logic_of_its_condition() {
+    for (logic, group_logic) in [
+        (Logic::Single, Logic::Single),
+        (Logic::All, Logic::All),
+        (Logic::Any, Logic::Any),
+    ] {
+        let mut bar = Bar::new(&BAR_LEDS, &BAR_MAP, COLUMNS);
+        let global: Entries = (0..4)
+            .map(|led| solid_on(led, led, Some(caps_is_on(logic, group_logic))))
+            .collect();
+        let settings =
+            profile_of((4..8).map(|led| solid_on(led, led, Some(caps_is_on(logic, group_logic)))));
+        bar.configure(&settings, &global, 255);
+        bar.locks_changed(LockState {
+            caps_lock: true,
+            ..LockState::default()
+        });
+        assert_eq!(bar_colors(&mut bar)[..8], ["ff0000"; 8], "{logic:?}");
+    }
+}
+
+#[test]
+fn a_blink_hidden_by_its_condition_does_not_ask_to_render() {
+    let mut bar = Bar::new(&BAR_LEDS, &BAR_MAP, COLUMNS);
+    let hidden_blink = Entry {
+        condition: Some(caps_is_on(Logic::All, Logic::All)),
+        effect: Effect::Blink(Blink {
+            from: color_of(rgb_of("ff0000")),
+            to: color_of(rgb_of("0000ff")),
+            period_ms: 1000,
+            waveform: Waveform::Square,
+            target: Target::Lightbar(Range { first: 0, last: 9 }),
+        }),
+    };
+    bar.configure(&profile_of([hidden_blink]), &Entries::new(), 255);
+    let mut frame = Frame::<BAR_PAGES, LENGTH>::new();
+    let mut canvas = Painter::new(&mut frame, &BAR_MAP, &VARIANT, None);
+    let mut asked = 0;
+    for _ in 0..100 {
+        if bar.needs_render(16) {
+            asked += 1;
+            bar.render(&mut canvas, 16);
+        }
+    }
+    assert_eq!(asked, 1);
+    bar.locks_changed(LockState {
+        caps_lock: true,
+        ..LockState::default()
+    });
+    assert!(bar.needs_render(16));
+    bar.render(&mut canvas, 16);
+    assert!(bar.needs_render(16));
+}
+
+#[test]
+fn a_timed_comparison_asks_to_render_for_a_change_and_for_the_end_of_its_hold_only() {
+    let timed = condition_of(
+        Logic::All,
+        Logic::All,
+        &[compare(
+            Signal::Builtin(Builtin::KeyRate),
+            Comparator::Greater,
+            Operand::Constant(5.0),
+            Some(50),
+        )],
+    );
+    let mut bar = Bar::new(&BAR_LEDS, &BAR_MAP, COLUMNS);
+    bar.configure(
+        &profile_of([solid_on(0, 9, Some(timed))]),
+        &Entries::new(),
+        255,
+    );
+    let mut frame = Frame::<BAR_PAGES, LENGTH>::new();
+    let mut canvas = Painter::new(&mut frame, &BAR_MAP, &VARIANT, None);
+    bar.publish(Signal::Builtin(Builtin::KeyRate), 6.0);
+    bar.render(&mut canvas, 16);
+    bar.publish(Signal::Builtin(Builtin::KeyRate), 7.0);
+    assert!(bar.needs_render(16));
+    bar.render(&mut canvas, 16);
+    assert_eq!(canvas.led(BAR_LEDS[0]), Some(rgb_of("ff0000")));
+    assert!(!bar.needs_render(16));
+    assert!(bar.needs_render(40));
+    bar.render(&mut canvas, 40);
+    assert_eq!(canvas.led(BAR_LEDS[0]), Some(rgb_of("000000")));
+    assert!(!bar.needs_render(16));
+}
+
+#[test]
+fn the_mirror_and_a_transparent_meter_apply_the_board_gains_once() {
+    let mirror = Entry {
+        condition: None,
+        effect: Effect::Mirror(Mirror {
+            range: Range { first: 0, last: 9 },
+            source: KeyRect {
+                first: Position { row: 1, column: 0 },
+                last: Position { row: 1, column: 9 },
+            },
+        }),
+    };
+    let mut bar = Bar::new(&BAR_LEDS, &GAINED_MAP, COLUMNS);
+    bar.configure(&profile_of([mirror]), &Entries::new(), 255);
+    let mut frame = Frame::<BAR_PAGES, LENGTH>::new();
+    let mut canvas = Painter::new(&mut frame, &GAINED_MAP, &VARIANT, None);
+    canvas.set_key(1, 0, rgb_of("ff0000"));
+    bar.render(&mut canvas, 16);
+    assert_eq!(canvas.key(1, 0), Some(rgb_of("e80000")));
+    assert_eq!(canvas.led(BAR_LEDS[0]), Some(rgb_of("e80000")));
+
+    let mut bar = Bar::new(&BAR_LEDS, &GAINED_MAP, COLUMNS);
+    let mut global = Entries::new();
+    global.push(solid_on(0, 0, None)).unwrap();
+    let transparent = Entry {
+        condition: None,
+        effect: Effect::Meter(Meter {
+            signal: Signal::Builtin(Builtin::KeyRate),
+            maximum: 2.0,
+            color: color_of(rgb_of("ffffff")),
+            background: None,
+            gradient_start: None,
+            range: Range { first: 0, last: 0 },
+            reverse: false,
+        }),
+    };
+    bar.configure(&profile_of([transparent]), &global, 255);
+    bar.publish(Signal::Builtin(Builtin::KeyRate), 1.0);
+    bar.render(&mut canvas, 16);
+    assert_eq!(
+        canvas.led(BAR_LEDS[0]),
+        Some(Rgb {
+            red: 231,
+            green: 126,
+            blue: 126
+        })
+    );
+}
+
+#[test]
+fn a_key_pressed_again_without_a_release_counts_once_and_rest_clears_it() {
+    let mut bar = Bar::new(&BAR_LEDS, &BAR_MAP, COLUMNS);
+    let settings = profile_of([
+        meter(Signal::Builtin(Builtin::KeyPressed), 1.0, 0, 0),
+        meter(Signal::Builtin(Builtin::KeyRate), 2.0, 1, 1),
+    ]);
+    bar.configure(&settings, &Entries::new(), 255);
+    let key = Key::new(2, 3);
+    bar.key_event(key, KeyEvent::Pressed);
+    bar.configure(&settings, &Entries::new(), 255);
+    bar.key_event(key, KeyEvent::Pressed);
+    bar.travel_changed(2000);
+    bar.tick(15);
+    assert_eq!(bar_colors(&mut bar)[..2], ["ffffff", "7e7e7e"]);
+    bar.travel_changed(0);
+    assert_eq!(bar_colors(&mut bar)[..2], ["000000", "7e7e7e"]);
+}

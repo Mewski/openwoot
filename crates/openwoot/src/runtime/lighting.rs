@@ -38,17 +38,33 @@ where
     M: RawMutex,
     H: Lightbar + Signals,
 {
+    const FAILED_STEPS_BEFORE_INITIALIZE: u8 = 3;
     const POLL_INTERVAL: Duration = Duration::from_millis(4);
 
     pub async fn run(&self, matrix: &mut impl LedMatrix, input: &impl KeyTravel) -> ! {
-        let mut initialized = matrix.initialize().await.is_ok();
+        let mut initialized = false;
+        let mut failed_steps = 0_u8;
         loop {
             if !initialized {
-                initialized = matrix.initialize().await.is_ok();
+                initialized = self.initialize(matrix).await;
             }
-            self.diagnostics.set_lighting_initialized(initialized);
-            self.step(matrix, input, now_ms(), self.host.is_active())
+            let delivered = self
+                .step(
+                    matrix,
+                    input,
+                    now_ms(),
+                    initialized && self.host.is_active(),
+                )
                 .await;
+            failed_steps = if delivered {
+                0
+            } else {
+                failed_steps.saturating_add(1)
+            };
+            if failed_steps >= Self::FAILED_STEPS_BEFORE_INITIALIZE {
+                initialized = false;
+                failed_steps = 0;
+            }
             select4(
                 self.events.ready_to_receive(),
                 self.notices.ready(),
@@ -59,13 +75,22 @@ where
         }
     }
 
+    pub async fn initialize(&self, matrix: &mut impl LedMatrix) -> bool {
+        let initialized = matrix.initialize().await.is_ok();
+        if initialized {
+            self.lighting.lock().await.set_output(false);
+        }
+        self.diagnostics.set_lighting_initialized(initialized);
+        initialized
+    }
+
     pub async fn step(
         &self,
         matrix: &mut impl LedMatrix,
         input: &impl KeyTravel,
         now_ms: u32,
         usb_active: bool,
-    ) {
+    ) -> bool {
         let mut lighting = self.lighting.lock().await;
         self.profile.apply(&mut lighting, now_ms);
         while let Ok(activity) = self.events.try_receive() {
@@ -77,30 +102,38 @@ where
         }
         self.notices.apply(&mut lighting, now_ms);
         self.host_control.apply(&mut lighting, now_ms);
+        let deepest = deepest_travel::<ROWS, COLUMNS>(input);
+        lighting.hold_idle_timer(deepest, now_ms);
         let hooks = lighting.hooks_mut();
-        hooks.travel_changed(deepest_travel::<ROWS, COLUMNS>(input));
+        hooks.travel_changed(deepest);
         hooks.tick(now_ms);
         if let Some(level) = lighting.take_brightness_save(now_ms) {
             self.profile.save_brightness(level);
         }
-        match lighting.set_output(usb_active) {
+        let switched = match lighting.set_output(usb_active) {
             Some(OutputChange::Wake) => {
-                if matrix.set_running(true).await.is_ok() {
+                let running = matrix.set_running(true).await.is_ok();
+                if running {
                     lighting.wake(now_ms);
                     lighting.invalidate();
                 } else {
                     lighting.set_output(false);
                 }
+                running
             }
             Some(OutputChange::ShutDown) => {
-                let _ = matrix.set_running(false).await;
+                let stopped = matrix.set_running(false).await.is_ok();
+                if !stopped {
+                    lighting.set_output(true);
+                }
+                stopped
             }
-            None => {}
-        }
+            None => true,
+        };
         self.diagnostics
             .set_lighting_active(lighting.output_enabled());
-        if !lighting.output_enabled() {
-            return;
+        if !usb_active || !lighting.output_enabled() {
+            return switched;
         }
         lighting.update(now_ms, input);
         self.diagnostics.frame_rendered();
@@ -111,9 +144,10 @@ where
             self.diagnostics.page_written(&written);
             if written.is_err() {
                 lighting.invalidate();
-                break;
+                return false;
             }
         }
+        true
     }
 }
 

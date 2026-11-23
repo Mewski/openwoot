@@ -1,7 +1,4 @@
-use openwoot_protocol::{
-    lightbar::{self, HostSignal, HostSignalIds},
-    lighting::Rgb,
-};
+use openwoot_protocol::lightbar::{self, HostSignal, HostSignalIds};
 
 use super::{canvas::Canvas, indicators::LockState, input::KeyEvent, signals::ProfileState};
 use crate::keys::Key;
@@ -34,12 +31,8 @@ pub trait Lightbar {
         false
     }
 
-    fn draw_overlay(&mut self, canvas: &mut impl Canvas, colors: &[Rgb]) {
-        let _ = (canvas, colors);
-    }
-
-    fn clear_overlay(&mut self, canvas: &mut impl Canvas) {
-        let _ = canvas;
+    fn has_stale_keys(&self) -> bool {
+        false
     }
 
     fn configure(

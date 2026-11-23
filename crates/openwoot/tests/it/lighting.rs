@@ -12,6 +12,7 @@ mod host_control;
 mod idle;
 mod indicators;
 mod lightbar;
+mod overlays;
 mod support;
 mod task;
 

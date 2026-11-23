@@ -1,4 +1,6 @@
-use openwoot_protocol::lightbar::{Comparator, Comparison, Condition, Group, Logic, Operand, Term};
+use openwoot_protocol::lightbar::{
+    Comparator, Comparison, Condition, Group, Logic, MAX_HOLD_MS, Operand, Term,
+};
 
 use super::state::{ConditionState, TermState};
 use crate::lighting::truncate::low_16;
@@ -69,7 +71,7 @@ fn evaluate_term(term: &Term, state: &mut TermState, elapsed_ms: u32) -> bool {
     }
     match term {
         Term::Trigger { duration_ms, .. } => {
-            state.hold_ms = *duration_ms;
+            state.hold_ms = (*duration_ms).min(MAX_HOLD_MS);
             state.active = true;
             state.changed = false;
             apply_hold(term, state, true)
@@ -97,6 +99,7 @@ fn compare(term: &Term, comparison: &Comparison, state: &mut TermState) -> bool 
         Comparator::LessOrEqual => right >= left,
     };
     if state.active == result {
+        state.changed = false;
         if result && state.hold_ms == 0 {
             return comparison.hold_ms.is_none();
         }
@@ -108,7 +111,7 @@ fn compare(term: &Term, comparison: &Comparison, state: &mut TermState) -> bool 
         return false;
     }
     if let Some(hold_ms) = comparison.hold_ms {
-        state.hold_ms = low_16(hold_ms);
+        state.hold_ms = low_16(hold_ms.min(u32::from(MAX_HOLD_MS)));
     }
     state.active = true;
     state.changed = false;
@@ -228,6 +231,44 @@ mod tests {
         input(&mut state, 5.0);
         let falling = evaluate(&condition, &mut state, 16);
         assert!(!falling.shown && falling.changed);
+    }
+
+    #[test]
+    fn holds_longer_than_the_limit_last_the_limit() {
+        for hold_ms in [65_536, 70_000, u32::MAX] {
+            let condition = single(greater(5.0, Some(hold_ms)));
+            let mut state = ConditionState::default();
+            input(&mut state, 6.0);
+            assert!(evaluate(&condition, &mut state, 16).shown);
+            assert_eq!(state.terms[0][0].hold_ms, MAX_HOLD_MS);
+            assert!(evaluate(&condition, &mut state, u32::from(MAX_HOLD_MS) - 1).shown);
+            assert!(!evaluate(&condition, &mut state, 1).shown);
+        }
+        let trigger = single(Term::Trigger {
+            signal: SIGNAL,
+            duration_ms: u16::MAX,
+        });
+        let mut state = ConditionState::default();
+        input(&mut state, 1.0);
+        assert!(evaluate(&trigger, &mut state, 16).shown);
+        assert_eq!(state.terms[0][0].hold_ms, MAX_HOLD_MS);
+    }
+
+    #[test]
+    fn a_comparison_whose_result_stands_stops_asking_to_render() {
+        let condition = single(greater(5.0, Some(50)));
+        let mut state = ConditionState {
+            timed: is_timed(&condition),
+            ..ConditionState::default()
+        };
+        input(&mut state, 6.0);
+        assert!(evaluate(&condition, &mut state, 16).shown);
+        input(&mut state, 7.0);
+        assert!(needs_render(&condition, &state, 16));
+        assert!(evaluate(&condition, &mut state, 16).shown);
+        assert!(!needs_render(&condition, &state, 16));
+        assert!(needs_render(&condition, &state, 35));
+        assert!(!evaluate(&condition, &mut state, 35).shown);
     }
 
     #[test]

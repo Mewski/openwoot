@@ -61,9 +61,10 @@ impl HostControl {
                 Request::SetKeyColor { key, color } => {
                     lighting.set_host_key_color(key, color, now_ms);
                 }
-                Request::SetColors => self
-                    .colors
-                    .lock(|colors| lighting.set_host_colors(&colors.borrow(), now_ms)),
+                Request::SetColors => {
+                    let colors = self.colors.lock(|colors| colors.borrow().clone());
+                    lighting.set_host_colors(&colors, now_ms);
+                }
                 Request::ResetKeyColor(key) => lighting.reset_host_key_color(key),
                 Request::ResetColors => lighting.reset_host_colors(),
                 Request::Leave => lighting.leave_host_control(now_ms),
@@ -82,7 +83,15 @@ impl HostControl {
     }
 
     pub(crate) async fn set_colors(&self, fill: impl FnOnce(&mut KeyColors)) {
-        self.colors.lock(|colors| fill(&mut colors.borrow_mut()));
+        {
+            let mut filled = KeyColors::new();
+            fill(&mut filled);
+            self.colors.lock(|colors| {
+                let mut colors = colors.borrow_mut();
+                colors.clear();
+                let _ = colors.extend_from_slice(&filled);
+            });
+        }
         self.requests.send(Request::SetColors).await;
     }
 

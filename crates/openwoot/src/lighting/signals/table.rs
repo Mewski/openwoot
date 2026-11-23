@@ -1,21 +1,16 @@
 use heapless::Vec;
-use openwoot_protocol::lightbar::{Builtin, HostSignalIds, MAX_HOST_SIGNALS, Signal};
+use openwoot_protocol::lightbar::{
+    Builtin, HostSignal, HostSignalIds, HostSignals, MAX_ENTRIES, MAX_HOST_SIGNALS, Signal,
+};
 
-const SUBSCRIBERS: usize = 8;
+const SUBSCRIBERS: usize = 2 * MAX_ENTRIES;
 const BUILTINS: usize = 11;
 const FAST_SCAN_SIGNALS: u16 = 0x05F9;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Input {
-    Effect,
-    Condition { group: u8, term: u8, right: bool },
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Subscriber {
     pub(crate) global: bool,
     pub(crate) entry: u8,
-    pub(crate) input: Input,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -27,6 +22,7 @@ struct Channel {
 #[derive(Clone, Debug, PartialEq)]
 struct HostChannel {
     id: u32,
+    known: bool,
     channel: Channel,
 }
 
@@ -34,6 +30,7 @@ struct HostChannel {
 pub(crate) struct Table {
     builtin: [Channel; BUILTINS],
     host: Vec<HostChannel, MAX_HOST_SIGNALS>,
+    remembered: HostSignals,
     host_active: bool,
 }
 
@@ -46,7 +43,9 @@ impl Channel {
     }
 
     fn add(&mut self, subscriber: Subscriber) {
-        let _ = self.subscribers.push(subscriber);
+        if !self.subscribers.contains(&subscriber) {
+            let _ = self.subscribers.push(subscriber);
+        }
     }
 }
 
@@ -55,39 +54,43 @@ impl Table {
         Self {
             builtin: [const { Channel::new() }; BUILTINS],
             host: Vec::new(),
+            remembered: HostSignals::new(),
             host_active: false,
         }
     }
 
-    pub(crate) fn subscribe(&mut self, signal: Signal, subscriber: Subscriber) -> f32 {
+    pub(crate) fn subscribe(&mut self, signal: Signal, subscriber: Subscriber) -> Option<f32> {
         match signal {
             Signal::Builtin(builtin) => {
-                let Some(channel) = self.builtin.get_mut(index(builtin)) else {
-                    return 0.0;
-                };
+                let channel = self.builtin.get_mut(index(builtin))?;
                 channel.add(subscriber);
-                channel.value
+                Some(channel.value)
             }
             Signal::Host(id) => {
                 if let Some(host) = self.host.iter_mut().find(|host| host.id == id) {
                     host.channel.add(subscriber);
-                } else {
-                    let mut channel = Channel::new();
-                    channel.add(subscriber);
-                    let _ = self.host.push(HostChannel { id, channel });
+                    return host.known.then_some(host.channel.value);
                 }
-                0.0
+                if self.host.is_full() {
+                    return None;
+                }
+                let remembered = take_remembered(&mut self.remembered, id);
+                let mut channel = Channel::new();
+                channel.value = remembered.unwrap_or(0.0);
+                channel.add(subscriber);
+                let _ = self.host.push(HostChannel {
+                    id,
+                    known: remembered.is_some(),
+                    channel,
+                });
+                remembered
             }
         }
     }
 
-    #[expect(
-        clippy::float_cmp,
-        reason = "a signal changes when its value differs in any way"
-    )]
     pub(crate) fn publish_if_changed(&mut self, builtin: Builtin, value: f32) -> &[Subscriber] {
         match self.builtin.get_mut(index(builtin)) {
-            Some(channel) if channel.value != value => {
+            Some(channel) if differs(channel.value, value) => {
                 channel.value = value;
                 &channel.subscribers
             }
@@ -95,13 +98,14 @@ impl Table {
         }
     }
 
-    #[expect(
-        clippy::float_cmp,
-        reason = "a signal changes when its value differs in any way"
-    )]
     pub(crate) fn set_host(&mut self, id: u32, value: f32) -> &[Subscriber] {
+        if !self.host.iter().any(|host| host.id == id) {
+            remember(&mut self.remembered, HostSignal { id, value });
+            return &[];
+        }
         match self.host.iter_mut().find(|host| host.id == id) {
-            Some(host) if host.channel.value != value => {
+            Some(host) if !host.known || differs(host.channel.value, value) => {
+                host.known = true;
                 host.channel.value = value;
                 &host.channel.subscribers
             }
@@ -112,6 +116,15 @@ impl Table {
     pub(crate) fn clear(&mut self) {
         for channel in &mut self.builtin {
             channel.subscribers.clear();
+        }
+        for host in self.host.iter().filter(|host| host.known) {
+            remember(
+                &mut self.remembered,
+                HostSignal {
+                    id: host.id,
+                    value: host.channel.value,
+                },
+            );
         }
         self.host.clear();
     }
@@ -161,15 +174,44 @@ const fn index(builtin: Builtin) -> usize {
     }
 }
 
+#[expect(
+    clippy::float_cmp,
+    reason = "a signal changes when its value differs in any way"
+)]
+fn differs(stored: f32, value: f32) -> bool {
+    stored != value && stored.to_bits() != value.to_bits()
+}
+
+fn remember(remembered: &mut HostSignals, value: HostSignal) {
+    if let Some(kept) = remembered.iter_mut().find(|kept| kept.id == value.id) {
+        kept.value = value.value;
+    } else if let Err(value) = remembered.push(value) {
+        remembered.rotate_left(1);
+        if let Some(slot) = remembered.last_mut() {
+            *slot = value;
+        }
+    }
+}
+
+fn take_remembered(remembered: &mut HostSignals, id: u32) -> Option<f32> {
+    let mut value = None;
+    remembered.retain(|kept| {
+        if kept.id == id {
+            value = Some(kept.value);
+        }
+        kept.id != id
+    });
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const fn effect_of(entry: u8) -> Subscriber {
+    const fn entry_of(entry: u8) -> Subscriber {
         Subscriber {
             global: false,
             entry,
-            input: Input::Effect,
         }
     }
 
@@ -178,41 +220,119 @@ mod tests {
         let mut table = Table::new();
         assert_eq!(table.publish_if_changed(Builtin::CapsLock, 1.0), []);
         assert_eq!(
-            table.subscribe(Signal::Builtin(Builtin::CapsLock), effect_of(0)),
-            1.0
+            table.subscribe(Signal::Builtin(Builtin::CapsLock), entry_of(0)),
+            Some(1.0)
         );
         assert_eq!(table.publish_if_changed(Builtin::CapsLock, 1.0), []);
         assert_eq!(
             table.publish_if_changed(Builtin::CapsLock, 0.0),
-            &[effect_of(0)]
+            &[entry_of(0)]
         );
     }
 
     #[test]
-    fn a_signal_keeps_at_most_eight_subscribers() {
+    fn a_signal_takes_every_entry_and_tells_each_of_them_once() {
         let mut table = Table::new();
-        for entry in 0..10 {
-            table.subscribe(Signal::Builtin(Builtin::KeyRate), effect_of(entry));
+        for global in [true, false] {
+            for entry in (0..).take(MAX_ENTRIES) {
+                let subscriber = Subscriber { global, entry };
+                table.subscribe(Signal::Builtin(Builtin::KeyRate), subscriber);
+                table.subscribe(Signal::Builtin(Builtin::KeyRate), subscriber);
+            }
         }
+        let heard = table.publish_if_changed(Builtin::KeyRate, 3.0);
+        assert_eq!(heard.len(), 2 * MAX_ENTRIES);
         assert_eq!(
-            table.publish_if_changed(Builtin::KeyRate, 3.0).len(),
-            SUBSCRIBERS
+            heard.first(),
+            Some(&Subscriber {
+                global: true,
+                entry: 0
+            })
         );
+        assert_eq!(heard.last(), Some(&entry_of(3)));
     }
 
     #[test]
-    fn host_signals_register_in_order_and_are_dropped_with_the_subscribers() {
+    fn a_value_that_is_not_a_number_changes_when_its_bits_change() {
         let mut table = Table::new();
-        assert_eq!(table.subscribe(Signal::Host(70), effect_of(0)), 0.0);
-        table.subscribe(Signal::Host(9), effect_of(1));
-        table.subscribe(Signal::Host(70), effect_of(2));
+        table.subscribe(Signal::Builtin(Builtin::ProfileColor), entry_of(0));
+        let color = f32::from_bits(0xFFFF_2810);
+        assert!(color.is_nan());
+        assert_eq!(
+            table.publish_if_changed(Builtin::ProfileColor, color),
+            &[entry_of(0)]
+        );
+        assert_eq!(table.publish_if_changed(Builtin::ProfileColor, color), []);
+        assert_eq!(
+            table.publish_if_changed(Builtin::ProfileColor, f32::from_bits(0xFFFF_2811)),
+            &[entry_of(0)]
+        );
+        assert_eq!(table.publish_if_changed(Builtin::KeyRate, -0.0), []);
+    }
+
+    #[test]
+    fn host_signals_register_in_order_and_keep_their_values_when_bound_again() {
+        let mut table = Table::new();
+        assert_eq!(table.subscribe(Signal::Host(70), entry_of(0)), None);
+        table.subscribe(Signal::Host(9), entry_of(1));
+        table.subscribe(Signal::Host(70), entry_of(2));
         assert_eq!(table.host_ids().as_slice(), &[70, 9]);
-        assert_eq!(table.set_host(70, 0.5), &[effect_of(0), effect_of(2)]);
+        assert_eq!(table.set_host(70, 0.5), &[entry_of(0), entry_of(2)]);
         assert_eq!(table.set_host(70, 0.5), []);
-        assert_eq!(table.set_host(5, 0.5), []);
-        assert_eq!(table.subscribe(Signal::Host(70), effect_of(0)), 0.0);
+        assert_eq!(table.set_host(5, 0.25), []);
+        assert_eq!(table.subscribe(Signal::Host(70), entry_of(0)), Some(0.5));
         table.clear();
         assert_eq!(table.host_ids().as_slice(), &[] as &[u32]);
+        assert_eq!(table.subscribe(Signal::Host(9), entry_of(0)), None);
+        assert_eq!(table.subscribe(Signal::Host(70), entry_of(1)), Some(0.5));
+        assert_eq!(table.subscribe(Signal::Host(5), entry_of(1)), Some(0.25));
+        assert_eq!(table.host_ids().as_slice(), &[9, 70, 5]);
+        assert_eq!(table.set_host(70, 0.5), []);
+        table.clear();
+        table.clear();
+        assert_eq!(table.subscribe(Signal::Host(5), entry_of(0)), Some(0.25));
+    }
+
+    #[test]
+    fn the_first_value_of_a_host_signal_is_heard_even_when_it_is_zero() {
+        let mut table = Table::new();
+        table.subscribe(Signal::Host(1), entry_of(0));
+        assert_eq!(table.set_host(1, 0.0), &[entry_of(0)]);
+        assert_eq!(table.set_host(1, 0.0), []);
+        assert_eq!(table.subscribe(Signal::Host(1), entry_of(1)), Some(0.0));
+    }
+
+    #[test]
+    fn host_signals_beyond_the_limit_stay_unbound_across_both_lists() {
+        let mut table = Table::new();
+        for id in 0..30 {
+            let subscriber = Subscriber {
+                global: id < 15,
+                entry: 0,
+            };
+            assert_eq!(table.subscribe(Signal::Host(id), subscriber), None);
+        }
+        let ids: Vec<u32, MAX_HOST_SIGNALS> = (0..20).collect();
+        assert_eq!(table.host_ids(), ids);
+        assert_eq!(table.set_host(25, 1.0), []);
+        table.clear();
+        assert_eq!(table.subscribe(Signal::Host(25), entry_of(0)), Some(1.0));
+    }
+
+    #[test]
+    fn the_newest_host_values_are_kept_while_no_entry_refers_to_them() {
+        let mut table = Table::new();
+        table.subscribe(Signal::Host(500), entry_of(0));
+        table.set_host(500, 5.0);
+        table.clear();
+        for id in 0..20 {
+            table.set_host(id, 1.0);
+        }
+        table.set_host(3, 2.0);
+        assert_eq!(table.subscribe(Signal::Host(500), entry_of(0)), None);
+        assert_eq!(table.subscribe(Signal::Host(0), entry_of(0)), Some(1.0));
+        assert_eq!(table.subscribe(Signal::Host(3), entry_of(0)), Some(2.0));
+        assert_eq!(table.subscribe(Signal::Host(19), entry_of(0)), Some(1.0));
     }
 
     #[test]

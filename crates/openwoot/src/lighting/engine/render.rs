@@ -13,6 +13,8 @@ use crate::{
     },
 };
 
+const EFFECT_ELAPSED_MAX_MS: u32 = 4 * FRAME_PERIOD_MS;
+
 impl<H, const ROWS: usize, const COLUMNS: usize, const PAGES: usize, const LENGTH: usize>
     Lighting<H, ROWS, COLUMNS, PAGES, LENGTH>
 where
@@ -50,11 +52,8 @@ where
         let effects_enabled = self.effects_enabled();
         let effects_dirty =
             effects_enabled && (self.redraw_requested || self.effects.needs_render());
-        if !self.overlays.needs_render(since_ms)
-            && !effects_dirty
-            && !self.hooks.needs_render(since_ms)
-            && !force
-        {
+        let overlays_dirty = !self.host_control && self.overlays.needs_render(since_ms);
+        if !overlays_dirty && !effects_dirty && !self.hooks.needs_render(since_ms) && !force {
             return;
         }
 
@@ -68,8 +67,11 @@ where
             {
                 let mut canvas = Painter::new(&mut scratch, self.map, self.variant, None);
                 paint(&mut canvas, self.colors.base());
-                self.effects
-                    .render(&mut canvas, self.geometry, u32::from(elapsed_ms));
+                self.effects.render(
+                    &mut canvas,
+                    self.geometry,
+                    u32::from(elapsed_ms).min(EFFECT_ELAPSED_MAX_MS),
+                );
                 draw_overlays_and_lightbar(
                     &mut canvas,
                     &mut self.overlays,
@@ -93,6 +95,9 @@ where
                 self.variant,
                 Some(&mut self.dirty),
             );
+            if !self.host_control && self.hooks.has_stale_keys() {
+                paint(&mut canvas, &restore);
+            }
             draw_overlays_and_lightbar(
                 &mut canvas,
                 &mut self.overlays,
@@ -133,6 +138,9 @@ where
     }
 
     fn apply_layer_colors(&mut self) {
+        if self.host_control {
+            return;
+        }
         match self.colors.take_request() {
             Some(Shown::Layer(colors)) => {
                 paint(&mut self.main_canvas(), &colors);
@@ -148,13 +156,14 @@ where
     }
 
     fn idle_update(&mut self, now_ms: u32) -> bool {
-        let step = self.idle.advance(now_ms);
-        if let Some(fade) = step.fade
-            && !self.host_control
-        {
+        if self.host_control {
+            return false;
+        }
+        let step = self.idle.advance(now_ms, self.fade_level);
+        if let Some(fade) = step.fade {
             self.start_overlay(OverlayId::IdleFade, fade.span, fade.overlay, now_ms);
         }
-        if step.off && self.overlays.idle_fade_done() {
+        if step.off && self.fade_level == 0 && self.overlays.idle_fade_done() {
             self.effect_stamp_ms = now_ms;
             return true;
         }
@@ -180,7 +189,7 @@ fn draw_overlays_and_lightbar<const ROWS: usize, const COLUMNS: usize>(
             classes: CLASS_ALL & !lightbar_classes,
             ..*pass
         };
-        overlays.render(canvas, hooks, &below, fade_level);
+        overlays.render(canvas, &below, fade_level);
     }
     hooks.render(canvas, pass.elapsed_ms);
     if lightbar_classes != 0 && !host_control {
@@ -188,7 +197,7 @@ fn draw_overlays_and_lightbar<const ROWS: usize, const COLUMNS: usize>(
             classes: lightbar_classes,
             ..*pass
         };
-        overlays.render(canvas, hooks, &above, fade_level);
+        overlays.render(canvas, &above, fade_level);
     }
 }
 

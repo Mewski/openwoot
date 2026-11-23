@@ -20,7 +20,9 @@ impl State {
     }
 
     pub(super) fn update(&mut self, config: HueCycle) {
-        *self = Self::new(config);
+        if config != self.config {
+            *self = Self::new(config);
+        }
     }
 
     pub(super) fn render<const ROWS: usize, const COLUMNS: usize>(

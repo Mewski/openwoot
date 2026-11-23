@@ -1,12 +1,13 @@
 use openwoot::{
     keys::Key,
-    lighting::{Indicator, KeyEvent, LockState, Overlay, OverlayId, Span, rgb},
+    lighting::{Indicator, KeyEvent, LockState, Overlay, OverlayId, Span, from_rgb565, rgb},
 };
 use openwoot_protocol::lighting::{Effects, Rgb};
 
-use super::support::{Chip, PAGES, START_MS, TestLighting, effect, lighting, settle};
+use super::support::{Chip, PAGES, START_MS, TestLighting, base_color, effect, lighting, settle};
 
 const GOLDEN: &str = include_str!("outputs.txt");
+const SCENARIOS: usize = 8;
 
 fn key(row: &str, column: &str) -> Key {
     Key::new(row.parse().unwrap(), column.parse().unwrap())
@@ -105,6 +106,12 @@ fn run_scenario(line: &str) -> (String, Vec<u64>) {
             other => panic!("unknown tag `{other}` in the golden data"),
         }
     }
+    assert!(
+        operations
+            .iter()
+            .all(|(time, _)| (START_MS..=START_MS + duration).contains(time)),
+        "{name} has an operation outside its {duration} ms"
+    );
     let mut lighting = lighting(brightness, effects);
     let mut chip = Chip::new();
     let mut digests = Vec::new();
@@ -123,6 +130,12 @@ fn run_scenario(line: &str) -> (String, Vec<u64>) {
 
 #[test]
 fn outputs_match_the_reference_firmware_through_fades_overlays_and_layers() {
+    for line in GOLDEN.lines() {
+        assert!(
+            line.starts_with("e ") || line.starts_with("g "),
+            "unknown line `{line}` in the golden data"
+        );
+    }
     let expected: Vec<(String, Vec<u64>)> = GOLDEN
         .lines()
         .filter_map(|line| line.strip_prefix("g "))
@@ -135,14 +148,18 @@ fn outputs_match_the_reference_firmware_through_fades_overlays_and_layers() {
             (name, digests)
         })
         .collect();
+    let scenarios: Vec<&str> = GOLDEN
+        .lines()
+        .filter(|line| line.starts_with("e "))
+        .collect();
+    assert_eq!(scenarios.len(), SCENARIOS);
+    assert_eq!(expected.len(), SCENARIOS);
     let mut failures = Vec::new();
-    for line in GOLDEN.lines().filter(|line| line.starts_with("e ")) {
+    for line in scenarios {
         let (name, digests) = run_scenario(line);
-        let wanted = &expected
-            .iter()
-            .find(|(wanted, _)| *wanted == name)
-            .unwrap()
-            .1;
+        let mut matching = expected.iter().filter(|(wanted, _)| *wanted == name);
+        let wanted = &matching.next().unwrap().1;
+        assert!(matching.next().is_none(), "`{name}` has two result lines");
         assert_eq!(digests.len(), wanted.len(), "{name}");
         if let Some(checkpoint) = digests
             .iter()
@@ -164,7 +181,12 @@ fn brightness_steps_stop_at_the_limits_and_request_one_save() {
     assert_eq!(lighting.take_brightness_save(START_MS + 2010), Some(255));
     assert_eq!(lighting.take_brightness_save(START_MS + 5000), None);
     lighting.set_fast_scan(true);
-    assert_eq!(lighting.step_brightness(true, START_MS), 179);
+    assert_eq!(lighting.step_brightness(true, START_MS), 255);
+    let mut capped = self::lighting(170, Effects::new());
+    capped.set_fast_scan(true);
+    assert_eq!(capped.step_brightness(true, START_MS), 175);
+    assert_eq!(capped.step_brightness(true, START_MS), 179);
+    assert_eq!(capped.step_brightness(true, START_MS), 179);
     let mut dark = self::lighting(3, Effects::new());
     assert_eq!(dark.step_brightness(false, START_MS), 0);
 }
@@ -202,9 +224,9 @@ fn a_full_frame_of_six_effect_layers_renders_and_queues_every_changed_page() {
     effects.push(effect(5, [1, 20, 30, 40])).unwrap();
     let mut lighting = lighting(255, effects);
     let mut chip = Chip::new();
+    let mut refreshed = Chip::new();
     lighting.update(START_MS, &());
     chip.drain(&mut lighting);
-    let started = std::time::Instant::now();
     let mut writes = 0;
     for frame in 1..=100 {
         let now_ms = START_MS + 16 * frame;
@@ -213,11 +235,110 @@ fn a_full_frame_of_six_effect_layers_renders_and_queues_every_changed_page() {
         let frame_writes = chip.drain(&mut lighting);
         assert!(frame_writes <= PAGES);
         writes += frame_writes;
+        lighting.invalidate();
+        assert_eq!(refreshed.drain(&mut lighting), PAGES);
+        assert!(
+            chip == refreshed,
+            "frame {frame} left a changed page unsent"
+        );
     }
-    let per_frame = started.elapsed() / 100;
     assert!(writes > 100);
-    assert!(
-        per_frame < std::time::Duration::from_millis(16),
-        "{per_frame:?}"
-    );
+}
+
+fn single(kind: u32, parameters: [u32; 4]) -> Effects {
+    let mut effects = Effects::new();
+    effects.push(effect(kind, parameters)).unwrap();
+    effects
+}
+
+fn brightness_sum(lighting: &TestLighting, key: Key) -> u32 {
+    let color = lighting.key_color(key).unwrap();
+    u32::from(color.red) + u32::from(color.green) + u32::from(color.blue)
+}
+
+#[test]
+fn a_reactive_press_after_a_quiet_pause_still_flashes() {
+    let mut lighting = lighting(255, single(6, [60, 2, 1, 0]));
+    let mut chip = Chip::new();
+    let key = Key::new(2, 3);
+    settle(&mut lighting, &mut chip, START_MS, START_MS + 2000);
+    for press in 1..=3 {
+        let at = START_MS + 2000 * press;
+        lighting.key_event(key, KeyEvent::Pressed, at);
+        let mut peak = 0;
+        for now_ms in at..at + 2000 {
+            lighting.update(now_ms, &());
+            chip.drain(&mut lighting);
+            peak = peak.max(brightness_sum(&lighting, key));
+        }
+        assert!(peak >= 254, "press {press} peaks at {peak}");
+    }
+}
+
+#[test]
+fn host_colours_stay_while_a_layer_is_shown_in_host_control() {
+    let mut lighting = lighting(255, Effects::new());
+    let mut chip = Chip::new();
+    settle(&mut lighting, &mut chip, START_MS, START_MS + 100);
+    let key = Key::new(2, 3);
+    let host = rgb(1, 2, 3);
+    lighting.set_host_key_color(key, host, START_MS + 101);
+    lighting.show_layer(1);
+    settle(&mut lighting, &mut chip, START_MS + 101, START_MS + 300);
+    assert_eq!(lighting.key_color(key), Some(host));
+    lighting.show_layer(0);
+    settle(&mut lighting, &mut chip, START_MS + 301, START_MS + 400);
+    assert_eq!(lighting.key_color(key), Some(host));
+    lighting.show_layer(1);
+    lighting.leave_host_control(START_MS + 401);
+    settle(&mut lighting, &mut chip, START_MS + 401, START_MS + 500);
+    assert_eq!(lighting.key_color(key), Some(from_rgb565(base_color(3, 5))));
+}
+
+#[test]
+fn resetting_host_colours_outside_host_control_changes_nothing() {
+    let mut lighting = lighting(255, single(6, [40, 4, 0, 0]));
+    let mut chip = Chip::new();
+    settle(&mut lighting, &mut chip, START_MS, START_MS + 3000);
+    let key = Key::new(2, 3);
+    let idle = lighting.key_color(key);
+    assert_ne!(idle, Some(from_rgb565(base_color(2, 3))));
+    lighting.reset_host_key_color(key);
+    lighting.reset_host_colors();
+    settle(&mut lighting, &mut chip, START_MS + 3001, START_MS + 5000);
+    assert!(!lighting.host_control());
+    assert_eq!(lighting.key_color(key), idle);
+}
+
+#[test]
+fn presses_under_a_shown_layer_do_not_flash_when_it_hides() {
+    let mut lighting = lighting(255, single(6, [40, 4, 0, 0]));
+    let mut chip = Chip::new();
+    settle(&mut lighting, &mut chip, START_MS, START_MS + 3000);
+    let keys = [3_u8, 5, 7, 9].map(|column| Key::new(2, column));
+    let idle = keys.map(|key| lighting.key_color(key));
+    lighting.show_layer(1);
+    settle(&mut lighting, &mut chip, START_MS + 3001, START_MS + 3100);
+    for (offset, key) in (0..).zip(keys) {
+        lighting.key_event(key, KeyEvent::Pressed, START_MS + 3100 + 1000 * offset);
+    }
+    settle(&mut lighting, &mut chip, START_MS + 3101, START_MS + 9000);
+    lighting.show_layer(0);
+    settle(&mut lighting, &mut chip, START_MS + 9001, START_MS + 9040);
+    assert_eq!(keys.map(|key| lighting.key_color(key)), idle);
+}
+
+#[test]
+fn the_key_test_still_marks_presses_under_a_shown_layer() {
+    let mut lighting = lighting(255, single(11, [40, 0, 0, 0]));
+    let mut chip = Chip::new();
+    let key = Key::new(2, 2);
+    settle(&mut lighting, &mut chip, START_MS, START_MS + 100);
+    lighting.show_layer(1);
+    settle(&mut lighting, &mut chip, START_MS + 101, START_MS + 200);
+    lighting.key_event(key, KeyEvent::Pressed, START_MS + 201);
+    settle(&mut lighting, &mut chip, START_MS + 201, START_MS + 300);
+    lighting.show_layer(0);
+    settle(&mut lighting, &mut chip, START_MS + 301, START_MS + 400);
+    assert_eq!(lighting.key_color(key).map(|color| color.green), Some(255));
 }

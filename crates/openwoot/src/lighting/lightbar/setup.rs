@@ -1,8 +1,10 @@
-use openwoot_protocol::lightbar::{Builtin, Effect, Entries, Entry, MAX_ENTRIES, Settings, Signal};
+use openwoot_protocol::lightbar::{
+    Blink, Builtin, Effect, Entries, Entry, MAX_ENTRIES, Settings, Signal, Solid, Target,
+};
 
 use super::{
     background::background_of,
-    binding::{Origin, bind},
+    binding::{Origin, bind, notify_condition},
     condition::{evaluate, needs_render},
     paint::Strip,
     state::{EffectState, EntryState},
@@ -10,7 +12,7 @@ use super::{
 use crate::lighting::{
     canvas::Canvas,
     color::opaque,
-    signals::{Input, Subscriber, Table, color_of},
+    signals::{Subscriber, Table, color_of},
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -82,21 +84,36 @@ impl Setup {
                 .any(needs)
     }
 
-    pub(super) fn render(&mut self, canvas: &mut impl Canvas, pass: &Pass<'_>, elapsed_ms: u16) {
+    pub(super) fn render(
+        &mut self,
+        canvas: &mut impl Canvas,
+        pass: &Pass<'_>,
+        elapsed_ms: u16,
+    ) -> bool {
+        let mut stale_keys = false;
         if self.profile.use_global {
             for (entry, state) in self.global.iter().zip(&mut self.global_states) {
-                render_entry(canvas, pass, entry, state, elapsed_ms);
+                stale_keys |= render_entry(canvas, pass, entry, state, elapsed_ms);
             }
         }
         for (entry, state) in self.profile.entries.iter().zip(&mut self.profile_states) {
-            render_entry(canvas, pass, entry, state, elapsed_ms);
+            stale_keys |= render_entry(canvas, pass, entry, state, elapsed_ms);
         }
+        stale_keys
     }
 
-    #[expect(
-        clippy::float_cmp,
-        reason = "an input changes when its value differs in any way"
-    )]
+    pub(super) fn forget_painted_keys(&mut self) -> bool {
+        let mut painted = false;
+        for state in self
+            .global_states
+            .iter_mut()
+            .chain(&mut self.profile_states)
+        {
+            painted |= core::mem::take(&mut state.painted_keys);
+        }
+        painted
+    }
+
     pub(super) fn notify(&mut self, subscriber: Subscriber, signal: Signal, value: f32) {
         let (entries, states) = if subscriber.global {
             if !self.profile.use_global {
@@ -113,27 +130,9 @@ impl Setup {
         if !state.bound {
             return;
         }
-        match subscriber.input {
-            Input::Effect => notify_effect(entry, &mut state.effect, signal, value),
-            Input::Condition { group, term, right } => {
-                if entry.condition.is_none() {
-                    return;
-                }
-                let condition = &mut state.condition;
-                let Some(term) = condition.term_mut(group, term) else {
-                    return;
-                };
-                let input = if right {
-                    &mut term.right
-                } else {
-                    &mut term.left
-                };
-                if *input != value {
-                    *input = value;
-                    term.changed = true;
-                    condition.dirty = true;
-                }
-            }
+        notify_effect(entry, &mut state.effect, signal, value);
+        if let Some(condition) = &entry.condition {
+            notify_condition(condition, &mut state.condition, signal, value);
         }
     }
 }
@@ -145,13 +144,13 @@ impl Setup {
 fn notify_effect(entry: &Entry, effect: &mut EffectState, signal: Signal, value: f32) {
     match (&entry.effect, effect) {
         (
-            Effect::Meter(_),
+            Effect::Meter(meter),
             EffectState::Meter {
                 value: shown,
                 dirty,
             },
         ) => {
-            if *shown != value {
+            if meter.signal == signal {
                 *shown = value;
                 *dirty = true;
             }
@@ -201,7 +200,9 @@ fn entry_needs_render(
         (Effect::Meter(_), EffectState::Meter { dirty, .. }) => *dirty,
         (Effect::ProfileIndicator(_), EffectState::Indicator(view)) => view.dirty,
         (Effect::Mirror(_), _) => host_control,
-        (Effect::Blink(_), _) => since_render_ms != 0,
+        (Effect::Blink(_), _) => {
+            since_render_ms != 0 && (entry.condition.is_none() || state.condition.result)
+        }
         _ => false,
     }
 }
@@ -212,31 +213,31 @@ fn render_entry(
     entry: &Entry,
     state: &mut EntryState,
     elapsed_ms: u16,
-) {
+) -> bool {
     if !state.bound {
-        return;
+        return false;
     }
     let mut restart = false;
     if let Some(condition) = &entry.condition {
         let outcome = evaluate(condition, &mut state.condition, u32::from(elapsed_ms));
         if !outcome.shown {
-            return;
+            return core::mem::take(&mut state.painted_keys);
         }
         restart = outcome.changed;
     }
+    state.painted_keys = paints_keys(&entry.effect);
     let strip = pass.strip;
     match (&entry.effect, &mut state.effect) {
         (Effect::Meter(meter), EffectState::Meter { value, dirty }) => {
             if matches!(meter.signal, Signal::Host(_)) && !pass.host_signals {
-                return;
+                return false;
             }
             strip.meter(canvas, meter, *value);
             *dirty = false;
         }
         (Effect::ProfileIndicator(indicator), EffectState::Indicator(view)) => {
-            if strip.indicator(canvas, *indicator, view) {
-                view.dirty = false;
-            }
+            strip.indicator(canvas, *indicator, view);
+            view.dirty = false;
         }
         (Effect::Mirror(mirror), _) => strip.mirror(canvas, *mirror),
         (Effect::Blink(blink), EffectState::Blink { phase_ms }) => {
@@ -246,4 +247,18 @@ fn render_entry(
         (Effect::Custom(custom), _) => strip.custom(canvas, custom),
         _ => {}
     }
+    false
+}
+
+fn paints_keys(effect: &Effect) -> bool {
+    matches!(
+        effect,
+        Effect::Solid(Solid {
+            target: Target::Keys(_),
+            ..
+        }) | Effect::Blink(Blink {
+            target: Target::Keys(_),
+            ..
+        })
+    )
 }

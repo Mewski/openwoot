@@ -26,8 +26,10 @@ impl<const ROWS: usize, const COLUMNS: usize> State<ROWS, COLUMNS> {
         }
     }
 
-    pub(super) const fn update(&mut self, config: KeyTest) {
-        *self = Self::new(config);
+    pub(super) fn update(&mut self, config: KeyTest) {
+        if config != self.config {
+            *self = Self::new(config);
+        }
     }
 
     pub(super) const fn needs_render(&self) -> bool {

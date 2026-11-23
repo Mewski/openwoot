@@ -1,8 +1,5 @@
 use heapless::Vec;
-use openwoot_protocol::{
-    lightbar::{Entries, Settings, Signal},
-    lighting::Rgb,
-};
+use openwoot_protocol::lightbar::{Builtin, Entries, Settings, Signal};
 
 use super::{
     paint::Strip,
@@ -34,6 +31,7 @@ pub struct Bar {
     key_brightness: u8,
     brightness_changed: bool,
     redraw: bool,
+    stale_keys: bool,
     active: bool,
     fast_scan: bool,
     host_control: bool,
@@ -59,6 +57,7 @@ impl Bar {
             key_brightness: u8::MAX,
             brightness_changed: false,
             redraw: false,
+            stale_keys: false,
             active: false,
             fast_scan: false,
             host_control: false,
@@ -94,6 +93,7 @@ impl Bar {
 
     fn config_changed(&mut self) {
         self.redraw = true;
+        self.stale_keys |= self.setup.forget_painted_keys();
         self.active = false;
         if self.setup.profile.enabled {
             self.signals.clear();
@@ -119,6 +119,7 @@ impl Lightbar for Bar {
 
     fn render(&mut self, canvas: &mut impl Canvas, elapsed_ms: u16) {
         self.redraw = false;
+        self.stale_keys = false;
         if !self.setup.profile.enabled {
             return;
         }
@@ -128,7 +129,10 @@ impl Lightbar for Bar {
             strip,
             host_signals: self.signals.host_active(),
         };
-        self.setup.render(canvas, &pass, elapsed_ms);
+        if self.setup.render(canvas, &pass, elapsed_ms) {
+            self.stale_keys = true;
+            self.redraw = true;
+        }
     }
 
     fn request_redraw(&mut self) {
@@ -144,6 +148,10 @@ impl Lightbar for Bar {
         if self.setup.profile.enabled && self.setup.profile.brightness.is_none() {
             self.set_brightness(key_brightness);
         }
+        self.publish(
+            Signal::Builtin(Builtin::Brightness),
+            f32::from(key_brightness) * 100.0 / 255.0,
+        );
     }
 
     fn apply_page_brightness(&self, page: usize, linear: &[u8], output: &mut [u8], fade_level: u8) {
@@ -166,14 +174,8 @@ impl Lightbar for Bar {
         true
     }
 
-    fn draw_overlay(&mut self, canvas: &mut impl Canvas, colors: &[Rgb]) {
-        for (led, color) in self.leds.iter().zip(colors) {
-            canvas.set_led(*led, *color);
-        }
-    }
-
-    fn clear_overlay(&mut self, canvas: &mut impl Canvas) {
-        self.strip().clear(canvas);
+    fn has_stale_keys(&self) -> bool {
+        self.stale_keys
     }
 
     fn configure(&mut self, profile: &Settings, global: &Entries, key_brightness: u8) {

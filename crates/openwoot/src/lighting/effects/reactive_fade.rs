@@ -42,7 +42,10 @@ impl<const ROWS: usize, const COLUMNS: usize> State<ROWS, COLUMNS> {
         }
     }
 
-    pub(super) const fn update(&mut self, config: ReactiveFade) {
+    pub(super) fn update(&mut self, config: ReactiveFade) {
+        if config == self.config {
+            return;
+        }
         self.config = config;
         self.cells = [[0; COLUMNS]; ROWS];
         self.active = true;
@@ -84,15 +87,10 @@ impl<const ROWS: usize, const COLUMNS: usize> State<ROWS, COLUMNS> {
         if palette {
             step_ms *= PALETTE_STEP_FACTOR;
         }
-        let total_ms = u32::from(self.timer_ms.wrapping_add(low_16(elapsed_ms)));
-        let steps = if total_ms >= step_ms {
-            let steps = u32::from(low_8(total_ms / step_ms));
-            self.timer_ms = low_16(total_ms.wrapping_sub(steps * step_ms));
-            steps
-        } else {
-            self.timer_ms = low_16(total_ms);
-            0
-        };
+        let elapsed_ms = u16::try_from(elapsed_ms).unwrap_or(u16::MAX);
+        let total_ms = u32::from(self.timer_ms.wrapping_add(elapsed_ms));
+        let steps = (total_ms / step_ms).min(u32::from(u8::MAX));
+        self.timer_ms = low_16(total_ms % step_ms);
         self.active = false;
         let config = self.config;
         for (row, cells) in self.cells.iter_mut().enumerate() {
@@ -205,14 +203,22 @@ fn fixed_cell(
     }
     let level = u32::from(low_8(255 * countdown / LEVEL_MAX));
     if level < CROSSFADE_LEVEL {
-        if let Some(current) = canvas.key(row, column) {
+        if let Some(led) = canvas.led_of(row, column)
+            && let Some(current) = canvas.led(led)
+        {
             let weight = i32::from(low_16(255 * (CROSSFADE_LEVEL - level) / 100));
+            let target = canvas.stored(color);
             let mixed = rgb(
-                crossfade(current.red, color.red, weight),
-                crossfade(current.green, color.green, weight),
-                crossfade(current.blue, color.blue, weight),
+                crossfade(current.red, target.red, weight),
+                crossfade(current.green, target.green, weight),
+                crossfade(current.blue, target.blue, weight),
             );
-            set_key_scaled(canvas, row, column, mixed, config.base_level);
+            let mixed = if config.base_level == 255 {
+                mixed
+            } else {
+                scale(mixed, config.base_level)
+            };
+            canvas.store_led(led, mixed);
         }
     } else {
         let dim = low_8(255 * (level - CROSSFADE_LEVEL) / (255 - CROSSFADE_LEVEL));

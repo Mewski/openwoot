@@ -32,12 +32,13 @@ impl Brightness {
 
     pub(super) const fn set(&mut self, level: u8) {
         self.level = level;
+        self.save_due_ms = None;
     }
 
     pub(super) fn step(&mut self, increase: bool, fast_scan: bool, now_ms: u32) -> u8 {
         self.level = if increase {
             let max = if fast_scan { MAX_FAST_SCAN } else { u8::MAX };
-            self.level.saturating_add(STEP).min(max)
+            self.level.saturating_add(STEP).min(max.max(self.level))
         } else {
             self.level.saturating_sub(STEP)
         };
@@ -60,5 +61,33 @@ impl Brightness {
         }
         self.save_due_ms = None;
         Some(self.level)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn brightness_up_in_fast_scan_stops_at_the_cap_and_never_lowers_a_higher_level() {
+        let mut brightness = Brightness::new();
+        brightness.set(170);
+        assert_eq!(brightness.step(true, true, 0), 175);
+        assert_eq!(brightness.step(true, true, 0), MAX_FAST_SCAN);
+        assert_eq!(brightness.step(true, true, 0), MAX_FAST_SCAN);
+        brightness.set(u8::MAX);
+        assert_eq!(brightness.step(true, true, 0), u8::MAX);
+        assert_eq!(brightness.step(false, true, 0), 250);
+    }
+
+    #[test]
+    fn a_settings_change_cancels_the_pending_save_of_a_brightness_step() {
+        let mut brightness = Brightness::new();
+        brightness.set(100);
+        brightness.step(true, false, 0);
+        brightness.set(30);
+        assert_eq!(brightness.take_save(SAVE_DELAY_MS), None);
+        brightness.step(false, false, 10);
+        assert_eq!(brightness.take_save(10 + SAVE_DELAY_MS), Some(25));
     }
 }

@@ -101,6 +101,14 @@ impl<const ROWS: usize, const COLUMNS: usize> EffectStack<ROWS, COLUMNS> {
         }
     }
 
+    pub fn key_test_event(&mut self, key: Key, event: KeyEvent) {
+        for layer in &mut self.layers {
+            if let Layer::KeyTest(state) = layer {
+                state.event(key, event);
+            }
+        }
+    }
+
     pub fn feed(&mut self, key: Key, travel: u16, input: &impl KeyTravel) {
         for layer in &mut self.layers {
             match layer {
@@ -131,7 +139,7 @@ impl<const ROWS: usize, const COLUMNS: usize> Layer<ROWS, COLUMNS> {
     fn new(effect: Effect) -> Self {
         match effect {
             Effect::RainbowWave(config) => Self::RainbowWave(rainbow_wave::State::new(config)),
-            Effect::Scanner(config) => Self::Scanner(scanner::State::new(config)),
+            Effect::Scanner(config) => Self::Scanner(scanner::State::new::<ROWS, COLUMNS>(config)),
             Effect::Breathing(config) => Self::Breathing(breathing::State::new(config)),
             Effect::HueCycle(config) => Self::HueCycle(hue_cycle::State::new(config)),
             Effect::KeyRipple(config) => Self::KeyRipple(key_ripple::State::new(config)),

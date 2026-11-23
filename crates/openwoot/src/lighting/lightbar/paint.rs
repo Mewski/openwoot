@@ -48,10 +48,12 @@ impl Strip<'_> {
     pub(super) fn meter(self, canvas: &mut impl Canvas, meter: &Meter, value: f32) {
         let lit = opaque(meter.color);
         let start = meter.gradient_start.map_or(lit, opaque);
-        let mut background = meter.background.map_or(BLACK, opaque);
+        let background = meter.background.map(opaque);
         let range = meter.range;
         let count = range.last.wrapping_add(1).wrapping_sub(range.first);
-        let length = value / meter.maximum * f32::from(count);
+        let full = f32::from(count);
+        let length = value / meter.maximum * full;
+        let length = if length > full { full } else { length };
         for index in 0..count {
             let position = if meter.reverse {
                 range.last.wrapping_sub(index)
@@ -70,18 +72,18 @@ impl Strip<'_> {
                 0
             };
             if length > at {
-                if meter.background.is_none()
-                    && let Some(shown) = canvas.led(led)
-                {
-                    background = shown;
-                }
                 let color = if meter.gradient_start.is_some() {
                     blend(start, lit, low_8(255 * u32::from(index) / u32::from(count)))
                 } else {
                     lit
                 };
-                canvas.set_led(led, blend(background, color, level));
-            } else if meter.background.is_some() {
+                if let Some(background) = background {
+                    canvas.set_led(led, blend(background, color, level));
+                } else if let Some(shown) = canvas.led(led) {
+                    let mixed = blend(shown, canvas.stored(color), level);
+                    canvas.store_led(led, mixed);
+                }
+            } else if let Some(background) = background {
                 canvas.set_led(led, background);
             }
         }
@@ -92,11 +94,8 @@ impl Strip<'_> {
         canvas: &mut impl Canvas,
         indicator: ProfileIndicator,
         view: &IndicatorState,
-    ) -> bool {
+    ) {
         let Range { first, last } = indicator.range;
-        if first == 0 && last == 0 {
-            return false;
-        }
         let profile = whole(view.profile);
         let (segment, namespace) = match low_8(profile) {
             0 => (0, 0),
@@ -130,7 +129,6 @@ impl Strip<'_> {
                 canvas.set_led(led, view.color);
             }
         }
-        true
     }
 
     pub(super) fn mirror(self, canvas: &mut impl Canvas, mirror: Mirror) {
@@ -180,7 +178,7 @@ impl Strip<'_> {
             }
         }
         for (led, color) in colors {
-            canvas.set_led(led, color);
+            canvas.store_led(led, color);
         }
     }
 

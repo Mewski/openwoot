@@ -7,7 +7,7 @@ use super::{
     condition::is_timed,
     state::{ConditionState, EffectState, EntryState, IndicatorState, TermState},
 };
-use crate::lighting::signals::{Input, Subscriber, Table, allowed_in_fast_scan, color_of};
+use crate::lighting::signals::{Subscriber, Table, allowed_in_fast_scan, color_of};
 
 #[derive(Clone, Copy)]
 pub(super) struct Origin {
@@ -27,18 +27,22 @@ pub(super) fn bind(
         return false;
     }
     state.bound = true;
-    let effect = origin.subscriber(Input::Effect);
+    let subscriber = origin.subscriber();
     state.effect = match &entry.effect {
         Effect::Meter(meter) => EffectState::Meter {
-            value: signals.subscribe(meter.signal, effect),
+            value: signals.subscribe(meter.signal, subscriber).unwrap_or(0.0),
             dirty: false,
         },
         Effect::ProfileIndicator(indicator) => {
+            let mut current = |builtin: Builtin| {
+                signals
+                    .subscribe(Signal::Builtin(builtin), subscriber)
+                    .unwrap_or(0.0)
+            };
             let mut view = IndicatorState::new();
-            view.profile = signals.subscribe(Signal::Builtin(Builtin::ActiveProfile), effect);
-            view.count = signals.subscribe(Signal::Builtin(Builtin::ProfileCount), effect);
-            view.color =
-                color_of(signals.subscribe(Signal::Builtin(Builtin::ProfileColor), effect));
+            view.profile = current(Builtin::ActiveProfile);
+            view.count = current(Builtin::ProfileCount);
+            view.color = color_of(current(Builtin::ProfileColor));
             view.background = background_of(indicator.background, view.color);
             EffectState::Indicator(view)
         }
@@ -46,39 +50,70 @@ pub(super) fn bind(
         Effect::Mirror(_) | Effect::Solid(_) | Effect::Custom(_) => EffectState::Stateless,
     };
     if let Some(condition) = &entry.condition {
-        bind_condition(signals, origin, condition, &mut state.condition);
+        bind_condition(signals, subscriber, condition, &mut state.condition);
     }
     true
 }
 
+pub(super) fn notify_condition(
+    condition: &Condition,
+    state: &mut ConditionState,
+    signal: Signal,
+    value: f32,
+) {
+    if !binds_groups(condition) {
+        return;
+    }
+    let mut heard = false;
+    for (group, terms) in condition.groups.iter().zip(&mut state.terms) {
+        if binds_terms(group) {
+            for (term, term_state) in group.terms.iter().zip(terms.iter_mut()) {
+                heard |= notify_term(term, term_state, signal, value);
+            }
+        }
+    }
+    if heard {
+        state.dirty = true;
+    }
+}
+
+fn notify_term(term: &Term, state: &mut TermState, signal: Signal, value: f32) -> bool {
+    let (left, right) = match term {
+        Term::Trigger { signal, .. } => (*signal, None),
+        Term::Compare(comparison) => (comparison.signal, operand_signal(comparison)),
+    };
+    let mut heard = false;
+    if left == signal {
+        state.left = value;
+        heard = true;
+    }
+    if right == Some(signal) {
+        state.right = value;
+        heard = true;
+    }
+    if heard {
+        state.changed = true;
+    }
+    heard
+}
+
 fn bind_condition(
     signals: &mut Table,
-    origin: Origin,
+    subscriber: Subscriber,
     condition: &Condition,
     state: &mut ConditionState,
 ) {
     *state = ConditionState::default();
-    let bound = match condition.logic {
-        Logic::Single if condition.groups.len() == 1 => {
-            if let (Some(group), Some(terms)) = (condition.groups.first(), state.terms.first_mut())
-            {
-                bind_group(signals, origin, 0, group, terms);
-            }
-            true
-        }
-        Logic::Single => false,
-        Logic::All | Logic::Any => true,
-    };
-    if bound {
+    if binds_groups(condition) {
         if condition.groups.is_empty() {
             state.dirty = true;
             return;
         }
-        let mut all_builtin = true;
-        for ((group, terms), number) in condition.groups.iter().zip(&mut state.terms).zip(0..) {
-            all_builtin &= bind_group(signals, origin, number, group, terms);
+        let mut known = true;
+        for (group, terms) in condition.groups.iter().zip(&mut state.terms) {
+            known &= bind_group(signals, subscriber, group, terms);
         }
-        if all_builtin {
+        if known {
             state.dirty = true;
         }
     }
@@ -87,45 +122,25 @@ fn bind_condition(
 
 fn bind_group(
     signals: &mut Table,
-    origin: Origin,
-    group_number: u8,
+    subscriber: Subscriber,
     group: &Group,
     states: &mut [TermState],
 ) -> bool {
-    let subscriber = |term| {
-        origin.subscriber(Input::Condition {
-            group: group_number,
-            term,
-            right: false,
-        })
-    };
-    match group.logic {
-        Logic::Single => match (group.terms.as_slice(), states.first_mut()) {
-            ([Term::Trigger { signal, .. }], _) => {
-                signals.subscribe(*signal, subscriber(0));
-                true
+    if !binds_terms(group) {
+        return false;
+    }
+    let mut known = true;
+    for (term, state) in group.terms.iter().zip(states.iter_mut()) {
+        match term {
+            Term::Trigger { signal, .. } => {
+                signals.subscribe(*signal, subscriber);
             }
-            ([Term::Compare(comparison)], Some(state)) => {
-                bind_comparison(signals, subscriber(0), comparison, state)
+            Term::Compare(comparison) => {
+                known &= bind_comparison(signals, subscriber, comparison, state);
             }
-            _ => false,
-        },
-        Logic::All | Logic::Any => {
-            let mut all_builtin = true;
-            for ((term, state), number) in group.terms.iter().zip(states.iter_mut()).zip(0..) {
-                match term {
-                    Term::Trigger { signal, .. } => {
-                        signals.subscribe(*signal, subscriber(number));
-                    }
-                    Term::Compare(comparison) => {
-                        all_builtin &=
-                            bind_comparison(signals, subscriber(number), comparison, state);
-                    }
-                }
-            }
-            all_builtin
         }
     }
+    known
 }
 
 fn bind_comparison(
@@ -134,52 +149,49 @@ fn bind_comparison(
     comparison: &Comparison,
     state: &mut TermState,
 ) -> bool {
-    let value = signals.subscribe(comparison.signal, subscriber);
-    let left_builtin = matches!(comparison.signal, Signal::Builtin(_));
-    if left_builtin {
-        state.left = value;
+    let mut known = true;
+    match signals.subscribe(comparison.signal, subscriber) {
+        Some(value) => state.left = value,
+        None => known = false,
     }
+    if let Some(signal) = operand_signal(comparison) {
+        match signals.subscribe(signal, subscriber) {
+            Some(value) => state.right = value,
+            None => known = false,
+        }
+    }
+    if known {
+        state.changed = true;
+    }
+    known
+}
+
+fn operand_signal(comparison: &Comparison) -> Option<Signal> {
     match comparison.operand {
-        Operand::Signal(signal) => {
-            let right = Subscriber {
-                input: match subscriber.input {
-                    Input::Condition { group, term, .. } => Input::Condition {
-                        group,
-                        term,
-                        right: true,
-                    },
-                    Input::Effect => Input::Effect,
-                },
-                ..subscriber
-            };
-            let value = signals.subscribe(signal, right);
-            if !matches!(signal, Signal::Builtin(_)) {
-                return false;
-            }
-            state.right = value;
-            if !left_builtin {
-                return false;
-            }
-        }
-        Operand::Constant(_) => {
-            if !left_builtin {
-                return false;
-            }
-        }
+        Operand::Signal(signal) => Some(signal),
+        Operand::Constant(_) => None,
     }
-    state.changed = true;
-    true
+}
+
+fn binds_groups(condition: &Condition) -> bool {
+    match condition.logic {
+        Logic::Single => condition.groups.len() == 1,
+        Logic::All | Logic::Any => true,
+    }
+}
+
+fn binds_terms(group: &Group) -> bool {
+    match group.logic {
+        Logic::Single => group.terms.len() == 1,
+        Logic::All | Logic::Any => true,
+    }
 }
 
 fn allowed_in_fast_scan_mode(entry: &Entry) -> bool {
-    if let Some(condition) = &entry.condition {
-        let groups_allowed = match condition.logic {
-            Logic::Single => condition.groups.len() == 1,
-            Logic::All | Logic::Any => true,
-        };
-        if !groups_allowed || !condition.groups.iter().all(group_allowed_in_fast_scan) {
-            return false;
-        }
+    if let Some(condition) = &entry.condition
+        && (!binds_groups(condition) || !condition.groups.iter().all(group_allowed_in_fast_scan))
+    {
+        return false;
     }
     match &entry.effect {
         Effect::ProfileIndicator(_) | Effect::Mirror(_) | Effect::Solid(_) | Effect::Custom(_) => {
@@ -191,23 +203,21 @@ fn allowed_in_fast_scan_mode(entry: &Entry) -> bool {
 }
 
 fn group_allowed_in_fast_scan(group: &Group) -> bool {
-    let terms_allowed = match group.logic {
-        Logic::Single => group.terms.len() == 1,
-        Logic::All | Logic::Any => true,
-    };
-    terms_allowed
+    binds_terms(group)
         && group.terms.iter().all(|term| match term {
             Term::Trigger { signal, .. } => allowed_in_fast_scan(*signal),
-            Term::Compare(comparison) => allowed_in_fast_scan(comparison.signal),
+            Term::Compare(comparison) => {
+                allowed_in_fast_scan(comparison.signal)
+                    && operand_signal(comparison).is_none_or(allowed_in_fast_scan)
+            }
         })
 }
 
 impl Origin {
-    const fn subscriber(self, input: Input) -> Subscriber {
+    const fn subscriber(self) -> Subscriber {
         Subscriber {
             global: self.global,
             entry: self.entry,
-            input,
         }
     }
 }

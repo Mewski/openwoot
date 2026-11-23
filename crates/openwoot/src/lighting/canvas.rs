@@ -16,6 +16,14 @@ pub trait Canvas {
 
     fn led(&self, led: Led) -> Option<Rgb>;
 
+    fn stored(&self, color: Rgb) -> Rgb {
+        color
+    }
+
+    fn store_led(&mut self, led: Led, color: Rgb) {
+        self.set_led(led, color);
+    }
+
     fn set_key(&mut self, row: usize, column: usize, color: Rgb) {
         if let Some(led) = self.led_of(row, column) {
             self.set_led(led, color);
@@ -98,6 +106,14 @@ impl<const ROWS: usize, const COLUMNS: usize, const PAGES: usize, const LENGTH: 
             .position(led)
             .and_then(|position| self.frame.color(position))
     }
+
+    fn stored(&self, color: Rgb) -> Rgb {
+        apply_gains(color, self.map.gains)
+    }
+
+    fn store_led(&mut self, led: Led, color: Rgb) {
+        self.store(led, color);
+    }
 }
 
 const fn apply_gains(color: Rgb, gains: Gains) -> Rgb {
@@ -144,5 +160,15 @@ mod tests {
         assert_eq!(dirty.pop(), Some(0));
         assert_eq!(dirty.pop(), None);
         assert_eq!(frame.page(0), Some(&[116, 128, 128, 0, 0, 0]));
+    }
+
+    #[test]
+    fn stored_colours_are_written_without_applying_the_gains_again() {
+        let mut frame = Frame::<2, 6>::new();
+        let mut painter = Painter::new(&mut frame, &MAP, &VARIANT, None);
+        let stored = painter.stored(rgb(255, 255, 255));
+        assert_eq!(stored, rgb(232, 255, 255));
+        painter.store_led(Led(1), stored);
+        assert_eq!(painter.key(0, 0), Some(rgb(232, 255, 255)));
     }
 }

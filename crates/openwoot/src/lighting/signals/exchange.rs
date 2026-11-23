@@ -40,16 +40,21 @@ impl<M: RawMutex> HostExchange<M> {
     pub fn set(&self, values: &[HostSignal]) {
         self.state.lock(|state| {
             let mut state = state.borrow_mut();
-            state.activated = true;
+            let Exchanged {
+                ids,
+                pending,
+                activated,
+            } = &mut *state;
+            *activated = true;
             for value in values {
-                if let Some(pending) = state
-                    .pending
-                    .iter_mut()
-                    .find(|pending| pending.id == value.id)
+                if let Some(queued) = pending.iter_mut().find(|queued| queued.id == value.id) {
+                    queued.value = value.value;
+                } else if pending.push(*value).is_err()
+                    && ids.contains(&value.id)
+                    && let Some(queued) =
+                        pending.iter_mut().find(|queued| !ids.contains(&queued.id))
                 {
-                    pending.value = value.value;
-                } else {
-                    let _ = state.pending.push(*value);
+                    *queued = *value;
                 }
             }
         });
@@ -145,5 +150,29 @@ mod tests {
         exchange.sync(&mut idle);
         assert!(idle.activated);
         assert_eq!(idle.values, []);
+    }
+
+    #[test]
+    fn values_of_listed_ids_are_kept_when_more_ids_wait_than_fit() {
+        let exchange = HostExchange::<CriticalSectionRawMutex>::new();
+        exchange.sync(&mut Recorder::default());
+        assert_eq!(exchange.ids().as_slice(), &[7, 3]);
+        let unlisted: Vec<HostSignal> =
+            (100..120).map(|id| HostSignal { id, value: 1.0 }).collect();
+        exchange.set(&unlisted);
+        exchange.set(&[
+            HostSignal { id: 7, value: 0.5 },
+            HostSignal { id: 3, value: 0.25 },
+            HostSignal {
+                id: 120,
+                value: 1.0,
+            },
+        ]);
+        let mut recorder = Recorder::default();
+        exchange.sync(&mut recorder);
+        assert_eq!(recorder.values.len(), 20);
+        assert!(recorder.values.contains(&HostSignal { id: 7, value: 0.5 }));
+        assert!(recorder.values.contains(&HostSignal { id: 3, value: 0.25 }));
+        assert!(!recorder.values.iter().any(|value| value.id == 120));
     }
 }

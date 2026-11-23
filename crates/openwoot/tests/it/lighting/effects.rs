@@ -2,7 +2,10 @@ use std::{collections::HashMap, fmt::Write};
 
 use openwoot::{
     keys::Key,
-    lighting::{Canvas, EffectStack, Frame, KeyEvent, Painter, TRAVEL_FULL, from_rgb565},
+    lighting::{
+        Canvas, EffectStack, Frame, FramePage, Gains, Geometry, KeyEvent, Led, LedMap, LedPosition,
+        Painter, TRAVEL_FULL, Variant, from_rgb565, rgb,
+    },
 };
 use openwoot_protocol::lighting::Effect;
 
@@ -11,6 +14,7 @@ use super::support::{
 };
 
 const GOLDEN: &str = include_str!("effects.txt");
+const SCENARIOS: usize = 37;
 
 struct Scenario {
     name: String,
@@ -31,7 +35,8 @@ fn event(code: u32) -> KeyEvent {
         0 => KeyEvent::Pressed,
         1 => KeyEvent::Released,
         2 => KeyEvent::Actuated,
-        _ => KeyEvent::Reset,
+        3 => KeyEvent::Reset,
+        other => panic!("no key event {other} in the golden data"),
     }
 }
 
@@ -75,6 +80,18 @@ fn parse_scenario(line: &str) -> Scenario {
             other => panic!("unknown tag `{other}` in the golden data"),
         }
     }
+    let frames = 1..=scenario.frames;
+    assert!(
+        scenario
+            .events
+            .iter()
+            .map(|(frame, ..)| frame)
+            .chain(scenario.travels.iter().map(|(frame, ..)| frame))
+            .all(|frame| frames.contains(frame)),
+        "{} has an event outside its {} frames",
+        scenario.name,
+        scenario.frames
+    );
     scenario
 }
 
@@ -92,14 +109,26 @@ fn golden() -> (Vec<Scenario>, HashMap<String, Expected>) {
                 .iter()
                 .map(|digest| u64::from_str_radix(digest, 16).unwrap())
                 .collect();
-            expected.insert(
-                name,
+            let duplicate = expected.insert(
+                name.clone(),
                 Expected {
                     digests,
                     last_frame,
                 },
             );
+            assert!(duplicate.is_none(), "`{name}` has two result lines");
+        } else {
+            panic!("unknown line `{line}` in the golden data");
         }
+    }
+    assert_eq!(scenarios.len(), SCENARIOS);
+    assert_eq!(expected.len(), SCENARIOS);
+    for scenario in &scenarios {
+        assert!(
+            expected.contains_key(&scenario.name),
+            "`{}` has no result line",
+            scenario.name
+        );
     }
     (scenarios, expected)
 }
@@ -174,12 +203,18 @@ fn run(scenario: &Scenario) -> (Vec<u64>, String) {
 #[test]
 fn every_effect_matches_the_frames_of_the_reference_firmware() {
     let (scenarios, expected) = golden();
-    assert!(scenarios.len() >= 30);
     let mut failures = Vec::new();
     for scenario in &scenarios {
         let expected = &expected[&scenario.name];
         let (digests, last_frame) = run(scenario);
-        if let Some(frame) = digests
+        if digests.len() != expected.digests.len() {
+            failures.push(format!(
+                "{} renders {} frames but has {} digests",
+                scenario.name,
+                digests.len(),
+                expected.digests.len()
+            ));
+        } else if let Some(frame) = digests
             .iter()
             .zip(&expected.digests)
             .position(|(actual, wanted)| actual != wanted)
@@ -226,7 +261,8 @@ fn rendered(effects: &mut EffectStack<ROWS, COLUMNS>) -> Vec<u8> {
 #[test]
 fn releasing_the_keys_returns_the_analog_effects_to_their_released_frame() {
     for kind in [7, 8, 9, 10] {
-        let layers = [effect(kind, [40, 0, 0, 0])];
+        let first = if kind == 10 { 1 } else { 40 };
+        let layers = [effect(kind, [first, 0, 0, 0])];
         let mut untouched = EffectStack::<ROWS, COLUMNS>::new();
         untouched.apply(&layers);
         let released = rendered(&mut untouched);
@@ -239,5 +275,131 @@ fn releasing_the_keys_returns_the_analog_effects_to_their_released_frame() {
         effects.release_keys();
         assert!(effects.needs_render(), "kind {kind}");
         assert_eq!(rendered(&mut effects), released, "kind {kind}");
+    }
+}
+
+fn lit_columns(effects: &mut EffectStack<ROWS, COLUMNS>) -> usize {
+    let mut frame = Frame::<PAGES, LENGTH>::new();
+    let mut canvas = Painter::new(&mut frame, &MAP, &VARIANT, None);
+    for row in 0..ROWS {
+        for column in 0..COLUMNS {
+            canvas.set_key(row, column, rgb(200, 200, 200));
+        }
+    }
+    effects.render(&mut canvas, GEOMETRY, 16);
+    (0..COLUMNS)
+        .filter(|&column| canvas.key(1, column) == Some(rgb(200, 200, 200)))
+        .count()
+}
+
+#[test]
+fn a_scanner_wider_than_the_board_always_lights_a_window_however_it_was_set() {
+    for width in [17, 30, 127, 128, 255] {
+        let mut loaded = EffectStack::<ROWS, COLUMNS>::new();
+        loaded.apply(&[effect(2, [width, 20, 0, 1])]);
+        let mut edited = EffectStack::<ROWS, COLUMNS>::new();
+        edited.apply(&[effect(2, [4, 20, 0, 1])]);
+        edited.apply(&[effect(2, [width, 20, 0, 1])]);
+        for frame in 0..1500 {
+            let lit = lit_columns(&mut loaded);
+            assert!(lit > 0, "width {width} lights nothing in frame {frame}");
+            assert_eq!(
+                lit_columns(&mut edited),
+                lit,
+                "width {width}, frame {frame}"
+            );
+        }
+    }
+}
+
+static GAINED_POSITIONS: [Option<LedPosition>; 2] = [None, Some(LedPosition::new(0, 0))];
+
+static GAINED_MAP: LedMap<1> = LedMap {
+    positions: &GAINED_POSITIONS,
+    pages: [FramePage::new(0, 0, 3)],
+    gains: Gains {
+        red: 232,
+        green: 255,
+        blue: 255,
+    },
+};
+
+static FULL_MAP: LedMap<1> = LedMap {
+    positions: &GAINED_POSITIONS,
+    pages: [FramePage::new(0, 0, 3)],
+    gains: Gains::FULL,
+};
+
+static ONE_KEY: Variant<1, 1> = Variant {
+    leds: [[Some(Led(1))]],
+    spacebar: Key::new(0, 0),
+    spacebar_fill: &[],
+};
+
+fn fixed_fade_reds(map: &'static LedMap<1>) -> Vec<u8> {
+    let mut effects = EffectStack::<1, 1>::new();
+    effects.apply(&[effect(6, [255, 4, 2, 0])]);
+    effects.event(Key::new(0, 0), KeyEvent::Pressed, 0, &ONE_KEY);
+    let geometry = Geometry {
+        first_key_row: 0,
+        level_meter_segments: 0,
+    };
+    (0..80)
+        .map(|_| {
+            let mut frame = Frame::<1, 3>::new();
+            let mut canvas = Painter::new(&mut frame, map, &ONE_KEY, None);
+            canvas.set_key(0, 0, rgb(255, 255, 255));
+            effects.render(&mut canvas, geometry, 16);
+            canvas.key(0, 0).unwrap().red
+        })
+        .collect()
+}
+
+#[test]
+fn the_fixed_colour_crossfade_applies_the_board_gains_once() {
+    let full = fixed_fade_reds(&FULL_MAP);
+    let gained = fixed_fade_reds(&GAINED_MAP);
+    assert!(full.iter().any(|&red| red != 0 && red != 255));
+    for (frame, (&full, &gained)) in full.iter().zip(&gained).enumerate() {
+        let once = u8::try_from((232 * (u32::from(full) + 1)) >> 8).unwrap();
+        assert!(
+            gained.abs_diff(once) <= 1,
+            "frame {frame}: {gained} with the gains against {once} for one gain"
+        );
+    }
+}
+
+#[test]
+fn applying_unchanged_settings_keeps_every_effect_running() {
+    for layer in [
+        effect(1, [0, 8, 1, 0]),
+        effect(2, [4, 20, 40, 0]),
+        effect(3, [15, 30, 0, 0]),
+        effect(4, [0, 8, 0, 0]),
+        effect(5, [1, 20, 30, 40]),
+        effect(6, [40, 4, 0, 0]),
+        effect(11, [40, 0, 0, 0]),
+        effect(14, [63488, 31, 40, 30]),
+        effect(15, [63488, 2016, 30, 50]),
+    ] {
+        let layers = [layer];
+        let mut plain = EffectStack::<ROWS, COLUMNS>::new();
+        plain.apply(&layers);
+        let mut reapplied = EffectStack::<ROWS, COLUMNS>::new();
+        reapplied.apply(&layers);
+        for effects in [&mut plain, &mut reapplied] {
+            effects.event(Key::new(2, 3), KeyEvent::Pressed, 1000, &VARIANT);
+        }
+        for frame in 0..20 {
+            let expected = rendered(&mut plain);
+            if frame % 5 == 4 {
+                reapplied.apply(&layers);
+            }
+            assert_eq!(
+                rendered(&mut reapplied),
+                expected,
+                "{layer:?} frame {frame}"
+            );
+        }
     }
 }

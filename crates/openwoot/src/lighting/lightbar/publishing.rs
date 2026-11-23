@@ -47,7 +47,9 @@ impl Signals for Bar {
     fn key_event(&mut self, key: Key, event: KeyEvent) {
         match event {
             KeyEvent::Pressed => {
-                self.key_rate.note_press();
+                if !self.held.holds(key) {
+                    self.key_rate.note_press();
+                }
                 self.held.set(key, true);
             }
             KeyEvent::Released => self.held.set(key, false),
@@ -58,6 +60,10 @@ impl Signals for Bar {
     }
 
     fn travel_changed(&mut self, deepest: u16) {
+        if deepest == 0 && self.held.any() {
+            self.held.clear();
+            self.publish(Signal::Builtin(Builtin::KeyPressed), 0.0);
+        }
         let level = f32::from(deepest) / f32::from(TRAVEL_FULL) * 255.0;
         self.publish(Signal::Builtin(Builtin::AnalogLevel), level);
     }

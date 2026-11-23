@@ -40,9 +40,11 @@ impl<const ROWS: usize, const COLUMNS: usize> State<ROWS, COLUMNS> {
         }
     }
 
-    pub(super) const fn update(&mut self, config: PolarGradient) {
-        self.config = config;
-        self.phase = 0;
+    pub(super) fn update(&mut self, config: PolarGradient) {
+        if config != self.config {
+            self.config = config;
+            self.phase = 0;
+        }
     }
 
     pub(super) fn render(&mut self, canvas: &mut impl Canvas, elapsed_ms: u32) {

@@ -29,16 +29,31 @@ impl KeyRate {
     }
 
     pub(crate) fn step(&mut self, now_ms: u32) -> Option<f32> {
-        if now_ms.wrapping_sub(self.stamp_ms) < STEP_MS {
+        let steps = now_ms.wrapping_sub(self.stamp_ms) / STEP_MS;
+        if steps == 0 {
             return None;
         }
+        self.stamp_ms = self.stamp_ms.wrapping_add(steps * STEP_MS);
+        match usize::try_from(steps) {
+            Ok(steps) if steps < SLOTS => {
+                for _ in 0..steps {
+                    self.advance();
+                }
+            }
+            _ => {
+                self.counts = [0; SLOTS];
+                self.sum = 0;
+            }
+        }
+        Some(f32::from(self.sum))
+    }
+
+    fn advance(&mut self) {
         self.slot = (self.slot + 1) % SLOTS;
-        self.stamp_ms = now_ms;
         if let Some(count) = self.counts.get_mut(self.slot) {
             self.sum = self.sum.wrapping_sub(u16::from(*count));
             *count = 0;
         }
-        Some(f32::from(self.sum))
     }
 }
 
@@ -72,5 +87,37 @@ mod tests {
             rate.note_press();
         }
         assert_eq!(rate.step(20), Some(255.0));
+    }
+
+    #[test]
+    fn the_window_is_990_ms_long_whenever_the_steps_are_taken() {
+        let mut rate = KeyRate::new(0);
+        rate.note_press();
+        let mut left_at_ms = None;
+        for now_ms in (4..2000).step_by(4) {
+            if rate.step(now_ms) == Some(0.0) && left_at_ms.is_none() {
+                left_at_ms = Some(now_ms);
+            }
+        }
+        assert_eq!(left_at_ms, Some(992));
+    }
+
+    #[test]
+    fn a_late_step_moves_the_window_by_the_time_that_passed() {
+        let mut rate = KeyRate::new(0);
+        rate.note_press();
+        assert_eq!(rate.step(15 * 65), Some(1.0));
+        rate.note_press();
+        assert_eq!(rate.step(15 * 66), Some(1.0));
+        assert_eq!(rate.step(15 * 66 + 14), None);
+        assert_eq!(rate.step(15 * 131), Some(0.0));
+
+        let mut stalled = KeyRate::new(0);
+        stalled.note_press();
+        assert_eq!(stalled.step(5000), Some(0.0));
+        stalled.note_press();
+        assert_eq!(stalled.step(5010), Some(1.0));
+        assert_eq!(stalled.step(5024), None);
+        assert_eq!(stalled.step(5025), Some(1.0));
     }
 }

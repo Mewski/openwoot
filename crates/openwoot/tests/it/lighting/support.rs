@@ -55,6 +55,7 @@ static POSITIONS: [Option<LedPosition>; LED_COUNT] = positions();
 
 pub(crate) type TestLighting = Lighting<(), ROWS, COLUMNS, PAGES, LENGTH>;
 
+#[derive(PartialEq, Eq)]
 pub(crate) struct Chip {
     registers: [[u8; 256]; 2],
 }
@@ -156,7 +157,7 @@ pub(crate) fn effect(kind: u32, parameters: [u32; 4]) -> Effect {
         1 => Effect::RainbowWave(RainbowWave {
             hues: hues(first),
             period: byte(second),
-            forward: third != 0,
+            forward: flag(third),
         }),
         2 => Effect::Scanner(Scanner {
             width: byte(first),
@@ -172,6 +173,7 @@ pub(crate) fn effect(kind: u32, parameters: [u32; 4]) -> Effect {
             hues: hues(first),
             period: byte(second),
         }),
+        5 if first & !0b101 != 0 => panic!("unknown ripple flags {first:#x} in the golden data"),
         5 => Effect::KeyRipple(KeyRipple {
             palette: first & 1 != 0,
             inverted: first & 4 != 0,
@@ -179,6 +181,9 @@ pub(crate) fn effect(kind: u32, parameters: [u32; 4]) -> Effect {
             decay_step_ms: byte(third),
             base_level: byte(fourth),
         }),
+        6 if third & !0b111 != 0 || third & 0b11 == 0b11 => {
+            panic!("unknown reactive flags {third:#x} in the golden data")
+        }
         6 => Effect::ReactiveFade(ReactiveFade {
             base_level: byte(first),
             step_ms: byte(second),
@@ -193,18 +198,18 @@ pub(crate) fn effect(kind: u32, parameters: [u32; 4]) -> Effect {
         }),
         7 => Effect::LevelMeter(LevelMeter {
             base_level: byte(first),
-            gamepad_curve: second != 0,
+            gamepad_curve: flag(second),
         }),
         8 => Effect::AnalogSpotlight(AnalogLevel {
             base_level: byte(first),
-            gamepad_curve: second != 0,
+            gamepad_curve: flag(second),
         }),
         9 => Effect::AnalogGlow(AnalogLevel {
             base_level: byte(first),
-            gamepad_curve: second != 0,
+            gamepad_curve: flag(second),
         }),
         10 => Effect::AnalogRgbFill(AnalogRgbFill {
-            gamepad_curve: first != 0,
+            gamepad_curve: flag(first),
         }),
         11 => Effect::KeyTest(KeyTest {
             base_level: byte(first),
@@ -316,7 +321,8 @@ fn hues(code: u32) -> HueRange {
         2 => HueRange::From2To39,
         3 => HueRange::From64To114,
         4 => HueRange::From214To254,
-        _ => HueRange::From113To204,
+        5 => HueRange::From113To204,
+        other => panic!("no hue range {other} in the golden data"),
     }
 }
 
@@ -325,6 +331,15 @@ fn direction(code: u32) -> ScannerDirection {
         0 => ScannerDirection::Left,
         1 => ScannerDirection::Right,
         2 => ScannerDirection::Up,
-        _ => ScannerDirection::Down,
+        3 => ScannerDirection::Down,
+        other => panic!("no scanner direction {other} in the golden data"),
+    }
+}
+
+fn flag(value: u32) -> bool {
+    match value {
+        0 => false,
+        1 => true,
+        other => panic!("flag {other} is neither 0 nor 1 in the golden data"),
     }
 }

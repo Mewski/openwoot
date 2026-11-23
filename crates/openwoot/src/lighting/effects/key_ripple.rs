@@ -48,7 +48,10 @@ impl<const ROWS: usize, const COLUMNS: usize> State<ROWS, COLUMNS> {
         }
     }
 
-    pub(super) const fn update(&mut self, config: KeyRipple) {
+    pub(super) fn update(&mut self, config: KeyRipple) {
+        if config == self.config {
+            return;
+        }
         self.config = config;
         self.cells = [[0; COLUMNS]; ROWS];
         self.active = true;

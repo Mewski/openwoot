@@ -48,6 +48,7 @@ pub(super) enum EffectState {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct EntryState {
     pub(super) bound: bool,
+    pub(super) painted_keys: bool,
     pub(super) condition: ConditionState,
     pub(super) effect: EffectState,
 }
@@ -73,18 +74,13 @@ impl ConditionState {
             terms: [[TermState::new(); MAX_TERMS]; MAX_GROUPS],
         }
     }
-
-    pub(super) fn term_mut(&mut self, group: u8, term: u8) -> Option<&mut TermState> {
-        self.terms
-            .get_mut(usize::from(group))
-            .and_then(|terms| terms.get_mut(usize::from(term)))
-    }
 }
 
 impl EntryState {
     pub(super) const fn new() -> Self {
         Self {
             bound: false,
+            painted_keys: false,
             condition: ConditionState::new(),
             effect: EffectState::Stateless,
         }
