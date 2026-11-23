@@ -14,9 +14,11 @@ mod implementation {
 
     critical_section::set_impl!(BasepriCriticalSection);
 
-    // SAFETY: BASEPRI masks every interrupt of priority `MASK` or lower; the single core runs
-    // nothing else, so code between `acquire` and `release` excludes every context that uses a
-    // critical section. The scan interrupt (priority 0) is never masked and never takes one.
+    // SAFETY: BASEPRI masks every interrupt of priority `MASK` or lower (`executor::run` selects
+    // the priority grouping without sub-priorities first); the single core runs nothing else, so
+    // code between `acquire` and `release` excludes every context that uses a critical section.
+    // The scan interrupt (priority 0) is never masked and takes no critical section: the HAL's
+    // scan path takes none, and a `scan::Conversion` hook must take none either.
     unsafe impl critical_section::Impl for BasepriCriticalSection {
         // SAFETY: callers pair it with `release`, as the `critical-section` contract demands.
         unsafe fn acquire() -> u8 {

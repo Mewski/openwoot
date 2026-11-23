@@ -12,14 +12,23 @@ use crate::dma;
 
 type Channel = dma::Channel<1, 0>;
 
+const DISABLE_SPINS: u32 = 1_000;
+
 static SAMPLES: [AtomicU32; MAX_RANKS] = [const { AtomicU32::new(0) }; MAX_RANKS];
 static COUNT: AtomicU32 = AtomicU32::new(1);
+
+pub(super) fn enable_clock() {
+    Channel::new().enable_clock();
+}
 
 pub(super) fn start(count: u32) {
     COUNT.store(count, Ordering::Relaxed);
     let channel = Channel::new();
-    channel.enable_clock();
     channel.clear_control(dma::ENABLE);
+    let mut spins = 0;
+    while channel.control() & dma::ENABLE != 0 && spins < DISABLE_SPINS {
+        spins += 1;
+    }
     channel.write_control(0);
     channel.set_count(0);
     channel.set_peripheral_address(0);

@@ -6,11 +6,13 @@
 use super::{
     Level, OutputType, Pull, Speed,
     registers::{
-        self, MODE_ANALOG, MODE_OUTPUT, enable_clock, modify_output_type, modify_two_bit_field,
-        port_index, set_reset,
+        self, LAST_PORT, MODE_ANALOG, MODE_OUTPUT, enable_clock, modify_output_type,
+        modify_two_bit_field, port_index, set_reset,
     },
 };
 use crate::register::write_bits;
+
+const PINS: u8 = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Line {
@@ -27,11 +29,13 @@ pub(crate) struct Levels {
 impl Line {
     #[must_use]
     pub const fn new(port: char, pin: u8) -> Self {
-        assert!(
-            port >= 'A' && port <= 'I' && pin < 16,
-            "a pin of ports A to I"
-        );
+        assert!(Self::exists(port, pin), "a pin of ports A to I");
         Self::from_index(port_index(port), pin)
+    }
+
+    #[must_use]
+    pub const fn exists(port: char, pin: u8) -> bool {
+        port >= 'A' && port <= LAST_PORT && pin < PINS
     }
 
     pub(crate) const fn from_index(port: u8, pin: u8) -> Self {
@@ -40,17 +44,17 @@ impl Line {
 
     pub(crate) fn into_output(self, level: Level) {
         enable_clock(self.port);
-        critical_section::with(|_| {
-            let port = registers::port(self.port);
-            modify_two_bit_field(port.ctl(), self.pin, MODE_OUTPUT);
-            modify_two_bit_field(port.pud(), self.pin, Pull::None.field());
-            modify_output_type(port, self.pin, OutputType::PushPull);
-            modify_two_bit_field(port.ospd(), self.pin, Speed::High.field());
-        });
         match level {
             Level::High => self.set_high(),
             Level::Low => self.set_low(),
         }
+        critical_section::with(|_| {
+            let port = registers::port(self.port);
+            modify_output_type(port, self.pin, OutputType::PushPull);
+            modify_two_bit_field(port.ospd(), self.pin, Speed::High.field());
+            modify_two_bit_field(port.pud(), self.pin, Pull::None.field());
+            modify_two_bit_field(port.ctl(), self.pin, MODE_OUTPUT);
+        });
     }
 
     pub(crate) fn into_analog(self) {
@@ -100,6 +104,18 @@ mod tests {
     fn lines_count_ports_from_a() {
         assert_eq!(Line::new('C', 7), Line::from_index(2, 7));
         assert_eq!(Line::new('A', 15).mask(), 0x8000);
+    }
+
+    #[test]
+    fn only_the_sixteen_pins_of_ports_a_to_i_exist() {
+        assert!(Line::exists('A', 0));
+        assert!(Line::exists('I', 15));
+        assert!(!Line::exists('J', 0));
+        assert!(!Line::exists('@', 0));
+        assert!(!Line::exists('a', 0));
+        assert!(!Line::exists('A', 16));
+        assert!(!Line::exists('I', 255));
+        assert_eq!(Line::new('I', 15), Line::from_index(8, 15));
     }
 
     #[test]

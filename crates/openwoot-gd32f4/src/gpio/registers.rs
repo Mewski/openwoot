@@ -13,18 +13,18 @@ pub(super) const MODE_INPUT: u32 = 0b00;
 pub(super) const MODE_OUTPUT: u32 = 0b01;
 pub(super) const MODE_ALTERNATE: u32 = 0b10;
 pub(super) const MODE_ANALOG: u32 = 0b11;
+pub(super) const LAST_PORT: char = 'I';
 
 const PORT_STRIDE: usize = 0x400;
 const RESET_SHIFT: u8 = 16;
 
 #[inline(always)]
 pub(super) fn port(index: u8) -> &'static pac::gpioa::RegisterBlock {
-    let address = pac::Gpioa::PTR as usize + port_offset(index);
-    // SAFETY: every port of the family has this register block at `GPIOA + n * 0x400`; a `Pin`
-    // exists only for a port whose `Port` was built from its PAC peripheral, and a `Line` only
-    // holds ports A to I. Registers that several pins share are changed only inside critical
-    // sections; output levels are written through the set/reset and bit-clear registers, which
-    // change only the bits written as one.
+    let address = pac::Gpioa::PTR as usize + port_offset(confined(index));
+    // SAFETY: the family has this register block at `GPIOA + n * 0x400` for every port A to I,
+    // and `confined` keeps the index among them whatever the caller passes. Registers that
+    // several pins share are changed only inside critical sections; output levels are written
+    // through the set/reset and bit-clear registers, which change only the bits written as one.
     unsafe { &*(address as *const pac::gpioa::RegisterBlock) }
 }
 
@@ -33,7 +33,7 @@ pub(super) const fn port_index(port: char) -> u8 {
 }
 
 pub(super) fn enable_clock(index: u8) {
-    rcu::with_registers(|rcu| set_bits(rcu.ahb1en(), 1 << index));
+    rcu::with_registers(|rcu| set_bits(rcu.ahb1en(), 1 << confined(index)));
 }
 
 pub(super) fn modify_two_bit_field<Spec>(register: &pac::generic::Reg<Spec>, index: u8, value: u32)
@@ -75,6 +75,12 @@ pub(super) const fn level_of(register: u32, index: u8) -> Level {
 }
 
 #[inline(always)]
+const fn confined(index: u8) -> u8 {
+    let last = port_index(LAST_PORT);
+    if index > last { last } else { index }
+}
+
+#[inline(always)]
 const fn port_offset(index: u8) -> usize {
     index as usize * PORT_STRIDE
 }
@@ -100,6 +106,20 @@ mod tests {
     fn ports_lie_one_kilobyte_apart() {
         assert_eq!(port_offset(port_index('A')), 0);
         assert_eq!(port_offset(port_index('D')), 0xC00);
+    }
+
+    #[test]
+    fn a_port_index_never_leaves_the_ports_of_the_family() {
+        for index in 0..=8 {
+            assert_eq!(confined(index), index);
+        }
+        for index in [9, 14, 15, 70, 255] {
+            assert_eq!(confined(index), 8);
+        }
+        assert_eq!(
+            pac::Gpioa::PTR as usize + port_offset(confined(255)),
+            pac::Gpioi::PTR as usize
+        );
     }
 
     #[test]

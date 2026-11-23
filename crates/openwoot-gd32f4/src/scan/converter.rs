@@ -1,8 +1,9 @@
 #![allow(
     clippy::cast_possible_truncation,
     clippy::inline_always,
-    reason = "the input count fits the 16 ranks, the timer counter is compared as its low 16 bits, \
-              and the per-sample steps are inlined into the scan interrupt to keep it short"
+    reason = "the input count fits the 8 conversions of a trigger, the timer counter is compared \
+              as its low 16 bits, and the per-sample steps are inlined into the scan interrupt to \
+              keep it short"
 )]
 
 use cortex_m::peripheral::NVIC;
@@ -13,7 +14,7 @@ use openwoot::{
 
 use super::{
     Conversion, InterruptHandler, Peripherals, Wiring,
-    adc::{self, MAX_RANKS, Trigger},
+    adc::{self, MAX_INPUTS, Trigger},
     transport, trigger,
     wiring::ADDRESS_LINES,
 };
@@ -49,7 +50,11 @@ impl<const INPUTS: usize> Converter<INPUTS> {
         clocks: &Clocks,
         _irqs: impl Binding<typelevel::ADC, InterruptHandler<Hook>>,
     ) -> Self {
-        const { assert!(INPUTS > 0 && INPUTS <= MAX_RANKS) };
+        const { assert!(INPUTS > 0 && INPUTS <= MAX_INPUTS) };
+        assert!(
+            wiring.is_valid(),
+            "a scan wiring of ports A to I, pins 0 to 15 and channels 0 to 18"
+        );
         let Peripherals {
             adc: _,
             adc_common: _,
@@ -78,6 +83,7 @@ impl<const INPUTS: usize> Converter<INPUTS> {
     }
 
     fn configure_converter(wiring: &Wiring<INPUTS>) {
+        transport::enable_clock();
         transport::start(1);
         for input in wiring.inputs {
             input.line.into_analog();

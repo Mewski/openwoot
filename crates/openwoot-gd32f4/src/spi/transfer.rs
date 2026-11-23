@@ -23,6 +23,7 @@ type TransmitChannel = dma::Channel<1, 3>;
 
 const SPI0_REQUEST: u32 = dma::request(3);
 const IDLE_WORD: u8 = 0x00;
+const SHIFT_OUT_SPINS: u32 = 1 << 22;
 
 static RECEIVED: AtomicWaker = AtomicWaker::new();
 static DISCARDED: AtomicU8 = AtomicU8::new(0);
@@ -124,9 +125,7 @@ impl<'s> Transfer<'s> {
 
 impl Drop for Transfer<'_> {
     fn drop(&mut self) {
-        while read_bits(self.spi.stat()) & STAT_TRANS != 0 {
-            spin_loop();
-        }
+        wait_until_shifted_out(self.spi);
         let receive = ReceiveChannel::new();
         let transmit = TransmitChannel::new();
         critical_section::with(|section| {
@@ -157,6 +156,14 @@ impl Handler<typelevel::DMA1_Channel2> for InterruptHandler {
             receive.clear_control(dma::INTERRUPTS);
             RECEIVED.wake();
         }
+    }
+}
+
+pub(super) fn wait_until_shifted_out(spi: &pac::Spi0) {
+    let mut spins = 0;
+    while read_bits(spi.stat()) & STAT_TRANS != 0 && spins < SHIFT_OUT_SPINS {
+        spins += 1;
+        spin_loop();
     }
 }
 

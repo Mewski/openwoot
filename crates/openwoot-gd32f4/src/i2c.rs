@@ -4,6 +4,8 @@ mod registers;
 mod timing;
 mod transfer;
 
+use core::hint::spin_loop;
+
 use embassy_futures::yield_now;
 use embassy_time::{Duration, with_timeout};
 use embedded_hal_async::i2c::{
@@ -28,7 +30,9 @@ use crate::{
 };
 
 const TRANSFER_TIMEOUT: Duration = Duration::from_millis(10);
-const MAX_TRANSFER: usize = 0xFFFF;
+const MAX_TRANSFER: usize = 443;
+const MAX_WRITES: usize = 4;
+const RELEASE_SPINS: u32 = 10_000;
 
 static TRANSFERS: Transfers = Transfers::new();
 
@@ -83,6 +87,11 @@ impl I2c {
 
     fn recover(&self) {
         let i2c = &self.i2c;
+        let mut spins = 0;
+        while read_bits(i2c.stat1()) & STAT1_I2CBSY != 0 && spins < RELEASE_SPINS {
+            spins += 1;
+            spin_loop();
+        }
         set_bits(i2c.ctl0(), CTL0_SRESET);
         clear_bits(i2c.ctl0(), CTL0_SRESET);
         Channel::new().clear_flags();
@@ -106,11 +115,13 @@ impl I2c {
             .await?;
         let _ = read_bits(i2c.stat0());
         let _ = read_bits(i2c.stat1());
-        critical_section::with(|section| modify_ctl1(section, i2c, |bits| bits | CTL1_DMAON));
-        for chunk in chunks.iter().filter(|chunk| !chunk.is_empty()) {
-            transfer.send(chunk).await?;
+        if chunks.iter().any(|chunk| !chunk.is_empty()) {
+            critical_section::with(|section| modify_ctl1(section, i2c, |bits| bits | CTL1_DMAON));
+            for chunk in chunks.iter().filter(|chunk| !chunk.is_empty()) {
+                transfer.send(chunk).await?;
+            }
+            transfer.event(STAT0_BTC, NoAcknowledgeSource::Data).await?;
         }
-        transfer.event(STAT0_BTC, NoAcknowledgeSource::Data).await?;
         transfer.stop().await;
         Ok(())
     }
@@ -131,23 +142,17 @@ impl hal_i2c::I2c for I2c {
         address: SevenBitAddress,
         operations: &mut [Operation<'_>],
     ) -> Result<(), Self::Error> {
-        let mut chunks: [&[u8]; 4] = [&[]; 4];
-        let mut count = 0;
-        for operation in operations.iter() {
-            match operation {
-                Operation::Read(_) => return Err(Error::Read),
-                Operation::Write(bytes) => {
-                    if bytes.len() > MAX_TRANSFER {
-                        return Err(Error::TooLong(bytes.len()));
-                    }
-                    let Some(slot) = chunks.get_mut(count) else {
-                        return Err(Error::TooManyWrites);
-                    };
-                    *slot = bytes;
-                    count += 1;
-                }
-            }
+        if operations.is_empty() {
+            return Ok(());
         }
+        let chunks = match writes(operations) {
+            Ok(chunks) => chunks,
+            Err(error) => {
+                let refused = Err(error);
+                TRANSFERS.record(&refused);
+                return refused;
+            }
+        };
         let result = match with_timeout(TRANSFER_TIMEOUT, self.write_all(address, &chunks)).await {
             Ok(result) => result,
             Err(_) => Err(Error::Timeout),
@@ -157,5 +162,101 @@ impl hal_i2c::I2c for I2c {
             self.recover();
         }
         result
+    }
+}
+
+fn writes<'w>(operations: &'w [Operation<'_>]) -> Result<[&'w [u8]; MAX_WRITES], Error> {
+    let mut chunks: [&[u8]; MAX_WRITES] = [&[]; MAX_WRITES];
+    let mut count = 0;
+    let mut total: usize = 0;
+    for operation in operations {
+        match operation {
+            Operation::Read(_) => return Err(Error::Read),
+            Operation::Write(bytes) => {
+                total = total.saturating_add(bytes.len());
+                if total > MAX_TRANSFER {
+                    return Err(Error::TooLong(total));
+                }
+                let Some(slot) = chunks.get_mut(count) else {
+                    return Err(Error::TooManyWrites);
+                };
+                *slot = bytes;
+                count += 1;
+            }
+        }
+    }
+    Ok(chunks)
+}
+
+#[cfg(test)]
+mod tests {
+    use openwoot::diagnostics::BusError;
+
+    use super::*;
+
+    const BITS_PER_BYTE: u64 = 9;
+    const ADDRESS_BYTES: u64 = 1;
+
+    fn micros_on_the_bus(data_bytes: u64) -> u64 {
+        (data_bytes + ADDRESS_BYTES) * BITS_PER_BYTE * 1_000_000 / u64::from(timing::BUS_HZ)
+    }
+
+    #[test]
+    fn the_longest_accepted_transfer_is_the_longest_that_fits_the_time_out() {
+        let longest = u64::try_from(MAX_TRANSFER).unwrap();
+        assert!(micros_on_the_bus(longest) <= TRANSFER_TIMEOUT.as_micros());
+        assert!(micros_on_the_bus(longest + 1) > TRANSFER_TIMEOUT.as_micros());
+    }
+
+    #[test]
+    fn writes_are_collected_in_order_and_reads_are_refused() {
+        let first = [1_u8, 2];
+        let second = [3_u8];
+        let empty: &[u8] = &[];
+        let mut target = [0_u8; 2];
+        assert_eq!(
+            writes(&[Operation::Write(&first), Operation::Write(&second)]),
+            Ok([&first[..], &second[..], empty, empty])
+        );
+        assert_eq!(writes(&[Operation::Write(empty)]), Ok([empty; MAX_WRITES]));
+        assert_eq!(
+            writes(&[Operation::Write(&first), Operation::Read(&mut target)]),
+            Err(Error::Read)
+        );
+    }
+
+    #[test]
+    fn a_transaction_that_cannot_end_within_the_time_out_is_refused() {
+        let longest = [0_u8; MAX_TRANSFER];
+        assert!(writes(&[Operation::Write(&longest)]).is_ok());
+        assert_eq!(
+            writes(&[Operation::Write(&longest), Operation::Write(&[0])]),
+            Err(Error::TooLong(MAX_TRANSFER + 1))
+        );
+    }
+
+    #[test]
+    fn more_writes_than_the_transfer_can_chain_are_refused() {
+        assert_eq!(
+            writes(&[
+                Operation::Write(&[1]),
+                Operation::Write(&[2]),
+                Operation::Write(&[3]),
+                Operation::Write(&[4]),
+                Operation::Write(&[5]),
+            ]),
+            Err(Error::TooManyWrites)
+        );
+    }
+
+    #[test]
+    fn every_refused_transaction_counts_as_an_other_bus_error() {
+        for error in [
+            Error::Read,
+            Error::TooLong(MAX_TRANSFER + 1),
+            Error::TooManyWrites,
+        ] {
+            assert_eq!(BusError::from(error), BusError::Other);
+        }
     }
 }

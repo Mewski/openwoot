@@ -52,9 +52,7 @@ impl UpdateMode for Bootloader {
 
 impl Restart for Bootloader {
     fn restart(&mut self, option: u8) {
-        if option != 0 {
-            self.write_backup(|rtc| write_bits(rtc.bkp2(), u32::from(option)));
-        }
+        self.write_backup(|rtc| write_bits(rtc.bkp2(), u32::from(option)));
         reset()
     }
 }

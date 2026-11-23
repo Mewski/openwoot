@@ -13,13 +13,14 @@ use crate::{
     interrupt::{self, Priority},
     pac,
     rcu::{self, Clocks, Hertz},
-    register::{read_bits, set_bits, write_bits},
+    register::{clear_bits, read_bits, set_bits, write_bits},
 };
 
 pub const TICK_HZ: u32 = 1_000_000;
 
 const COUNTER_BITS: u32 = 32;
 const APB1EN_TIMER4EN: u32 = 1 << 3;
+const APB1RST_TIMER4RST: u32 = 1 << 3;
 const CTL0_CEN: u32 = 1 << 0;
 const SWEVG_UPG: u32 = 1 << 0;
 const DMAINTEN_UPIE: u32 = 1 << 0;
@@ -30,7 +31,11 @@ const DMAINTEN_CH0IE: u32 = 1 << 1;
     reason = "taking the peripheral hands the timer to the time driver for good"
 )]
 pub fn start(timer: pac::Timer4, clocks: &Clocks) {
-    rcu::with_registers(|rcu| set_bits(rcu.apb1en(), APB1EN_TIMER4EN));
+    rcu::with_registers(|rcu| {
+        set_bits(rcu.apb1en(), APB1EN_TIMER4EN);
+        set_bits(rcu.apb1rst(), APB1RST_TIMER4RST);
+        clear_bits(rcu.apb1rst(), APB1RST_TIMER4RST);
+    });
     write_bits(timer.psc(), prescaler(clocks.apb1_timers));
     write_bits(timer.car(), monotonic::COUNTER_MAX);
     write_bits(timer.swevg(), SWEVG_UPG);

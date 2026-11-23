@@ -13,8 +13,13 @@ use crate::{
 };
 
 pub(super) const MAX_RANKS: usize = 16;
+pub(super) const MAX_INPUTS: usize = (CTL0_DISNUM >> CTL0_DISNUM_SHIFT) as usize + 1;
+pub(super) const MAX_CHANNEL: u8 = 18;
+
+const _: () = assert!(MAX_INPUTS <= MAX_RANKS);
 
 const SETTLE_US: u16 = 1000;
+const WAIT_SPINS: u32 = 1 << 22;
 const APB2EN_ADC0EN: u32 = 1 << 8;
 const STAT_EOC: u32 = 1 << 1;
 const STAT_ROVF: u32 = 1 << 5;
@@ -94,9 +99,9 @@ pub(super) fn configure() {
     }
     wait_microseconds(SETTLE_US);
     set_bits(adc.ctl1(), CTL1_RSTCLB);
-    while read_bits(adc.ctl1()) & CTL1_RSTCLB != 0 {}
+    wait_while(|| read_bits(adc.ctl1()) & CTL1_RSTCLB != 0);
     set_bits(adc.ctl1(), CTL1_CLB);
-    while read_bits(adc.ctl1()) & CTL1_CLB != 0 {}
+    wait_while(|| read_bits(adc.ctl1()) & CTL1_CLB != 0);
     set_bits(adc.ctl1(), CTL1_DDM);
     set_bits(adc.ctl1(), CTL1_DMA);
 }
@@ -192,13 +197,23 @@ pub(super) const fn sample_time_bits(sample_time: SampleTime) -> u32 {
 
 fn wait_microseconds(duration: u16) {
     let start = microseconds();
-    while microseconds().wrapping_sub(start) < duration {}
+    wait_while(|| microseconds().wrapping_sub(start) < duration);
+}
+
+fn wait_while(mut busy: impl FnMut() -> bool) {
+    let mut spins = 0;
+    while busy() && spins < WAIT_SPINS {
+        spins += 1;
+    }
 }
 
 #[inline(always)]
 fn adc() -> &'static pac::adc0::RegisterBlock {
     // SAFETY: `Converter::new` consumed `Adc0`; from then on only this module touches its
-    // registers, from the scan interrupt or between cycles, which never overlap.
+    // registers: from the scan interrupt and, between cycles, from the context that holds the
+    // scanner. The interrupt's `acknowledge` can run between two register accesses of that
+    // context; every access is one volatile read or write through a shared reference, so
+    // neither invalidates what the other holds.
     unsafe { &*pac::Adc0::ptr() }
 }
 
@@ -216,5 +231,30 @@ mod tests {
         assert_eq!(sample_time_bits(SampleTime::Cycles3), 0b000);
         assert_eq!(sample_time_bits(SampleTime::Cycles56), 0b011);
         assert_eq!(sample_time_bits(SampleTime::Cycles480), 0b111);
+    }
+
+    #[test]
+    fn a_trigger_converts_no_more_inputs_than_its_count_field_holds() {
+        assert_eq!(MAX_INPUTS, 8);
+        let last = (MAX_INPUTS as u32 - 1) << CTL0_DISNUM_SHIFT;
+        assert_eq!(last & CTL0_DISNUM, last);
+        let beyond = (MAX_INPUTS as u32) << CTL0_DISNUM_SHIFT;
+        assert_ne!(beyond & CTL0_DISNUM, beyond);
+    }
+
+    #[test]
+    fn a_wait_ends_when_its_condition_does_or_after_its_bound() {
+        let mut polls = 0_u32;
+        wait_while(|| {
+            polls += 1;
+            polls < 5
+        });
+        assert_eq!(polls, 5);
+        let mut polls = 0_u32;
+        wait_while(|| {
+            polls += 1;
+            true
+        });
+        assert_eq!(polls, WAIT_SPINS + 1);
     }
 }

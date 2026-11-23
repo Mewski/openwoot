@@ -6,6 +6,7 @@ use crate::{
 };
 
 const CTL_IRC16MEN: u32 = 1 << 0;
+const CTL_IRC16MSTB: u32 = 1 << 1;
 const CTL_HXTALEN: u32 = 1 << 16;
 const CTL_HXTALSTB: u32 = 1 << 17;
 const CTL_HXTALBPS: u32 = 1 << 18;
@@ -14,6 +15,7 @@ const CTL_PLLEN: u32 = 1 << 24;
 const CTL_PLLSTB: u32 = 1 << 25;
 const CFG0_SCS: u32 = 0b11;
 const CFG0_SCS_PLLP: u32 = 0b10;
+const CFG0_SCSS: u32 = 0b11 << 2;
 const CFG0_SCSS_PLLP: u32 = 0b10 << 2;
 const CFG0_AHBPSC_SHIFT: u32 = 4;
 const CFG0_APB1PSC_SHIFT: u32 = 10;
@@ -31,6 +33,7 @@ const PMU_CTL_HDS: u32 = 1 << 17;
 const PMU_CS_HDRF: u32 = 1 << 16;
 const PMU_CS_HDSRF: u32 = 1 << 17;
 const HXTAL_STARTUP_TIMEOUT: u32 = 0xFFFF;
+const HAND_OVER_TIMEOUT: u32 = 0x1_0000;
 const PRESCALER_STEP_DELAY_CYCLES: u32 = 300_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -219,8 +222,9 @@ impl ClockTree {
         clear_bits(rcu.cfg0(), CFG0_SCS);
         set_bits(rcu.cfg0(), CFG0_SCS_PLLP);
         wait_until(|| read_bits(rcu.cfg0()) & CFG0_SCSS_PLLP != 0);
-        if self.timer_multiplier == TimerMultiplier::Quadruple {
-            set_bits(rcu.cfg1(), CFG1_TIMERSEL);
+        match self.timer_multiplier {
+            TimerMultiplier::Quadruple => set_bits(rcu.cfg1(), CFG1_TIMERSEL),
+            TimerMultiplier::Double => clear_bits(rcu.cfg1(), CFG1_TIMERSEL),
         }
         self.clocks()
     }
@@ -251,7 +255,8 @@ pub(crate) fn with_registers<Output>(
 ) -> Output {
     critical_section::with(|_| {
         // SAFETY: `ClockTree::configure` consumed the `Rcu` peripheral; afterwards its registers
-        // are changed only here, inside a critical section, so no two read-modify-writes overlap.
+        // are changed only here, inside a critical section, and never from the scan interrupt, so
+        // no two read-modify-writes overlap.
         change(unsafe { &*pac::Rcu::ptr() })
     })
 }
@@ -266,12 +271,15 @@ fn start_crystal(rcu: &pac::Rcu) {
 
 fn reset_to_internal_oscillator(rcu: &pac::Rcu) {
     set_bits(rcu.ctl(), CTL_IRC16MEN);
+    let _ = (0..HAND_OVER_TIMEOUT).any(|_| read_bits(rcu.ctl()) & CTL_IRC16MSTB != 0);
     set_bits(rcu.cfg0(), AhbDivider::By2.field() << CFG0_AHBPSC_SHIFT);
     cortex_m::asm::delay(PRESCALER_STEP_DELAY_CYCLES);
     set_bits(rcu.cfg0(), AhbDivider::By4.field() << CFG0_AHBPSC_SHIFT);
     cortex_m::asm::delay(PRESCALER_STEP_DELAY_CYCLES);
     clear_bits(rcu.cfg0(), CFG0_SCS);
+    let _ = (0..HAND_OVER_TIMEOUT).any(|_| read_bits(rcu.cfg0()) & CFG0_SCSS == 0);
     clear_bits(rcu.ctl(), CTL_PLLEN | CTL_CKMEN | CTL_HXTALEN);
+    let _ = (0..HAND_OVER_TIMEOUT).any(|_| read_bits(rcu.ctl()) & CTL_PLLSTB == 0);
     clear_bits(rcu.ctl(), CTL_HXTALBPS);
     write_bits(rcu.cfg0(), 0);
     write_bits(rcu.pll(), PLL_RESET);
