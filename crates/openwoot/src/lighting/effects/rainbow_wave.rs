@@ -1,13 +1,13 @@
 use openwoot_protocol::lighting::{HueRange, RainbowWave};
 
-use super::hue::{Hues, hue_to_rgb, phase_step};
+use super::hue::{Hues, Phase, hue_to_rgb};
 use crate::lighting::canvas::Canvas;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct State {
     config: RainbowWave,
     hues: Hues,
-    phase: u16,
+    phase: Phase,
 }
 
 impl State {
@@ -15,7 +15,7 @@ impl State {
         Self {
             config,
             hues: Hues::of(config.hues),
-            phase: 0,
+            phase: Phase::new(),
         }
     }
 
@@ -31,15 +31,14 @@ impl State {
         canvas: &mut impl Canvas,
         elapsed_ms: u32,
     ) {
-        let step = phase_step(self.config.period, elapsed_ms);
+        self.phase
+            .advance(self.config.period, elapsed_ms, self.config.forward);
         let (first, second) = if self.config.forward {
-            self.phase = self.phase.wrapping_add(step);
             (i32::from(self.hues.first), i32::from(self.hues.last))
         } else {
-            self.phase = self.phase.wrapping_sub(step);
             (i32::from(self.hues.last), i32::from(self.hues.first))
         };
-        let offset = usize::from(self.phase >> 8);
+        let offset = usize::from(self.phase.turn() >> 8);
         for column in 0..COLUMNS {
             let hue = if self.config.hues == HueRange::FullCircle {
                 let position = wrap(offset + 255 * column / COLUMNS);

@@ -88,6 +88,8 @@ pub trait Signals {
 
     fn activate_host_signals(&mut self) {}
 
+    fn end_host_signals(&mut self) {}
+
     fn set_host_signals(&mut self, values: &[HostSignal]) {
         let _ = values;
     }

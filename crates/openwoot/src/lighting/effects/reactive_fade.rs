@@ -138,9 +138,7 @@ fn palette_cell(
         }
         animating = *cell & PALETTE_LEVEL_MASK != 0;
     }
-    if config.inverted {
-        level = !level;
-    }
+    let level = mirrored_when_inverted(level, config.inverted);
     let color = palette_color(*cell & PALETTE_COLOR_MASK);
     set_key_scaled(
         canvas,
@@ -179,10 +177,7 @@ fn plain_cell(
     column: usize,
 ) -> bool {
     let countdown = count_down(cell, steps);
-    let mut level = low_8(255 * countdown / LEVEL_MAX);
-    if config.inverted {
-        level = !level;
-    }
+    let level = mirrored_when_inverted(low_8(255 * countdown / LEVEL_MAX), config.inverted);
     canvas.scale_key(row, column, mix_level(config.base_level, level));
     countdown != 0
 }
@@ -197,12 +192,13 @@ fn fixed_cell(
     column: usize,
 ) -> bool {
     let countdown = count_down(cell, steps);
-    if countdown == 0 {
+    let level = u32::from(mirrored_when_inverted(
+        low_8(255 * countdown / LEVEL_MAX),
+        config.inverted,
+    ));
+    if level == 0 {
         canvas.scale_key(row, column, config.base_level);
-        return false;
-    }
-    let level = u32::from(low_8(255 * countdown / LEVEL_MAX));
-    if level < CROSSFADE_LEVEL {
+    } else if level < CROSSFADE_LEVEL {
         if let Some(led) = canvas.led_of(row, column)
             && let Some(current) = canvas.led(led)
         {
@@ -230,7 +226,11 @@ fn fixed_cell(
             mix_level(config.base_level, dim),
         );
     }
-    true
+    countdown != 0
+}
+
+const fn mirrored_when_inverted(level: u8, inverted: bool) -> u8 {
+    if inverted { !level } else { level }
 }
 
 fn crossfade(current: u8, target: u8, weight: i32) -> u8 {

@@ -1,13 +1,13 @@
 use openwoot_protocol::lighting::{HueCycle, HueRange};
 
-use super::hue::{Hues, hue_to_rgb, phase_step};
+use super::hue::{Hues, Phase, hue_to_rgb};
 use crate::lighting::canvas::Canvas;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct State {
     config: HueCycle,
     hues: Hues,
-    phase: u16,
+    phase: Phase,
 }
 
 impl State {
@@ -15,7 +15,7 @@ impl State {
         Self {
             config,
             hues: Hues::of(config.hues),
-            phase: 0,
+            phase: Phase::new(),
         }
     }
 
@@ -30,10 +30,8 @@ impl State {
         canvas: &mut impl Canvas,
         elapsed_ms: u32,
     ) {
-        self.phase = self
-            .phase
-            .wrapping_add(phase_step(self.config.period, elapsed_ms));
-        let position = i32::from(self.phase >> 8);
+        self.phase.advance(self.config.period, elapsed_ms, true);
+        let position = i32::from(self.phase.turn() >> 8);
         let first = i32::from(self.hues.first);
         let last = i32::from(self.hues.last);
         let hue = if self.config.hues == HueRange::FullCircle {

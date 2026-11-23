@@ -987,3 +987,250 @@ fn a_key_pressed_again_without_a_release_counts_once_and_rest_clears_it() {
     bar.travel_changed(0);
     assert_eq!(bar_colors(&mut bar)[..2], ["000000", "7e7e7e"]);
 }
+
+fn host_meter(id: u32, first: u8, last: u8) -> Entry {
+    let mut entry = meter(Signal::Host(id), 1.0, first, last);
+    if let Effect::Meter(meter) = &mut entry.effect {
+        meter.background = Some(color_of(rgb_of("102030")));
+    }
+    entry
+}
+
+fn host_is_zero(id: u32) -> Condition {
+    condition_of(
+        Logic::All,
+        Logic::All,
+        &[compare(
+            Signal::Host(id),
+            Comparator::Equal,
+            Operand::Constant(0.0),
+            None,
+        )],
+    )
+}
+
+fn bar_lighting() -> Lighting<Bar, ROWS, COLUMNS, BAR_PAGES, LENGTH> {
+    Lighting::new(
+        &BAR_MAP,
+        &VARIANT,
+        GEOMETRY,
+        Bar::new(&BAR_LEDS, &BAR_MAP, COLUMNS),
+        0,
+    )
+}
+
+#[test]
+fn a_host_session_end_zeroes_the_host_signals_and_darkens_host_meters_until_the_host_returns() {
+    let shared = profile::Shared::<CriticalSectionRawMutex>::new();
+    let mut lighting = bar_lighting();
+    shared.edit(|appearance| {
+        appearance.lightbar =
+            profile_of([host_meter(42, 0, 3), solid_on(4, 9, Some(host_is_zero(7)))]);
+    });
+    shared.activate(false);
+    shared.host_signals().set(&[
+        HostSignal { id: 42, value: 1.0 },
+        HostSignal { id: 7, value: 2.0 },
+        HostSignal { id: 99, value: 1.0 },
+    ]);
+    shared.apply(&mut lighting, 0);
+    let shown = bar_colors(lighting.hooks_mut());
+    assert_eq!(shown[..4], ["ffffff"; 4]);
+    assert_eq!(shown[4..], ["000000"; 6]);
+
+    shared
+        .host_signals()
+        .set(&[HostSignal { id: 42, value: 0.5 }]);
+    shared.host_signals().end_session();
+    shared.apply(&mut lighting, 4);
+    assert!(lighting.hooks().needs_render(0));
+    let ended = bar_colors(lighting.hooks_mut());
+    assert_eq!(
+        ended[..4],
+        ["000000"; 4],
+        "the host meter is off and the value 0.5 queued before the end was dropped"
+    );
+    assert_eq!(
+        ended[4..],
+        ["ff0000"; 6],
+        "the condition sees host signal 7 at 0"
+    );
+
+    assert_eq!(shared.host_signals().ids().as_slice(), &[42, 7]);
+    shared.apply(&mut lighting, 8);
+    assert_eq!(
+        bar_colors(lighting.hooks_mut())[..4],
+        ["102030"; 4],
+        "listing the signals turns the meter on again at the value 0"
+    );
+
+    shared.change(profile::Changes::LIGHTBAR, |appearance| {
+        appearance.lightbar = profile_of([host_meter(99, 0, 3)]);
+    });
+    shared.apply(&mut lighting, 12);
+    assert_eq!(
+        bar_colors(lighting.hooks_mut())[..4],
+        ["102030"; 4],
+        "the value kept for the unbound id 99 was zeroed"
+    );
+    shared
+        .host_signals()
+        .set(&[HostSignal { id: 99, value: 1.0 }]);
+    shared.apply(&mut lighting, 16);
+    assert_eq!(bar_colors(lighting.hooks_mut())[..4], ["ffffff"; 4]);
+}
+
+#[test]
+fn a_host_session_end_before_any_host_value_lets_host_conditions_see_zero() {
+    let mut bar = Bar::new(&BAR_LEDS, &BAR_MAP, COLUMNS);
+    bar.configure(
+        &profile_of([solid_on(0, 9, Some(host_is_zero(1)))]),
+        &Entries::new(),
+        255,
+    );
+    assert_eq!(bar_colors(&mut bar)[0], "000000");
+    bar.end_host_signals();
+    assert!(bar.needs_render(16));
+    assert_eq!(bar_colors(&mut bar)[0], "ff0000");
+}
+
+mod bus_reset {
+    use std::pin::pin;
+
+    use embassy_futures::block_on;
+    use embassy_sync::mutex::Mutex;
+    use embassy_usb_driver::Event;
+    use openwoot::{
+        diagnostics::Diagnostics,
+        lighting::{HostControl, KeyEvents, LedMatrix},
+        protocol::{Channel, Handler},
+        runtime,
+        usb::{Face, HostState, Resources, build},
+    };
+    use openwoot_protocol::{
+        FirmwareVersion, PROTOCOL_VERSION, Version, encode_request, endpoints::GetVersion, report,
+    };
+
+    use super::*;
+    use crate::support::{Host, IDENTITY, Outcome, Recorder, poll, setup, stock_identity};
+
+    const CHANNEL_OUT: u8 = 0x03;
+    const PACKET_SIZE: usize = 64;
+    const SET_CONFIGURATION: u8 = 0x09;
+    const VERSION: Version = Version {
+        protocol: PROTOCOL_VERSION,
+        firmware: FirmwareVersion {
+            major: 1,
+            minor: 2,
+            patch: 3,
+        },
+    };
+
+    struct NoLeds;
+
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the test never lights the chip"
+    )]
+    impl LedMatrix for NoLeds {
+        type Error = ();
+
+        async fn initialize(&mut self) -> Result<(), ()> {
+            Ok(())
+        }
+
+        async fn set_running(&mut self, _running: bool) -> Result<(), ()> {
+            Ok(())
+        }
+
+        async fn write(&mut self, _bank: u8, _first: u8, _values: &[u8]) -> Result<(), ()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_bus_reset_zeroes_the_host_signals_and_turns_host_meters_off() {
+        static STATE: HostState = HostState::new();
+        static HOST_CONTROL: HostControl = HostControl::new();
+        let host = Host::default();
+        let mut resources = Resources::new();
+        let mut device = build(
+            host.driver(),
+            Face::default(),
+            IDENTITY,
+            &mut resources,
+            &STATE,
+        );
+        let mut channel = Channel::new(device.channel.output, device.channel.input);
+        let mut run = pin!(device.usb.run());
+        host.attach(run.as_mut());
+        let configure = setup(0, SET_CONFIGURATION, 1, 0, 0);
+        assert_eq!(
+            host.control_out(run.as_mut(), configure, &[]),
+            Some(Outcome::Accepted)
+        );
+        let mut handler = Handler::new(VERSION, stock_identity(None))
+            .with_host(&STATE)
+            .with_host_control(&HOST_CONTROL);
+        let mut keyboard = Recorder::default();
+
+        let shared = profile::Shared::<CriticalSectionRawMutex>::new();
+        shared.edit(|appearance| {
+            appearance.lightbar =
+                profile_of([host_meter(42, 0, 3), solid_on(4, 9, Some(host_is_zero(7)))]);
+        });
+        shared.activate(false);
+        let lighting = Mutex::<CriticalSectionRawMutex, _>::new(bar_lighting());
+        let events = KeyEvents::new();
+        let notices = runtime::KeyNotices::new();
+        let diagnostics = Diagnostics::new();
+        let task = runtime::Lighting {
+            lighting: &lighting,
+            events: &events,
+            notices: &notices,
+            host: &STATE,
+            host_control: &HOST_CONTROL,
+            diagnostics: &diagnostics,
+            profile: &shared,
+        };
+        let shown = || bar_colors(block_on(lighting.lock()).hooks_mut());
+
+        shared.host_signals().set(&[
+            HostSignal { id: 42, value: 1.0 },
+            HostSignal { id: 7, value: 2.0 },
+        ]);
+        block_on(task.step(&mut NoLeds, &(), 0, false));
+        assert_eq!(shown()[..4], ["ffffff"; 4]);
+        assert_eq!(shown()[4..], ["000000"; 6]);
+
+        host.bus_events(run.as_mut(), &[Event::Reset]);
+        assert_eq!(
+            host.control_out(run.as_mut(), configure, &[]),
+            Some(Outcome::Accepted)
+        );
+        let mut request = [0; report::MAX_LEN];
+        let request = encode_request::<GetVersion>(2, &(), &mut request).unwrap();
+        host.send_packets(CHANNEL_OUT, request, PACKET_SIZE);
+        assert_eq!(
+            poll(pin!(channel.serve(
+                &mut handler,
+                STATE.feature_requests(),
+                &mut keyboard
+            ))),
+            Some(Ok(()))
+        );
+        block_on(task.step(&mut NoLeds, &(), 4, false));
+        assert_eq!(shown()[..4], ["000000"; 4], "the host meter is off");
+        assert_eq!(shown()[4..], ["ff0000"; 6], "host signal 7 reads 0");
+
+        shared
+            .host_signals()
+            .set(&[HostSignal { id: 42, value: 1.0 }]);
+        block_on(task.step(&mut NoLeds, &(), 8, false));
+        assert_eq!(
+            shown()[..4],
+            ["ffffff"; 4],
+            "a new value turns the meter on again"
+        );
+    }
+}

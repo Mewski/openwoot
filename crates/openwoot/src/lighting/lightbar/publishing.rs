@@ -4,7 +4,7 @@ use super::Bar;
 use crate::{
     keys::Key,
     lighting::{
-        hooks::Signals,
+        hooks::{Lightbar, Signals},
         indicators::LockState,
         input::{KeyEvent, TRAVEL_FULL},
         signals::ProfileState,
@@ -76,6 +76,15 @@ impl Signals for Bar {
 
     fn activate_host_signals(&mut self) {
         self.signals.activate_host();
+    }
+
+    fn end_host_signals(&mut self) {
+        if self.signals.end_host() {
+            self.request_redraw();
+        }
+        for id in self.signals.host_ids() {
+            self.publish(Signal::Host(id), 0.0);
+        }
     }
 
     fn set_host_signals(&mut self, values: &[HostSignal]) {

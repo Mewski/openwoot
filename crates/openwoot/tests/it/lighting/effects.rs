@@ -7,7 +7,7 @@ use openwoot::{
         Painter, TRAVEL_FULL, Variant, from_rgb565, rgb,
     },
 };
-use openwoot_protocol::lighting::Effect;
+use openwoot_protocol::lighting::{Effect, Rgb};
 
 use super::support::{
     COLUMNS, GEOMETRY, LENGTH, MAP, PAGES, ROWS, VARIANT, base_color, byte, effect,
@@ -401,5 +401,119 @@ fn applying_unchanged_settings_keeps_every_effect_running() {
                 "{layer:?} frame {frame}"
             );
         }
+    }
+}
+
+const RED_565: u32 = 0xF800;
+
+struct BlueKeyUnderRedFade {
+    rest_then_pressed: Vec<Rgb>,
+    animating_after_last: bool,
+}
+
+fn blue_key_under_red_fade(
+    base_level: u32,
+    flags: u32,
+    frames_after_press: usize,
+) -> BlueKeyUnderRedFade {
+    let mut effects = EffectStack::<1, 1>::new();
+    effects.apply(&[effect(6, [base_level, 4, flags, RED_565])]);
+    let geometry = Geometry {
+        first_key_row: 0,
+        level_meter_segments: 0,
+    };
+    let render = |effects: &mut EffectStack<1, 1>| {
+        let mut frame = Frame::<1, 3>::new();
+        let mut canvas = Painter::new(&mut frame, &FULL_MAP, &ONE_KEY, None);
+        canvas.set_key(0, 0, rgb(0, 0, 255));
+        effects.render(&mut canvas, geometry, 16);
+        canvas.key(0, 0).unwrap()
+    };
+    let mut colors = vec![render(&mut effects)];
+    effects.event(Key::new(0, 0), KeyEvent::Pressed, 0, &ONE_KEY);
+    colors.extend((0..frames_after_press).map(|_| render(&mut effects)));
+    BlueKeyUnderRedFade {
+        rest_then_pressed: colors,
+        animating_after_last: effects.needs_render(),
+    }
+}
+
+fn light(color: Rgb) -> u32 {
+    u32::from(color.red) + u32::from(color.green) + u32::from(color.blue)
+}
+
+const FIXED: u32 = 2;
+const INVERTED: u32 = 4;
+
+#[test]
+fn an_inverted_fixed_colour_fade_rests_on_its_colour_and_a_press_takes_the_light_away() {
+    let BlueKeyUnderRedFade {
+        rest_then_pressed: colors,
+        animating_after_last: animating,
+    } = blue_key_under_red_fade(0, FIXED | INVERTED, 80);
+    let rest = colors[0];
+    assert!(
+        rest.red > 250 && rest.green == 0 && rest.blue == 0,
+        "{rest:?}"
+    );
+    assert_eq!(colors[1], rgb(0, 0, 0));
+    for (frame, pair) in colors[1..].windows(2).enumerate() {
+        assert!(
+            light(pair[1]) >= light(pair[0]),
+            "frame {}: {:?} after {:?}",
+            frame + 2,
+            pair[1],
+            pair[0]
+        );
+    }
+    assert!(
+        colors[2..]
+            .iter()
+            .any(|&color| color != rgb(0, 0, 0) && color != rest)
+    );
+    assert_eq!(colors.last(), Some(&rest));
+    assert!(!animating);
+}
+
+#[test]
+fn an_inverted_fixed_colour_fade_mirrors_the_plain_one() {
+    let BlueKeyUnderRedFade {
+        rest_then_pressed: plain,
+        animating_after_last: plain_animating,
+    } = blue_key_under_red_fade(80, FIXED, 80);
+    let BlueKeyUnderRedFade {
+        rest_then_pressed: inverted,
+        animating_after_last: inverted_animating,
+    } = blue_key_under_red_fade(80, FIXED | INVERTED, 80);
+    assert_eq!(
+        inverted[0], plain[1],
+        "an inverted key rests where a press starts"
+    );
+    assert_eq!(
+        inverted[1], plain[0],
+        "an inverted press starts where a key rests"
+    );
+    assert!(
+        inverted[1].red == 0 && inverted[1].blue > 0,
+        "{:?}",
+        inverted[1]
+    );
+    assert!(
+        inverted
+            .iter()
+            .any(|color| color.red != 0 && color.blue != 0),
+        "an inverted press crossfades from the key colour to the fixed colour"
+    );
+    assert_eq!(plain.last(), Some(&plain[0]));
+    assert_eq!(inverted.last(), Some(&inverted[0]));
+    assert!(!plain_animating && !inverted_animating);
+}
+
+#[test]
+fn an_inverted_press_dims_to_the_same_base_with_a_fixed_colour_and_with_the_key_colour() {
+    for base_level in [0, 80, 200] {
+        let key_color = blue_key_under_red_fade(base_level, INVERTED, 1).rest_then_pressed;
+        let fixed = blue_key_under_red_fade(base_level, FIXED | INVERTED, 1).rest_then_pressed;
+        assert_eq!(fixed[1], key_color[1], "base level {base_level}");
     }
 }

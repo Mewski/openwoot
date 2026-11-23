@@ -138,6 +138,13 @@ impl Table {
         self.host_active = true;
     }
 
+    pub(crate) fn end_host(&mut self) -> bool {
+        for kept in &mut self.remembered {
+            kept.value = 0.0;
+        }
+        core::mem::take(&mut self.host_active)
+    }
+
     #[must_use]
     pub(crate) const fn host_active(&self) -> bool {
         self.host_active
@@ -333,6 +340,18 @@ mod tests {
         assert_eq!(table.subscribe(Signal::Host(0), entry_of(0)), Some(1.0));
         assert_eq!(table.subscribe(Signal::Host(3), entry_of(0)), Some(2.0));
         assert_eq!(table.subscribe(Signal::Host(19), entry_of(0)), Some(1.0));
+    }
+
+    #[test]
+    fn ending_the_host_deactivates_it_and_zeroes_the_values_kept_for_later() {
+        let mut table = Table::new();
+        assert!(!table.end_host());
+        table.activate_host();
+        table.set_host(8, 3.0);
+        assert!(table.end_host());
+        assert!(!table.host_active());
+        assert!(!table.end_host());
+        assert_eq!(table.subscribe(Signal::Host(8), entry_of(0)), Some(0.0));
     }
 
     #[test]

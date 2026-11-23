@@ -1,4 +1,7 @@
-use core::cell::RefCell;
+use core::{
+    cell::RefCell,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use embassy_sync::{
     blocking_mutex::{Mutex, raw::CriticalSectionRawMutex},
@@ -17,6 +20,7 @@ const REQUEST_CAPACITY: usize = 16;
 pub struct HostControl {
     requests: Channel<CriticalSectionRawMutex, Request, REQUEST_CAPACITY>,
     colors: Mutex<CriticalSectionRawMutex, RefCell<KeyColors>>,
+    session_ended: AtomicBool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,6 +39,7 @@ impl HostControl {
         Self {
             requests: Channel::new(),
             colors: Mutex::new(RefCell::new(KeyColors::new())),
+            session_ended: AtomicBool::new(false),
         }
     }
 
@@ -105,6 +110,15 @@ impl HostControl {
 
     pub(crate) async fn leave(&self) {
         self.requests.send(Request::Leave).await;
+    }
+
+    pub(crate) fn end_session(&self) {
+        self.session_ended.store(true, Ordering::Release);
+    }
+
+    #[must_use]
+    pub(crate) fn take_session_end(&self) -> bool {
+        self.session_ended.swap(false, Ordering::AcqRel)
     }
 }
 

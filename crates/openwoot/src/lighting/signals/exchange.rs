@@ -14,6 +14,7 @@ struct Exchanged {
     ids: HostSignalIds,
     pending: HostSignals,
     activated: bool,
+    zero_before_next_values: bool,
 }
 
 impl<M: RawMutex> HostExchange<M> {
@@ -24,6 +25,7 @@ impl<M: RawMutex> HostExchange<M> {
                 ids: HostSignalIds::new(),
                 pending: HostSignals::new(),
                 activated: false,
+                zero_before_next_values: false,
             })),
         }
     }
@@ -44,6 +46,7 @@ impl<M: RawMutex> HostExchange<M> {
                 ids,
                 pending,
                 activated,
+                ..
             } = &mut *state;
             *activated = true;
             for value in values {
@@ -60,14 +63,27 @@ impl<M: RawMutex> HostExchange<M> {
         });
     }
 
+    pub fn end_session(&self) {
+        self.state.lock(|state| {
+            let mut state = state.borrow_mut();
+            state.pending.clear();
+            state.activated = false;
+            state.zero_before_next_values = true;
+        });
+    }
+
     pub fn sync(&self, signals: &mut impl Signals) {
-        let (pending, activated) = self.state.lock(|state| {
+        let (pending, activated, zero_first) = self.state.lock(|state| {
             let mut state = state.borrow_mut();
             (
                 core::mem::take(&mut state.pending),
                 core::mem::take(&mut state.activated),
+                core::mem::take(&mut state.zero_before_next_values),
             )
         });
+        if zero_first {
+            signals.end_host_signals();
+        }
         if activated {
             signals.activate_host_signals();
         }
@@ -108,11 +124,17 @@ mod tests {
 
     #[derive(Default)]
     struct Recorder {
+        ended: bool,
         activated: bool,
         values: Vec<HostSignal>,
     }
 
     impl Signals for Recorder {
+        fn end_host_signals(&mut self) {
+            assert!(!self.activated && self.values.is_empty());
+            self.ended = true;
+        }
+
         fn activate_host_signals(&mut self) {
             self.activated = true;
         }
@@ -174,5 +196,29 @@ mod tests {
         assert!(recorder.values.contains(&HostSignal { id: 7, value: 0.5 }));
         assert!(recorder.values.contains(&HostSignal { id: 3, value: 0.25 }));
         assert!(!recorder.values.iter().any(|value| value.id == 120));
+    }
+
+    #[test]
+    fn a_session_end_drops_waiting_values_and_ends_before_newer_ones_apply() {
+        let exchange = HostExchange::<CriticalSectionRawMutex>::new();
+        exchange.set(&[HostSignal { id: 7, value: 1.0 }]);
+        exchange.end_session();
+        let mut ended = Recorder::default();
+        exchange.sync(&mut ended);
+        assert!(ended.ended);
+        assert!(!ended.activated);
+        assert_eq!(ended.values, []);
+
+        exchange.set(&[HostSignal { id: 3, value: 0.5 }]);
+        exchange.end_session();
+        exchange.set(&[HostSignal { id: 7, value: 2.0 }]);
+        let mut renewed = Recorder::default();
+        exchange.sync(&mut renewed);
+        assert!(renewed.ended && renewed.activated);
+        assert_eq!(renewed.values, [HostSignal { id: 7, value: 2.0 }]);
+
+        let mut later = Recorder::default();
+        exchange.sync(&mut later);
+        assert!(!later.ended);
     }
 }

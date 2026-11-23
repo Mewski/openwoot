@@ -192,6 +192,7 @@ impl<C: Configuration> Handler<C> {
             sensors.set_raw_scanning(false);
         }
         if let Some(host_control) = self.host_control {
+            host_control.end_session();
             bounded(delay, host_control.leave()).await;
         }
     }

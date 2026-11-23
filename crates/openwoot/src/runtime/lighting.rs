@@ -92,6 +92,9 @@ where
         usb_active: bool,
     ) -> bool {
         let mut lighting = self.lighting.lock().await;
+        if self.host_control.take_session_end() {
+            self.profile.host_signals().end_session();
+        }
         self.profile.apply(&mut lighting, now_ms);
         while let Ok(activity) = self.events.try_receive() {
             lighting.key_event(activity.key, activity.event, activity.at_ms);
