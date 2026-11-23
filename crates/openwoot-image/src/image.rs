@@ -2,11 +2,6 @@ use crate::{Descriptor, DescriptorError, Hex, Region};
 
 const VECTOR_SIZE: usize = 4;
 const RESET_VECTOR_INDEX: usize = 1;
-const STACK_REGION: Region = Region {
-    start: 0x2000_0000,
-    end: 0x4000_0001,
-};
-const STACK_ALIGNMENT: u32 = 8;
 const ERASED_WORD: u32 = 0xFFFF_FFFF;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,8 +32,12 @@ pub enum Error {
         end: u32,
         capacity: u32,
     },
-    #[error("initial stack pointer {} is not an aligned RAM address", Hex(*.0))]
-    MisplacedStackPointer(u32),
+    #[error(
+        "initial stack pointer {} is not the end of RAM at {}",
+        Hex(*.found),
+        Hex(*.expected)
+    )]
+    MisplacedStackPointer { found: u32, expected: u32 },
     #[error("vector {index} ({}) does not point into the image as Thumb code", Hex(*.address))]
     VectorOutsideImage { index: usize, address: u32 },
     #[error("reset vector {} does not point behind the descriptor as Thumb code", Hex(*.0))]
@@ -78,8 +77,12 @@ impl<'a> Image<'a> {
         };
 
         let stack_pointer = image.vector(0);
-        if !STACK_REGION.contains(stack_pointer) || !stack_pointer.is_multiple_of(STACK_ALIGNMENT) {
-            return Err(Error::MisplacedStackPointer(stack_pointer));
+        let stack_top = descriptor.ram().end;
+        if stack_pointer != stack_top {
+            return Err(Error::MisplacedStackPointer {
+                found: stack_pointer,
+                expected: stack_top,
+            });
         }
         for index in RESET_VECTOR_INDEX + 1..descriptor_offset / VECTOR_SIZE {
             let address = image.vector(index);
@@ -142,11 +145,12 @@ const fn is_thumb_code_in(region: Region, address: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{UpdateMode, UsbIds};
+    use crate::{UpdateMode, UpdateProtocol, UsbIds};
 
     const START: u32 = 0x0800_8000;
+    const RAM_END: u32 = 0x2003_0000;
     const DESCRIPTOR_OFFSET: usize = 0x1C0;
-    const CODE: u32 = START + 0x200;
+    const CODE: u32 = START + 0x208;
 
     const DESCRIPTOR: Descriptor = Descriptor::new(
         "Example board",
@@ -158,7 +162,12 @@ mod tests {
             start: START,
             end: START + 0x1_0000,
         },
+        Region {
+            start: 0x2000_0000,
+            end: RAM_END,
+        },
         Some(UpdateMode {
+            protocol: UpdateProtocol::WootingFactoryBootloader,
             product_id: 0x567F,
             block_size: 256,
         }),
@@ -166,7 +175,7 @@ mod tests {
 
     fn firmware(size: usize) -> Vec<u8> {
         let mut bytes = vec![0xFF; size];
-        let mut vectors = vec![0x2003_0000, CODE + 1];
+        let mut vectors = vec![RAM_END, CODE + 1];
         vectors.extend([CODE + 3; 105]);
         for (index, vector) in vectors.iter().enumerate() {
             bytes[index * 4..index * 4 + 4].copy_from_slice(&vector.to_le_bytes());
@@ -221,12 +230,14 @@ mod tests {
 
     #[test]
     fn rejects_a_reset_vector_into_the_descriptor() {
-        let mut bytes = firmware(0x400);
-        set_vector(&mut bytes, 1, START + 0x1C1);
-        assert_eq!(
-            Image::new(&bytes, None),
-            Err(Error::ResetVectorOutsideCode(START + 0x1C1))
-        );
+        for reset in [START + 0x1C1, CODE - 1] {
+            let mut bytes = firmware(0x400);
+            set_vector(&mut bytes, 1, reset);
+            assert_eq!(
+                Image::new(&bytes, None),
+                Err(Error::ResetVectorOutsideCode(reset))
+            );
+        }
     }
 
     #[test]
@@ -253,13 +264,92 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_stack_pointer_outside_ram() {
+    fn rejects_a_stack_pointer_that_is_not_the_end_of_ram() {
+        for stack_pointer in [
+            0x0803_0000,
+            0x2000_0000,
+            0x2000_0008,
+            RAM_END - 8,
+            RAM_END + 8,
+            RAM_END + 4,
+            0x4000_0000,
+            0,
+        ] {
+            let mut bytes = firmware(0x400);
+            set_vector(&mut bytes, 0, stack_pointer);
+            assert_eq!(
+                Image::new(&bytes, None),
+                Err(Error::MisplacedStackPointer {
+                    found: stack_pointer,
+                    expected: RAM_END
+                }),
+                "{stack_pointer:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn takes_the_end_of_ram_from_the_descriptor() {
+        let ram = Region {
+            start: 0x2000_0000,
+            end: 0x2001_8000,
+        };
+        let descriptor = Descriptor::new(
+            "Smaller board",
+            DESCRIPTOR.usb_ids(),
+            DESCRIPTOR.image(),
+            ram,
+            DESCRIPTOR.update_mode(),
+        );
         let mut bytes = firmware(0x400);
-        set_vector(&mut bytes, 0, 0x0803_0000);
+        bytes[DESCRIPTOR_OFFSET..DESCRIPTOR_OFFSET + Descriptor::ENCODED_LEN]
+            .copy_from_slice(&descriptor.to_bytes());
         assert_eq!(
             Image::new(&bytes, None),
-            Err(Error::MisplacedStackPointer(0x0803_0000))
+            Err(Error::MisplacedStackPointer {
+                found: RAM_END,
+                expected: ram.end
+            })
         );
+        set_vector(&mut bytes, 0, ram.end);
+        assert_eq!(
+            Image::new(&bytes, None).map(|image| image.descriptor().ram()),
+            Ok(ram)
+        );
+    }
+
+    #[test]
+    fn rejects_a_file_shorter_than_the_first_descriptor_offset() {
+        assert_eq!(Image::new(&[0; 63], None), Err(Error::Truncated(63)));
+    }
+
+    #[test]
+    fn rejects_a_descriptor_cut_off_by_the_end_of_the_file() {
+        let bytes = firmware(0x400);
+        assert_eq!(
+            Image::new(
+                &bytes[..DESCRIPTOR_OFFSET + Descriptor::ENCODED_LEN - 1],
+                None
+            ),
+            Err(Error::InvalidDescriptor(DescriptorError::Truncated))
+        );
+    }
+
+    #[test]
+    fn finds_the_descriptor_up_to_its_last_offset_and_no_further() {
+        let mut bytes = vec![0xFF; 0x800];
+        set_vector(&mut bytes, 0, RAM_END);
+        set_vector(&mut bytes, 1, START + 0x449);
+        let last = Descriptor::MAX_OFFSET;
+        bytes[last..last + Descriptor::ENCODED_LEN].copy_from_slice(&DESCRIPTOR.to_bytes());
+        assert_eq!(
+            Image::new(&bytes, None).map(|image| image.descriptor_offset),
+            Ok(last)
+        );
+        bytes[last] = 0;
+        let beyond = last + Descriptor::ALIGNMENT;
+        bytes[beyond..beyond + Descriptor::ENCODED_LEN].copy_from_slice(&DESCRIPTOR.to_bytes());
+        assert_eq!(Image::new(&bytes, None), Err(Error::MissingDescriptor));
     }
 
     #[test]

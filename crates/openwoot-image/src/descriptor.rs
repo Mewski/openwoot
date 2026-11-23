@@ -1,4 +1,4 @@
-use core::mem::size_of;
+use core::{fmt, mem::size_of};
 
 use crate::{Hex, Region};
 
@@ -9,7 +9,13 @@ pub struct UsbIds {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateProtocol {
+    WootingFactoryBootloader,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UpdateMode {
+    pub protocol: UpdateProtocol,
     pub product_id: u16,
     pub block_size: u32,
 }
@@ -24,6 +30,9 @@ pub struct Descriptor {
     update_product_id: u16,
     image_start: u32,
     image_end: u32,
+    ram_start: u32,
+    ram_end: u32,
+    update_protocol: u32,
     update_block_size: u32,
     board_name: [u8; Descriptor::BOARD_NAME_CAPACITY],
 }
@@ -40,8 +49,42 @@ pub enum DescriptorError {
     InvalidBoardName,
     #[error("the image region {}-{} is empty", Hex(*.start), Hex(*.end))]
     EmptyRegion { start: u32, end: u32 },
-    #[error("the update mode needs both a product id and a block size")]
+    #[error("the RAM region {}-{} is empty", Hex(*.start), Hex(*.end))]
+    EmptyRam { start: u32, end: u32 },
+    #[error("the RAM region ends at {}, not on the 8-byte boundary a stack needs", Hex(*.0))]
+    MisalignedRamEnd(u32),
+    #[error("the update mode needs a protocol, a product id and a block size")]
     IncompleteUpdateMode,
+    #[error("update protocol {0} is unknown")]
+    UnknownUpdateProtocol(u32),
+    #[error(
+        "the image region of {size} bytes is not a whole number of update blocks of {block_size} \
+         bytes"
+    )]
+    RegionNotWholeBlocks { size: u32, block_size: u32 },
+}
+
+impl UpdateProtocol {
+    const fn to_raw(self) -> u32 {
+        match self {
+            Self::WootingFactoryBootloader => 1,
+        }
+    }
+
+    const fn from_raw(raw: u32) -> Option<Self> {
+        match raw {
+            1 => Some(Self::WootingFactoryBootloader),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for UpdateProtocol {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::WootingFactoryBootloader => "Wooting factory bootloader",
+        })
+    }
 }
 
 impl Descriptor {
@@ -51,12 +94,14 @@ impl Descriptor {
     pub const FORMAT_VERSION: u16 = 1;
     pub const MAGIC: [u8; 8] = *b"openwoot";
     pub const MAX_OFFSET: usize = 0x400;
+    pub const STACK_ALIGNMENT: u32 = 8;
 
     #[must_use]
     pub const fn new(
         board_name: &str,
         usb: UsbIds,
         image: Region,
+        ram: Region,
         update: Option<UpdateMode>,
     ) -> Self {
         assert!(!board_name.is_empty(), "the board name is empty");
@@ -65,18 +110,27 @@ impl Descriptor {
             "the board name is too long"
         );
         assert!(image.start < image.end, "the image region is empty");
+        assert!(ram.start < ram.end, "the RAM region is empty");
+        assert!(
+            ram.end.is_multiple_of(Self::STACK_ALIGNMENT),
+            "the RAM region does not end on the 8-byte boundary a stack needs"
+        );
         let mut name = [0; Self::BOARD_NAME_CAPACITY];
         let (used, _) = name.split_at_mut(board_name.len());
         used.copy_from_slice(board_name.as_bytes());
-        let (update_product_id, update_block_size) = match update {
+        let (update_protocol, update_product_id, update_block_size) = match update {
             Some(mode) => {
                 assert!(
                     mode.product_id != 0 && mode.block_size != 0,
                     "the update mode needs both a product id and a block size"
                 );
-                (mode.product_id, mode.block_size)
+                assert!(
+                    image.size().is_multiple_of(mode.block_size),
+                    "the image region is not a whole number of update blocks"
+                );
+                (mode.protocol.to_raw(), mode.product_id, mode.block_size)
             }
-            None => (0, 0),
+            None => (0, 0, 0),
         };
         Self {
             magic: Self::MAGIC,
@@ -86,6 +140,9 @@ impl Descriptor {
             update_product_id,
             image_start: image.start,
             image_end: image.end,
+            ram_start: ram.start,
+            ram_end: ram.end,
+            update_protocol,
             update_block_size,
             board_name: name,
         }
@@ -109,6 +166,9 @@ impl Descriptor {
             update_product_id: u16::from_le_bytes(fields.take()?),
             image_start: u32::from_le_bytes(fields.take()?),
             image_end: u32::from_le_bytes(fields.take()?),
+            ram_start: u32::from_le_bytes(fields.take()?),
+            ram_end: u32::from_le_bytes(fields.take()?),
+            update_protocol: u32::from_le_bytes(fields.take()?),
             update_block_size: u32::from_le_bytes(fields.take()?),
             board_name: fields.take()?,
         };
@@ -121,15 +181,45 @@ impl Descriptor {
                 end: descriptor.image_end,
             });
         }
-        if (descriptor.update_product_id == 0) != (descriptor.update_block_size == 0) {
+        if descriptor.ram_start >= descriptor.ram_end {
+            return Err(DescriptorError::EmptyRam {
+                start: descriptor.ram_start,
+                end: descriptor.ram_end,
+            });
+        }
+        if !descriptor.ram_end.is_multiple_of(Self::STACK_ALIGNMENT) {
+            return Err(DescriptorError::MisalignedRamEnd(descriptor.ram_end));
+        }
+        let present = [
+            descriptor.update_protocol != 0,
+            descriptor.update_product_id != 0,
+            descriptor.update_block_size != 0,
+        ];
+        if present.contains(&true) && present.contains(&false) {
             return Err(DescriptorError::IncompleteUpdateMode);
+        }
+        if descriptor.update_protocol != 0
+            && UpdateProtocol::from_raw(descriptor.update_protocol).is_none()
+        {
+            return Err(DescriptorError::UnknownUpdateProtocol(
+                descriptor.update_protocol,
+            ));
+        }
+        let size = descriptor.image().size();
+        if let Some(mode) = descriptor.update_mode()
+            && !size.is_multiple_of(mode.block_size)
+        {
+            return Err(DescriptorError::RegionNotWholeBlocks {
+                size,
+                block_size: mode.block_size,
+            });
         }
         Ok(descriptor)
     }
 
     #[must_use]
     pub fn to_bytes(&self) -> [u8; Self::ENCODED_LEN] {
-        let fields: [&[u8]; 9] = [
+        let fields: [&[u8]; 12] = [
             &self.magic,
             &self.format_version.to_le_bytes(),
             &self.usb_vendor_id.to_le_bytes(),
@@ -137,6 +227,9 @@ impl Descriptor {
             &self.update_product_id.to_le_bytes(),
             &self.image_start.to_le_bytes(),
             &self.image_end.to_le_bytes(),
+            &self.ram_start.to_le_bytes(),
+            &self.ram_end.to_le_bytes(),
+            &self.update_protocol.to_le_bytes(),
             &self.update_block_size.to_le_bytes(),
             &self.board_name,
         ];
@@ -177,14 +270,24 @@ impl Descriptor {
     }
 
     #[must_use]
+    pub const fn ram(&self) -> Region {
+        Region {
+            start: self.ram_start,
+            end: self.ram_end,
+        }
+    }
+
+    #[must_use]
     pub const fn update_mode(&self) -> Option<UpdateMode> {
-        if self.update_product_id == 0 {
-            None
-        } else {
-            Some(UpdateMode {
-                product_id: self.update_product_id,
-                block_size: self.update_block_size,
-            })
+        match UpdateProtocol::from_raw(self.update_protocol) {
+            Some(protocol) if self.update_product_id != 0 && self.update_block_size != 0 => {
+                Some(UpdateMode {
+                    protocol,
+                    product_id: self.update_product_id,
+                    block_size: self.update_block_size,
+                })
+            }
+            _ => None,
         }
     }
 }
@@ -208,6 +311,8 @@ mod tests {
 
     use super::*;
 
+    const PROTOCOL: usize = 32;
+
     const EXAMPLE: Descriptor = Descriptor::new(
         "Example board",
         UsbIds {
@@ -218,7 +323,12 @@ mod tests {
             start: 0x0800_8000,
             end: 0x0801_0000,
         },
+        Region {
+            start: 0x2000_0000,
+            end: 0x2003_0000,
+        },
         Some(UpdateMode {
+            protocol: UpdateProtocol::WootingFactoryBootloader,
             product_id: 0x567F,
             block_size: 256,
         }),
@@ -226,19 +336,26 @@ mod tests {
 
     #[test]
     fn encoding_matches_the_in_memory_layout() {
-        assert_eq!(Descriptor::ENCODED_LEN, 60);
+        assert_eq!(Descriptor::ENCODED_LEN, 72);
         assert_eq!(offset_of!(Descriptor, format_version), 8);
         assert_eq!(offset_of!(Descriptor, usb_vendor_id), 10);
         assert_eq!(offset_of!(Descriptor, usb_product_id_base), 12);
         assert_eq!(offset_of!(Descriptor, update_product_id), 14);
         assert_eq!(offset_of!(Descriptor, image_start), 16);
         assert_eq!(offset_of!(Descriptor, image_end), 20);
-        assert_eq!(offset_of!(Descriptor, update_block_size), 24);
-        assert_eq!(offset_of!(Descriptor, board_name), 28);
+        assert_eq!(offset_of!(Descriptor, ram_start), 24);
+        assert_eq!(offset_of!(Descriptor, ram_end), 28);
+        assert_eq!(offset_of!(Descriptor, update_protocol), PROTOCOL);
+        assert_eq!(offset_of!(Descriptor, update_block_size), 36);
+        assert_eq!(offset_of!(Descriptor, board_name), 40);
         let bytes = EXAMPLE.to_bytes();
         assert_eq!(&bytes[..8], b"openwoot");
+        assert_eq!(&bytes[8..10], &1_u16.to_le_bytes());
         assert_eq!(&bytes[16..20], &0x0800_8000_u32.to_le_bytes());
-        assert_eq!(&bytes[28..41], b"Example board");
+        assert_eq!(&bytes[24..28], &0x2000_0000_u32.to_le_bytes());
+        assert_eq!(&bytes[28..32], &0x2003_0000_u32.to_le_bytes());
+        assert_eq!(&bytes[PROTOCOL..PROTOCOL + 4], &1_u32.to_le_bytes());
+        assert_eq!(&bytes[40..53], b"Example board");
     }
 
     #[test]
@@ -247,12 +364,44 @@ mod tests {
         assert_eq!(decoded, EXAMPLE);
         assert_eq!(decoded.board_name(), Some("Example board"));
         assert_eq!(
+            decoded.image(),
+            Region {
+                start: 0x0800_8000,
+                end: 0x0801_0000
+            }
+        );
+        assert_eq!(
+            decoded.ram(),
+            Region {
+                start: 0x2000_0000,
+                end: 0x2003_0000
+            }
+        );
+        assert_eq!(
             decoded.update_mode(),
             Some(UpdateMode {
+                protocol: UpdateProtocol::WootingFactoryBootloader,
                 product_id: 0x567F,
                 block_size: 256
             })
         );
+    }
+
+    #[test]
+    fn survives_a_round_trip_without_update_mode() {
+        let descriptor = Descriptor::new(
+            "Example board",
+            EXAMPLE.usb_ids(),
+            EXAMPLE.image(),
+            EXAMPLE.ram(),
+            None,
+        );
+        let bytes = descriptor.to_bytes();
+        assert!(bytes[PROTOCOL..PROTOCOL + 8].iter().all(|&byte| byte == 0));
+        let decoded = Descriptor::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded, descriptor);
+        assert_eq!(decoded.update_mode(), None);
+        assert_eq!(decoded.ram(), EXAMPLE.ram());
     }
 
     #[test]
@@ -266,9 +415,32 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_half_update_mode() {
+    fn rejects_an_unknown_update_protocol() {
+        for raw in [2, 0x100, u32::MAX] {
+            let mut bytes = EXAMPLE.to_bytes();
+            bytes[PROTOCOL..PROTOCOL + 4].copy_from_slice(&raw.to_le_bytes());
+            assert_eq!(
+                Descriptor::from_bytes(&bytes),
+                Err(DescriptorError::UnknownUpdateProtocol(raw))
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_partial_update_mode() {
+        for field in [14..16, PROTOCOL..PROTOCOL + 4, 36..40] {
+            let mut bytes = EXAMPLE.to_bytes();
+            bytes[field.clone()].fill(0);
+            assert_eq!(
+                Descriptor::from_bytes(&bytes),
+                Err(DescriptorError::IncompleteUpdateMode),
+                "{field:?}"
+            );
+        }
         let mut bytes = EXAMPLE.to_bytes();
-        bytes[24..28].fill(0);
+        bytes[14..16].fill(0);
+        bytes[36..40].fill(0);
+        bytes[PROTOCOL..PROTOCOL + 4].copy_from_slice(&2_u32.to_le_bytes());
         assert_eq!(
             Descriptor::from_bytes(&bytes),
             Err(DescriptorError::IncompleteUpdateMode)
@@ -276,10 +448,78 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_region_that_is_not_whole_update_blocks() {
+        let mut bytes = EXAMPLE.to_bytes();
+        bytes[20..24].copy_from_slice(&0x0800_8480_u32.to_le_bytes());
+        assert_eq!(
+            Descriptor::from_bytes(&bytes),
+            Err(DescriptorError::RegionNotWholeBlocks {
+                size: 0x480,
+                block_size: 256
+            })
+        );
+        bytes[14..16].fill(0);
+        bytes[PROTOCOL..PROTOCOL + 4].fill(0);
+        bytes[36..40].fill(0);
+        assert_eq!(
+            Descriptor::from_bytes(&bytes).map(|descriptor| descriptor.update_mode()),
+            Ok(None)
+        );
+    }
+
+    #[test]
+    fn rejects_an_empty_ram_region_and_one_that_ends_off_the_stack_alignment() {
+        let mut bytes = EXAMPLE.to_bytes();
+        bytes[28..32].copy_from_slice(&0x2000_0000_u32.to_le_bytes());
+        assert_eq!(
+            Descriptor::from_bytes(&bytes),
+            Err(DescriptorError::EmptyRam {
+                start: 0x2000_0000,
+                end: 0x2000_0000
+            })
+        );
+        bytes[28..32].copy_from_slice(&0x2002_FFFC_u32.to_le_bytes());
+        assert_eq!(
+            Descriptor::from_bytes(&bytes),
+            Err(DescriptorError::MisalignedRamEnd(0x2002_FFFC))
+        );
+    }
+
+    #[test]
+    fn rejects_an_empty_region_a_wrong_magic_and_a_name_that_is_not_text() {
+        let mut bytes = EXAMPLE.to_bytes();
+        bytes[20..24].copy_from_slice(&0x0800_8000_u32.to_le_bytes());
+        assert_eq!(
+            Descriptor::from_bytes(&bytes),
+            Err(DescriptorError::EmptyRegion {
+                start: 0x0800_8000,
+                end: 0x0800_8000
+            })
+        );
+        let mut bytes = EXAMPLE.to_bytes();
+        bytes[0] = b'O';
+        assert_eq!(
+            Descriptor::from_bytes(&bytes),
+            Err(DescriptorError::WrongMagic)
+        );
+        let mut bytes = EXAMPLE.to_bytes();
+        bytes[40] = 0xFF;
+        assert_eq!(
+            Descriptor::from_bytes(&bytes),
+            Err(DescriptorError::InvalidBoardName)
+        );
+        bytes[40] = 0;
+        assert_eq!(
+            Descriptor::from_bytes(&bytes),
+            Err(DescriptorError::InvalidBoardName)
+        );
+    }
+
+    #[test]
     fn rejects_a_truncated_descriptor() {
         let bytes = EXAMPLE.to_bytes();
         assert_eq!(
-            Descriptor::from_bytes(&bytes[..59]),
+            Descriptor::from_bytes(&bytes[..Descriptor::ENCODED_LEN - 1]),
             Err(DescriptorError::Truncated)
         );
     }

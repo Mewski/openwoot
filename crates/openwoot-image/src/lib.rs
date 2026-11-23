@@ -7,7 +7,7 @@ mod image;
 mod linker_script;
 mod region;
 
-pub use descriptor::{Descriptor, DescriptorError, UpdateMode, UsbIds};
+pub use descriptor::{Descriptor, DescriptorError, UpdateMode, UpdateProtocol, UsbIds};
 pub use hex::Hex;
 pub use image::{Error, Image};
 pub use linker_script::{LinkerScriptError, MemoryLayout};
