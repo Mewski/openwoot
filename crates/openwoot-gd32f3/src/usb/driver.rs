@@ -19,13 +19,14 @@ use crate::{
     interrupt::{self, Binding, Priority, typelevel},
     pac,
     rcu::{self, Clocks, Hertz},
-    register::{modify_bits, set_bits, write_bits},
+    register::{clear_bits, modify_bits, set_bits, write_bits},
 };
 
 const APB1EN_USBDEN: u32 = 1 << 23;
 const APB2EN_AFEN: u32 = 1 << 0;
 const CFG0_USBDPSC: u32 = 0b11 << 22 | 1 << 31;
 const CFG0_USBDPSC_SHIFT: u32 = 22;
+const ADDCTL_CK48MSEL: u32 = 1 << 0;
 const PCF0_SWJ_CFG: u32 = 0b111 << 24;
 const PCF0_SWJ_SERIAL_WIRE_ONLY: u32 = 0b010 << 24;
 const STARTUP_MICROSECONDS: u32 = 1;
@@ -64,6 +65,7 @@ impl<PullUp: OutputPin<Error = Infallible>> Driver<PullUp> {
             if let Some(prescaler) = prescaler(clocks.system) {
                 modify_bits(rcu.cfg0(), |bits| (bits & !CFG0_USBDPSC) | prescaler);
             }
+            clear_bits(rcu.addctl(), ADDCTL_CK48MSEL);
             set_bits(rcu.apb1en(), APB1EN_USBDEN);
         });
         let startup = clocks.system.0 / 1_000_000 * STARTUP_MICROSECONDS;
@@ -165,6 +167,7 @@ impl<'d, PullUp: OutputPin<Error = Infallible> + 'd> DriverTrait<'d> for Driver<
             interval_ms: 0,
         };
         let usbd = registers::usbd();
+        write_bits(usbd.ctl(), 0);
         write_bits(usbd.intf(), 0);
         write_bits(usbd.ctl(), CTL_RSTIE | CTL_SPSIE | CTL_WKUPIE | CTL_STIE);
         (
@@ -176,6 +179,11 @@ impl<'d, PullUp: OutputPin<Error = Infallible> + 'd> DriverTrait<'d> for Driver<
             ),
         )
     }
+}
+
+#[must_use]
+pub const fn supports_system_clock(system: Hertz) -> bool {
+    prescaler(system).is_some()
 }
 
 fn describe_receive(index: usize, buffer: Buffer, count_field: u16) {
@@ -222,5 +230,15 @@ mod tests {
         assert_eq!(prescaler(Hertz::from_mhz(72)), Some(0));
         assert_eq!(prescaler(Hertz::from_mhz(48)), Some(0x0040_0000));
         assert_eq!(prescaler(Hertz::from_mhz(108)), None);
+    }
+
+    #[test]
+    fn only_system_clocks_with_a_48_megahertz_divider_are_supported() {
+        for megahertz in [48, 72, 96, 120] {
+            assert!(supports_system_clock(Hertz::from_mhz(megahertz)));
+        }
+        for megahertz in [8, 60, 108, 116] {
+            assert!(!supports_system_clock(Hertz::from_mhz(megahertz)));
+        }
     }
 }

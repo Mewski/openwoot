@@ -11,7 +11,7 @@ use openwoot::scan::{self, Sample};
 
 use super::{
     Conversion, InterruptHandler, Peripherals, Wiring,
-    adc::{self, MAX_RANKS, Trigger},
+    adc::{self, MAX_INPUTS, Trigger},
     transport, trigger,
     wiring::ADDRESS_LINES,
 };
@@ -46,7 +46,11 @@ impl<const INPUTS: usize> Converter<INPUTS> {
         clocks: &Clocks,
         _irqs: impl Binding<typelevel::ADC0_1, InterruptHandler<Hook>>,
     ) -> Self {
-        const { assert!(INPUTS > 0 && INPUTS <= MAX_RANKS) };
+        const { assert!(INPUTS > 0 && INPUTS <= MAX_INPUTS) };
+        assert!(
+            wiring.is_valid(),
+            "address lines on pins of ports A to G and converter channels 0 to 15"
+        );
         let Peripherals {
             adc: _,
             reference_adc: _,
@@ -67,6 +71,7 @@ impl<const INPUTS: usize> Converter<INPUTS> {
             line.into_output(Level::High);
         }
         trigger::configure(clocks);
+        transport::enable_clock();
         transport::start(1);
         for input in wiring.inputs {
             input.line.into_analog();
@@ -77,6 +82,7 @@ impl<const INPUTS: usize> Converter<INPUTS> {
             converter.reference_channel,
             converter.sample_time,
             wiring.oversampling,
+            clocks.ahb,
         );
         converter
     }
@@ -175,6 +181,7 @@ impl<const INPUTS: usize> scan::Converter for Converter<INPUTS> {
     fn sweep_enter_parallel(&mut self, order: Option<&[u8]>) {
         transport::stop();
         adc::configure_sequence(INPUTS);
+        self.reference_sequence(INPUTS);
         transport::start(INPUTS as u32);
         if let Some(order) = order {
             self.all_inputs_on(order);

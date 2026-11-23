@@ -3,7 +3,7 @@ use core::{future::poll_fn, sync::atomic::Ordering, task::Poll};
 use embassy_usb_driver::{ControlPipe as ControlPipeTrait, Direction, EndpointError, EndpointType};
 
 use super::{
-    endpoint::{Endpoint, In, Out, idle, wait_for},
+    endpoint::{Endpoint, In, Out, idle},
     endpoint_register::{Command, Reading, Status, Toggle},
     events::EVENTS,
     registers::{self, ADDR_USBEN},
@@ -71,13 +71,20 @@ impl ControlPipeTrait for ControlPipe {
         first: bool,
         last: bool,
     ) -> Result<usize, EndpointError> {
+        if aborted() {
+            return Err(EndpointError::Disabled);
+        }
         if first || last {
             registers::write_endpoint(CONTROL, data_out_entry(first, last).bits());
         }
-        wait_for(CONTROL, Direction::Out, |status| status == Status::Nak).await;
-        if EVENTS.setup.load(Ordering::Acquire) {
-            return Err(EndpointError::Disabled);
-        }
+        poll_fn(|context| {
+            EVENTS.register(CONTROL, Direction::Out, context);
+            stage(
+                aborted(),
+                registers::endpoint(CONTROL).status(Direction::Out),
+            )
+        })
+        .await?;
         let len = self.output.unload(buf)?;
         registers::write_endpoint(CONTROL, data_out_exit(last).bits());
         Ok(len)
@@ -87,41 +94,71 @@ impl ControlPipeTrait for ControlPipe {
         if data.len() > usize::from(self.max_packet_size) {
             return Err(EndpointError::BufferOverflow);
         }
+        if aborted() {
+            return Err(EndpointError::Disabled);
+        }
         if first || last {
             registers::write_endpoint(CONTROL, data_in_entry(first, last).bits());
         }
         poll_fn(|context| {
             EVENTS.register(CONTROL, Direction::Out, context);
             EVENTS.register(CONTROL, Direction::In, context);
-            if registers::endpoint(CONTROL).status(Direction::In) == Status::Nak {
-                Poll::Ready(())
-            } else {
-                Poll::Pending
-            }
+            stage(
+                aborted(),
+                registers::endpoint(CONTROL).status(Direction::In),
+            )
         })
-        .await;
-        if EVENTS.setup.load(Ordering::Acquire) {
-            return Err(EndpointError::Disabled);
-        }
+        .await?;
         self.input.load(data)?;
         registers::write_endpoint(CONTROL, data_in_exit(last).bits());
         Ok(())
     }
 
     async fn accept(&mut self) {
+        if aborted() {
+            return;
+        }
         if self.input.load(&[]).is_ok() {
             registers::write_endpoint(CONTROL, accept(registers::endpoint(CONTROL)).bits());
         }
-        wait_for(CONTROL, Direction::In, idle).await;
+        poll_fn(|context| {
+            EVENTS.register(CONTROL, Direction::Out, context);
+            EVENTS.register(CONTROL, Direction::In, context);
+            if aborted() || idle(registers::endpoint(CONTROL).status(Direction::In)) {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await;
     }
 
     async fn reject(&mut self) {
+        if aborted() {
+            return;
+        }
         registers::write_endpoint(CONTROL, reject(registers::endpoint(CONTROL)).bits());
     }
 
     async fn accept_set_address(&mut self, addr: u8) {
         self.accept().await;
-        write_bits(registers::usbd().addr(), ADDR_USBEN | u16::from(addr));
+        if !aborted() {
+            write_bits(registers::usbd().addr(), ADDR_USBEN | u16::from(addr));
+        }
+    }
+}
+
+fn aborted() -> bool {
+    EVENTS.setup.load(Ordering::Acquire) || EVENTS.reset.load(Ordering::Acquire)
+}
+
+fn stage(aborted: bool, status: Status) -> Poll<Result<(), EndpointError>> {
+    if aborted || status == Status::Disabled {
+        Poll::Ready(Err(EndpointError::Disabled))
+    } else if status == Status::Nak {
+        Poll::Ready(Ok(()))
+    } else {
+        Poll::Pending
     }
 }
 
@@ -288,6 +325,30 @@ mod tests {
             rejected.apply(reject(Reading(rejected.0)));
             assert_eq!(rejected.statuses(), (Status::Stall, Status::Stall));
         }
+    }
+
+    #[test]
+    fn a_waiting_stage_ends_on_a_bus_reset_or_a_new_setup() {
+        let after_bus_reset = Reading(0);
+        for direction in [Direction::Out, Direction::In] {
+            assert_eq!(
+                stage(false, after_bus_reset.status(direction)),
+                Poll::Ready(Err(EndpointError::Disabled))
+            );
+        }
+        for status in [Status::Stall, Status::Nak, Status::Valid] {
+            assert_eq!(
+                stage(true, status),
+                Poll::Ready(Err(EndpointError::Disabled))
+            );
+        }
+    }
+
+    #[test]
+    fn a_waiting_stage_goes_on_only_when_the_endpoint_answers_nak() {
+        assert_eq!(stage(false, Status::Nak), Poll::Ready(Ok(())));
+        assert_eq!(stage(false, Status::Valid), Poll::Pending);
+        assert_eq!(stage(false, Status::Stall), Poll::Pending);
     }
 
     #[test]

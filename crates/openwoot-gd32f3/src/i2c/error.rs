@@ -24,7 +24,7 @@ pub enum Error {
     Dma,
     #[error("the LED bus only writes")]
     Read,
-    #[error("a transfer of {0} bytes exceeds 65535 bytes")]
+    #[error("a transfer of {0} bytes exceeds 443 bytes")]
     TooLong(usize),
     #[error("a transaction of more than 4 writes")]
     TooManyWrites,
@@ -77,7 +77,7 @@ impl From<Error> for BusError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::i2c::registers::STAT0_BTC;
+    use crate::i2c::{MAX_TRANSFER, registers::STAT0_BTC};
 
     #[test]
     fn status_errors_map_to_their_kinds() {
@@ -90,6 +90,17 @@ mod tests {
         assert_eq!(
             Error::from_status(STAT0_BERR, NoAcknowledgeSource::Data),
             Some(Error::Bus)
+        );
+    }
+
+    #[test]
+    fn the_length_message_names_the_limit_that_is_enforced() {
+        assert_eq!(
+            Error::TooLong(MAX_TRANSFER + 1).to_string(),
+            format!(
+                "a transfer of {} bytes exceeds {MAX_TRANSFER} bytes",
+                MAX_TRANSFER + 1
+            )
         );
     }
 }

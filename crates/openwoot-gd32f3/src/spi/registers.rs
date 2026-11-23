@@ -3,6 +3,7 @@ use critical_section::CriticalSection;
 use crate::{pac, register::modify_bits};
 
 pub(super) const APB1EN_SPI1EN: u32 = 1 << 14;
+pub(super) const APB1RST_SPI1RST: u32 = 1 << 14;
 pub(super) const CTL0_SPIEN: u32 = 1 << 6;
 pub(super) const CTL1_DMAREN: u32 = 1 << 0;
 pub(super) const CTL1_DMATEN: u32 = 1 << 1;

@@ -192,10 +192,9 @@ fn write_level<const PORT: char, const INDEX: u8>(level: Level) {
 
 fn configure<const PORT: char, const INDEX: u8>(control: u32, speed: Option<Speed>) {
     let nibble = control | speed.map_or(0, Speed::mode);
-    let maximum = u32::from(speed == Some(Speed::Maximum));
     critical_section::with(|_| {
         let port = port::<PORT>();
-        modify_bits(port.spd(), |bits| (bits & !(1 << INDEX)) | maximum << INDEX);
+        modify_bits(port.spd(), |bits| bits & !(1 << INDEX));
         registers::set_mode(port, INDEX, nibble);
     });
 }
@@ -214,5 +213,11 @@ mod tests {
         assert_eq!(INPUT_ANALOG, 0x0);
         assert_eq!(OUTPUT_OPEN_DRAIN | Speed::Medium.mode(), 0x5);
         assert_eq!(OUTPUT_PUSH_PULL | Speed::Low.mode(), 0x2);
+    }
+
+    #[test]
+    fn the_fastest_speed_is_the_50_megahertz_mode_that_needs_no_compensation_cell() {
+        assert_eq!(Speed::Maximum.mode(), Speed::High.mode());
+        assert_eq!(ALTERNATE_PUSH_PULL | Speed::Maximum.mode(), 0xB);
     }
 }

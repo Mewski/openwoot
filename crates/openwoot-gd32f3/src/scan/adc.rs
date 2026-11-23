@@ -8,16 +8,20 @@
 
 use crate::{
     interrupt::{self, Priority},
-    pac, rcu,
+    pac,
+    rcu::{self, Hertz},
     register::{clear_bits, modify_bits, read_bits, set_bits},
-    time::microseconds,
 };
 
 pub(super) const MAX_RANKS: usize = 16;
+pub(super) const MAX_INPUTS: usize = 1 << DISNUM_BITS;
 
-const SETTLE_US: u16 = 1000;
+const SETTLES_PER_SECOND: u32 = 1000;
+const CALIBRATION_SPINS: u32 = 1 << 22;
 const APB2EN_ADC0EN: u32 = 1 << 9;
 const APB2EN_ADC1EN: u32 = 1 << 10;
+const APB2RST_ADC0RST: u32 = 1 << 9;
+const APB2RST_ADC1RST: u32 = 1 << 10;
 const CFG0_ADCPSC: u32 = 0b11 << 14;
 const CFG0_ADCPSC_APB2_DIV4: u32 = 0b01 << 14;
 const CFG0_ADCPSC_2: u32 = 1 << 28;
@@ -27,7 +31,8 @@ const CTL0_EOCIE: u32 = 1 << 5;
 const CTL0_DISRC: u32 = 1 << 11;
 const CTL0_DISIC: u32 = 1 << 12;
 const CTL0_DISNUM_SHIFT: u32 = 13;
-const CTL0_DISNUM: u32 = 0b111 << CTL0_DISNUM_SHIFT;
+const DISNUM_BITS: u32 = 3;
+const CTL0_DISNUM: u32 = ((1 << DISNUM_BITS) - 1) << CTL0_DISNUM_SHIFT;
 const CTL0_SYNCM: u32 = 0xF << 16;
 const CTL0_SYNCM_REGULAR_PARALLEL: u32 = 6 << 16;
 const CTL1_ADCON: u32 = 1 << 0;
@@ -151,16 +156,16 @@ macro_rules! configure_oversampling {
 }
 
 macro_rules! enable_and_calibrate {
-    ($adc:expr) => {{
+    ($adc:expr, $settle_cycles:expr) => {{
         let adc = $adc;
         if read_bits(adc.ctl1()) & CTL1_ADCON == 0 {
             set_bits(adc.ctl1(), CTL1_ADCON);
         }
-        wait_microseconds(SETTLE_US);
+        cortex_m::asm::delay($settle_cycles);
         set_bits(adc.ctl1(), CTL1_RSTCLB);
-        while read_bits(adc.ctl1()) & CTL1_RSTCLB != 0 {}
+        wait_while(|| read_bits(adc.ctl1()) & CTL1_RSTCLB != 0);
         set_bits(adc.ctl1(), CTL1_CLB);
-        while read_bits(adc.ctl1()) & CTL1_CLB != 0 {}
+        wait_while(|| read_bits(adc.ctl1()) & CTL1_CLB != 0);
     }};
 }
 
@@ -169,10 +174,14 @@ pub(super) fn configure(
     reference_channel: u8,
     sample_time: u32,
     oversampling: Oversampling,
+    core_clock: Hertz,
 ) {
+    let settle = settle_cycles(core_clock);
     rcu::with_registers(|rcu| {
         set_bits(rcu.apb2en(), APB2EN_ADC0EN);
         set_bits(rcu.apb2en(), APB2EN_ADC1EN);
+        set_bits(rcu.apb2rst(), APB2RST_ADC0RST | APB2RST_ADC1RST);
+        clear_bits(rcu.apb2rst(), APB2RST_ADC0RST | APB2RST_ADC1RST);
         modify_bits(rcu.cfg0(), |bits| {
             (bits & !(CFG0_ADCPSC_2 | CFG0_ADCPSC)) | CFG0_ADCPSC_APB2_DIV4
         });
@@ -192,12 +201,9 @@ pub(super) fn configure(
     for rank in 0..inputs as u8 {
         convert_at_rank!(reference, rank, reference_channel, sample_time);
     }
-    modify_bits(adc.ctl1(), |bits| {
-        (bits & !CTL1_ETSRC) | Trigger::Timer.source()
-    });
-    modify_bits(reference.ctl1(), |bits| {
-        (bits & !CTL1_ETSRC) | Trigger::Software.source()
-    });
+    select_trigger(Trigger::Timer);
+    clear_bits(reference.ctl1(), CTL1_ETSRC);
+    set_bits(reference.ctl1(), Trigger::Software.source());
     set_bits(adc.ctl1(), CTL1_ETERC);
     set_bits(reference.ctl1(), CTL1_ETERC);
     let shift = oversampling_shift(oversampling);
@@ -205,8 +211,8 @@ pub(super) fn configure(
     configure_oversampling!(reference, shift);
     interrupt::enable(pac::Interrupt::ADC0_1, Priority::SCAN);
     set_bits(adc.ctl0(), CTL0_EOCIE);
-    enable_and_calibrate!(adc);
-    enable_and_calibrate!(reference);
+    enable_and_calibrate!(adc, settle);
+    enable_and_calibrate!(reference, settle);
     set_bits(adc.ctl1(), CTL1_DMA);
 }
 
@@ -243,7 +249,8 @@ pub(super) fn set_trigger(trigger: Trigger) {
 }
 
 pub(super) fn select_trigger(trigger: Trigger) {
-    modify_bits(adc().ctl1(), |bits| (bits & !CTL1_ETSRC) | trigger.source());
+    clear_trigger();
+    set_trigger(trigger);
 }
 
 pub(super) fn sample_address() -> u32 {
@@ -276,9 +283,15 @@ const fn oversampling_shift(oversampling: Oversampling) -> u32 {
     }
 }
 
-fn wait_microseconds(duration: u16) {
-    let start = microseconds();
-    while microseconds().wrapping_sub(start) < duration {}
+const fn settle_cycles(core_clock: Hertz) -> u32 {
+    core_clock.0 / SETTLES_PER_SECOND
+}
+
+fn wait_while(mut busy: impl FnMut() -> bool) {
+    let mut spins = 0;
+    while busy() && spins < CALIBRATION_SPINS {
+        spins += 1;
+    }
 }
 
 #[inline(always)]
@@ -300,5 +313,44 @@ mod tests {
     #[test]
     fn eight_times_oversampling_shifts_three_bits() {
         assert_eq!(oversampling_shift(Oversampling::Times8), 3);
+    }
+
+    #[test]
+    fn every_accepted_input_count_fits_the_discontinuous_group() {
+        assert_eq!(MAX_INPUTS, 8);
+        for inputs in 1..=MAX_INPUTS {
+            let last = u32::try_from(inputs - 1).unwrap();
+            assert_eq!(
+                (last << CTL0_DISNUM_SHIFT) & CTL0_DISNUM,
+                last << CTL0_DISNUM_SHIFT
+            );
+        }
+        let beyond = u32::try_from(MAX_INPUTS).unwrap();
+        assert_ne!(
+            (beyond << CTL0_DISNUM_SHIFT) & CTL0_DISNUM,
+            beyond << CTL0_DISNUM_SHIFT
+        );
+    }
+
+    #[test]
+    fn a_calibration_that_never_ends_is_given_up() {
+        let mut polls: u32 = 0;
+        wait_while(|| {
+            polls += 1;
+            true
+        });
+        assert_eq!(polls, CALIBRATION_SPINS + 1);
+        let mut polls: u32 = 0;
+        wait_while(|| {
+            polls += 1;
+            polls < 3
+        });
+        assert_eq!(polls, 3);
+    }
+
+    #[test]
+    fn the_converter_settles_for_one_millisecond_of_core_clock_cycles() {
+        assert_eq!(settle_cycles(Hertz::from_mhz(120)), 120_000);
+        assert_eq!(settle_cycles(Hertz::from_mhz(8)), 8000);
     }
 }

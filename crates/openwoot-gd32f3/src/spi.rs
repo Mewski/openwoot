@@ -3,21 +3,19 @@ mod pins;
 mod registers;
 mod transfer;
 
-use core::hint::spin_loop;
-
 pub use device::Device;
 use embedded_hal::spi::{ErrorKind, ErrorType};
 use embedded_hal_async::spi::SpiBus;
 use openwoot::diagnostics::{Bus, BusError, Transfers};
 pub use pins::{ClockPin, DataInPin, DataOutPin};
-use registers::{APB1EN_SPI1EN, CTL0_SPIEN, I2SCTL_I2SSEL, STAT_TRANS, control};
+use registers::{APB1EN_SPI1EN, APB1RST_SPI1RST, CTL0_SPIEN, I2SCTL_I2SSEL, control};
 pub use transfer::InterruptHandler;
-use transfer::{ReceiveChannel, Sink, Source, Transfer};
+use transfer::{ReceiveChannel, Sink, Source, Transfer, wait_until_shifted_out};
 
 use crate::{
     interrupt::{self, Binding, Priority, typelevel},
     pac, rcu,
-    register::{clear_bits, modify_bits, read_bits, set_bits},
+    register::{clear_bits, modify_bits, set_bits},
 };
 
 const MAX_TRANSFER: usize = 0xFFFF;
@@ -44,7 +42,11 @@ impl Spi {
         data_in: impl DataInPin,
         _irqs: impl Binding<typelevel::DMA0_Channel3, InterruptHandler>,
     ) -> Self {
-        rcu::with_registers(|rcu| set_bits(rcu.apb1en(), APB1EN_SPI1EN));
+        rcu::with_registers(|rcu| {
+            set_bits(rcu.apb1en(), APB1EN_SPI1EN);
+            set_bits(rcu.apb1rst(), APB1RST_SPI1RST);
+            clear_bits(rcu.apb1rst(), APB1RST_SPI1RST);
+        });
         ReceiveChannel::new().enable_clock();
         clock.into_spi();
         data_out.into_spi();
@@ -69,9 +71,7 @@ impl Spi {
     }
 
     fn idle(&self) {
-        while read_bits(self.spi.stat()) & STAT_TRANS != 0 {
-            spin_loop();
-        }
+        wait_until_shifted_out(&self.spi);
     }
 }
 

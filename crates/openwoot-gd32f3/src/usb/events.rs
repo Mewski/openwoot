@@ -20,6 +20,8 @@ use crate::{
 
 pub(super) static EVENTS: Events = Events::new();
 
+const CONTROL: usize = 0;
+
 #[derive(Debug)]
 pub struct InterruptHandler;
 
@@ -44,6 +46,21 @@ impl Events {
             in_endpoints: [const { AtomicWaker::new() }; ENDPOINT_COUNT],
             out_endpoints: [const { AtomicWaker::new() }; ENDPOINT_COUNT],
         }
+    }
+
+    fn note_suspend(&self) {
+        self.suspend.store(true, Ordering::Release);
+    }
+
+    fn note_resume(&self) {
+        self.suspend.store(false, Ordering::Release);
+        self.resume.store(true, Ordering::Release);
+    }
+
+    fn note_reset(&self) {
+        self.suspend.store(false, Ordering::Release);
+        self.setup.store(false, Ordering::Release);
+        self.reset.store(true, Ordering::Release);
     }
 
     pub(super) fn wake_endpoints(&self) {
@@ -92,7 +109,7 @@ fn service() {
     let flags = read_bits(usbd.intf());
 
     if flags & INTF_SPSIF != 0 {
-        EVENTS.suspend.store(true, Ordering::Release);
+        EVENTS.note_suspend();
         modify_bits(usbd.ctl(), |control| {
             if control & CTL_RSREQ == 0 {
                 control | CTL_SETSPS | CTL_LOWM
@@ -105,23 +122,26 @@ fn service() {
     }
 
     if flags & INTF_WKUPIF != 0 {
-        EVENTS.resume.store(true, Ordering::Release);
+        EVENTS.note_resume();
         modify_bits(usbd.ctl(), |control| control & !(CTL_LOWM | CTL_SETSPS));
         write_bits(usbd.intf(), !INTF_WKUPIF);
         EVENTS.bus.wake();
     }
 
     if flags & INTF_RSTIF != 0 {
-        EVENTS.reset.store(true, Ordering::Release);
+        EVENTS.note_reset();
+        modify_bits(usbd.ctl(), |control| control & !(CTL_LOWM | CTL_SETSPS));
         write_bits(usbd.intf(), !INTF_RSTIF);
         EVENTS.bus.wake();
+        EVENTS.wake(CONTROL, Direction::Out);
+        EVENTS.wake(CONTROL, Direction::In);
     }
 
     if flags & INTF_STIF != 0 {
         let index = usize::from(flags & INTF_EPNUM);
         let endpoint = registers::endpoint(index);
         if endpoint.received() {
-            if index == 0 && endpoint.setup() {
+            if index == CONTROL && endpoint.setup() {
                 EVENTS.setup.store(true, Ordering::Release);
             }
             EVENTS.wake(index, Direction::Out);
@@ -130,5 +150,44 @@ fn service() {
             EVENTS.wake(index, Direction::In);
         }
         registers::write_endpoint(index, endpoint.acknowledge());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pending(events: &Events) -> [bool; 4] {
+        [
+            events.setup.load(Ordering::Acquire),
+            events.reset.load(Ordering::Acquire),
+            events.suspend.load(Ordering::Acquire),
+            events.resume.load(Ordering::Acquire),
+        ]
+    }
+
+    #[test]
+    fn a_wake_up_supersedes_a_suspend_that_was_not_reported_yet() {
+        let events = Events::new();
+        events.note_suspend();
+        events.note_resume();
+        assert_eq!(pending(&events), [false, false, false, true]);
+    }
+
+    #[test]
+    fn a_bus_reset_supersedes_a_pending_suspend_and_a_pending_setup() {
+        let events = Events::new();
+        events.setup.store(true, Ordering::Release);
+        events.note_suspend();
+        events.note_reset();
+        assert_eq!(pending(&events), [false, true, false, false]);
+    }
+
+    #[test]
+    fn a_suspend_behind_a_bus_reset_stays_pending() {
+        let events = Events::new();
+        events.note_reset();
+        events.note_suspend();
+        assert_eq!(pending(&events), [false, true, true, false]);
     }
 }

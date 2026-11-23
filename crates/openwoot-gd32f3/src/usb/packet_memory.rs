@@ -115,7 +115,11 @@ impl Buffer {
         target: &mut [u8],
         mut load: impl FnMut(usize) -> u16,
     ) -> Option<usize> {
-        let len = usize::from(count & COUNT_MASK);
+        let count = count & COUNT_MASK;
+        if count > self.len {
+            return None;
+        }
+        let len = usize::from(count);
         let received = target.get_mut(..len)?;
         for (offset, pair) in received.chunks_mut(2).enumerate() {
             let bytes = load(self.first_halfword() + offset).to_le_bytes();
@@ -257,5 +261,21 @@ mod tests {
         };
         assert_eq!(buffer.write(&[0; 5], |_, _| {}), None);
         assert_eq!(buffer.read(5, &mut [0; 4], |_| 0), None);
+    }
+
+    #[test]
+    fn a_count_beyond_the_buffer_reads_nothing_of_the_neighbouring_endpoint() {
+        let buffer = Buffer {
+            address: 200,
+            len: 4,
+        };
+        let mut loads = 0;
+        let read = buffer.read(6, &mut [0; 8], |_| {
+            loads += 1;
+            0xAAAA
+        });
+        assert_eq!(read, None);
+        assert_eq!(loads, 0);
+        assert_eq!(buffer.read(4, &mut [0; 8], |_| 0xAAAA), Some(4));
     }
 }

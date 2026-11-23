@@ -17,6 +17,9 @@ pub(super) const OUTPUT_OPEN_DRAIN: u32 = 0b01 << 2;
 pub(super) const ALTERNATE_PUSH_PULL: u32 = 0b10 << 2;
 pub(super) const ALTERNATE_OPEN_DRAIN: u32 = 0b11 << 2;
 
+pub(super) const LAST_PORT: char = 'G';
+pub(super) const PINS: u8 = 16;
+
 const PORT_STRIDE: usize = 0x400;
 const RESET_SHIFT: u8 = 16;
 const APB2EN_PORT_SHIFT: u8 = 2;
@@ -24,13 +27,16 @@ const PINS_PER_CONTROL: u8 = 8;
 
 #[inline(always)]
 pub(super) fn port(index: u8) -> &'static pac::gpioa::RegisterBlock {
-    let address = pac::Gpioa::PTR as usize + port_offset(index);
-    // SAFETY: every port of the family has this register block at `GPIOA + n * 0x400`, and the
-    // gpio module reaches only ports A to G: a `Pin` exists only for a port whose `Port` was built
-    // from its PAC peripheral, and a `Line` holds only ports A to G. Registers that several pins
-    // share are changed only inside critical sections; output levels are written through the
+    let address = pac::Gpioa::PTR as usize + port_offset(confined(index));
+    // SAFETY: ports A to G of the family have this register block at `GPIOA + n * 0x400`, and
+    // `confined` keeps the index within them whatever the caller passes. Registers that several
+    // pins share are changed only inside critical sections; output levels are written through the
     // set/reset and bit-clear registers, which change only the bits written as one.
     unsafe { &*(address as *const pac::gpioa::RegisterBlock) }
+}
+
+pub(super) const fn is_port(port: char) -> bool {
+    port >= 'A' && port <= LAST_PORT
 }
 
 pub(super) const fn port_index(port: char) -> u8 {
@@ -67,6 +73,12 @@ pub(super) const fn level_of(register: u32, index: u8) -> Level {
 }
 
 #[inline(always)]
+const fn confined(index: u8) -> u8 {
+    let last = port_index(LAST_PORT);
+    if index > last { last } else { index }
+}
+
+#[inline(always)]
 const fn port_offset(index: u8) -> usize {
     index as usize * PORT_STRIDE
 }
@@ -90,6 +102,24 @@ mod tests {
     fn ports_lie_one_kilobyte_apart() {
         assert_eq!(port_offset(port_index('A')), 0);
         assert_eq!(port_offset(port_index('C')), 0x800);
+    }
+
+    #[test]
+    fn a_port_index_beyond_the_ports_of_the_family_stays_inside_them() {
+        let first = pac::Gpioa::PTR as usize;
+        let last = first + port_offset(port_index(LAST_PORT));
+        for index in 0..=u8::MAX {
+            let address = first + port_offset(confined(index));
+            assert!((first..=last).contains(&address), "{index}");
+        }
+        assert_eq!(confined(port_index('C')), port_index('C'));
+        assert_eq!(confined(port_index('\u{87}')), port_index(LAST_PORT));
+    }
+
+    #[test]
+    fn only_ports_a_to_g_are_ports() {
+        assert!(is_port('A') && is_port('G'));
+        assert!(!is_port('H') && !is_port('@') && !is_port('a') && !is_port('\u{87}'));
     }
 
     #[test]

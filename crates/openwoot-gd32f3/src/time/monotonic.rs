@@ -256,6 +256,18 @@ mod tests {
     }
 
     #[test]
+    fn now_holds_until_an_unserviced_counter_event_is_half_a_counter_period_old() {
+        let mut machine = Machine::new();
+        machine.advance(PERIOD - 1);
+        machine.advance_without_service(u64::from(HALF));
+        assert_eq!(machine.monotonic.now(), machine.elapsed);
+        machine.advance_without_service(1);
+        assert_eq!(machine.monotonic.now(), machine.elapsed - PERIOD);
+        machine.service();
+        assert_eq!(machine.monotonic.now(), machine.elapsed);
+    }
+
+    #[test]
     fn an_alarm_that_is_due_is_refused() {
         let mut machine = Machine::new();
         machine.advance(5000);

@@ -14,6 +14,7 @@ const CTL_PLLEN: u32 = 1 << 24;
 const CTL_PLLSTB: u32 = 1 << 25;
 const CFG0_SCS: u32 = 0b11;
 const CFG0_SCS_PLL: u32 = 0b10;
+const CFG0_SCSS: u32 = 0b11 << 2;
 const CFG0_SCSS_PLL: u32 = 0b10 << 2;
 const CFG0_AHBPSC_SHIFT: u32 = 4;
 const CFG0_APB1PSC_SHIFT: u32 = 8;
@@ -30,8 +31,11 @@ const PMU_CTL_HDS: u32 = 1 << 17;
 const PMU_CS_HDRF: u32 = 1 << 16;
 const PMU_CS_HDSRF: u32 = 1 << 17;
 const IRC8M_STARTUP_TIMEOUT: u32 = 0x500;
+const HAND_OVER_TIMEOUT: u32 = 0x1_0000;
 const PRESCALER_STEP_DELAY_CYCLES: u32 = 120_000;
 const PLL_INPUT: Hertz = Hertz::from_mhz(4);
+const SYSTEM_LIMIT: Hertz = Hertz::from_mhz(120);
+const APB1_LIMIT: Hertz = Hertz::from_mhz(60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Hertz(pub u32);
@@ -125,7 +129,7 @@ pub struct PllMultiplier(u8);
 impl PllMultiplier {
     #[must_use]
     pub const fn new<const MULTIPLIER: u8>() -> Self {
-        const { assert!(MULTIPLIER >= 2 && MULTIPLIER <= 63) };
+        const { assert!(is_within_limits(MULTIPLIER)) };
         Self(MULTIPLIER)
     }
 
@@ -181,11 +185,21 @@ impl ClockTree {
     }
 
     #[must_use]
+    pub const fn is_valid(&self) -> bool {
+        let clocks = self.clocks();
+        clocks.system.0 <= SYSTEM_LIMIT.0 && clocks.apb1.0 <= APB1_LIMIT.0
+    }
+
+    #[must_use]
     #[expect(
         clippy::needless_pass_by_value,
         reason = "taking the peripheral proves that nothing else configures the clocks"
     )]
     pub fn configure(&self, rcu: pac::Rcu, pmu: &pac::Pmu) -> Clocks {
+        assert!(
+            self.is_valid(),
+            "a system clock of at most 120 MHz and an APB1 clock of at most 60 MHz"
+        );
         reset_to_internal_oscillator(&rcu);
         start_internal_oscillator(&rcu);
         set_bits(rcu.apb1en(), APB1EN_PMUEN);
@@ -213,9 +227,14 @@ pub(crate) fn with_registers<Output>(
 ) -> Output {
     critical_section::with(|_| {
         // SAFETY: `ClockTree::configure` consumed the `Rcu` peripheral; afterwards its registers
-        // are changed only here, inside a critical section, so no two read-modify-writes overlap.
+        // are changed only here, inside a critical section, and never from the scan interrupt, so
+        // no two read-modify-writes overlap.
         change(unsafe { &*pac::Rcu::ptr() })
     })
+}
+
+const fn is_within_limits(multiplier: u8) -> bool {
+    multiplier >= 2 && multiplier as u32 * PLL_INPUT.0 <= SYSTEM_LIMIT.0
 }
 
 const fn timer_clock(ahb: u32, divider: ApbDivider) -> u32 {
@@ -231,7 +250,9 @@ fn reset_to_internal_oscillator(rcu: &pac::Rcu) {
     set_bits(rcu.cfg0(), AhbDivider::By2.field() << CFG0_AHBPSC_SHIFT);
     cortex_m::asm::delay(PRESCALER_STEP_DELAY_CYCLES);
     clear_bits(rcu.cfg0(), CFG0_SCS);
+    let _ = (0..HAND_OVER_TIMEOUT).any(|_| read_bits(rcu.cfg0()) & CFG0_SCSS == 0);
     clear_bits(rcu.ctl(), CTL_PLLEN | CTL_CKMEN | CTL_HXTALEN);
+    let _ = (0..HAND_OVER_TIMEOUT).any(|_| read_bits(rcu.ctl()) & CTL_PLLSTB == 0);
     write_bits(rcu.int(), INT_DISABLE_AND_CLEAR);
     clear_bits(rcu.ctl(), CTL_HXTALBPS);
     write_bits(rcu.cfg0(), 0);
@@ -291,6 +312,32 @@ mod tests {
             CFG0_PLLMF_LOW | CFG0_PLLMF_4 | CFG0_PLLMF_5,
             0x4800_0000 | 0x003C_0000
         );
+    }
+
+    #[test]
+    fn only_multipliers_up_to_the_120_megahertz_system_clock_are_accepted() {
+        assert!(!is_within_limits(0));
+        assert!(!is_within_limits(1));
+        assert!(is_within_limits(2));
+        assert!(is_within_limits(30));
+        assert!(!is_within_limits(31));
+        assert!(!is_within_limits(63));
+    }
+
+    #[test]
+    fn a_tree_that_overclocks_a_bus_is_refused() {
+        assert!(BOARD_TREE.is_valid());
+        let fast_apb1 = ClockTree {
+            apb1_divider: ApbDivider::By1,
+            ..BOARD_TREE
+        };
+        assert!(!fast_apb1.is_valid());
+        let fast_system = ClockTree {
+            pll_multiplier: PllMultiplier(31),
+            apb1_divider: ApbDivider::By4,
+            ..BOARD_TREE
+        };
+        assert!(!fast_system.is_valid());
     }
 
     #[test]

@@ -22,6 +22,7 @@ pub(super) type ReceiveChannel = dma::Channel<0, 3>;
 type TransmitChannel = dma::Channel<0, 4>;
 
 const IDLE_WORD: u8 = 0x00;
+const SHIFT_OUT_SPINS: u32 = 1 << 22;
 
 static RECEIVED: AtomicWaker = AtomicWaker::new();
 static DISCARDED: AtomicU8 = AtomicU8::new(0);
@@ -122,17 +123,16 @@ impl<'s> Transfer<'s> {
 
 impl Drop for Transfer<'_> {
     fn drop(&mut self) {
-        while read_bits(self.spi.stat()) & STAT_TRANS != 0 {
-            spin_loop();
-        }
         let receive = ReceiveChannel::new();
         let transmit = TransmitChannel::new();
         critical_section::with(|section| {
-            modify_ctl1(section, self.spi, |bits| {
-                bits & !(CTL1_DMAREN | CTL1_DMATEN)
-            });
-            receive.write_control(0);
+            modify_ctl1(section, self.spi, |bits| bits & !CTL1_DMATEN);
             transmit.write_control(0);
+        });
+        wait_until_shifted_out(self.spi);
+        critical_section::with(|section| {
+            modify_ctl1(section, self.spi, |bits| bits & !CTL1_DMAREN);
+            receive.write_control(0);
         });
         while receive.control() & dma::ENABLE != 0 || transmit.control() & dma::ENABLE != 0 {
             spin_loop();
@@ -152,6 +152,14 @@ impl Handler<typelevel::DMA0_Channel3> for InterruptHandler {
             receive.clear_control(dma::INTERRUPTS);
             RECEIVED.wake();
         }
+    }
+}
+
+pub(super) fn wait_until_shifted_out(spi: &pac::Spi1) {
+    let mut spins = 0;
+    while read_bits(spi.stat()) & STAT_TRANS != 0 && spins < SHIFT_OUT_SPINS {
+        spins += 1;
+        spin_loop();
     }
 }
 

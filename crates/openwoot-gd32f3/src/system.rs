@@ -62,10 +62,8 @@ impl UpdateMode for Bootloader {
 
 impl Restart for Bootloader {
     fn restart(&mut self, option: u8) {
-        if option != 0 {
-            self.open_backup();
-            self.write_backup(|bkp| write_bits(bkp.data2(), u16::from(option)));
-        }
+        self.open_backup();
+        self.write_backup(|bkp| write_bits(bkp.data2(), u16::from(option)));
         reset()
     }
 }

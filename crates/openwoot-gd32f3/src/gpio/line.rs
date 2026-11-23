@@ -6,10 +6,14 @@
 use super::{
     Level, Speed,
     registers::{
-        self, INPUT_ANALOG, OUTPUT_PUSH_PULL, enable_clock, port_index, set_mode, set_reset,
+        self, INPUT_ANALOG, OUTPUT_PUSH_PULL, PINS, enable_clock, is_port, port_index, set_mode,
+        set_reset,
     },
 };
 use crate::register::write_bits;
+
+const BACKUP_DOMAIN_PORT: u8 = port_index('C');
+const BACKUP_DOMAIN_FIRST_PIN: u8 = 13;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Line {
@@ -26,11 +30,13 @@ pub(crate) struct Levels {
 impl Line {
     #[must_use]
     pub const fn new(port: char, pin: u8) -> Self {
-        assert!(
-            port >= 'A' && port <= 'G' && pin < 16,
-            "a pin of ports A to G"
-        );
+        assert!(Self::exists(port, pin), "a pin of ports A to G");
         Self::from_index(port_index(port), pin)
+    }
+
+    #[must_use]
+    pub const fn exists(port: char, pin: u8) -> bool {
+        is_port(port) && pin < PINS
     }
 
     pub(crate) const fn from_index(port: u8, pin: u8) -> Self {
@@ -38,15 +44,25 @@ impl Line {
     }
 
     pub(crate) fn into_output(self, level: Level) {
-        self.configure(OUTPUT_PUSH_PULL | Speed::High.mode());
+        enable_clock(self.port);
         match level {
             Level::High => self.set_high(),
             Level::Low => self.set_low(),
         }
+        self.configure(OUTPUT_PUSH_PULL | self.output_speed().mode());
     }
 
     pub(crate) fn into_analog(self) {
+        enable_clock(self.port);
         self.configure(INPUT_ANALOG);
+    }
+
+    const fn output_speed(self) -> Speed {
+        if self.port == BACKUP_DOMAIN_PORT && self.pin >= BACKUP_DOMAIN_FIRST_PIN {
+            Speed::Low
+        } else {
+            Speed::High
+        }
     }
 
     #[inline(always)]
@@ -65,7 +81,6 @@ impl Line {
     }
 
     fn configure(self, nibble: u32) {
-        enable_clock(self.port);
         critical_section::with(|_| set_mode(registers::port(self.port), self.pin, nibble));
     }
 }
@@ -91,6 +106,22 @@ mod tests {
     #[test]
     fn lines_count_ports_from_a() {
         assert_eq!(Line::new('C', 5), Line::from_index(2, 5));
+    }
+
+    #[test]
+    fn only_pins_of_ports_a_to_g_exist() {
+        assert!(Line::exists('A', 0) && Line::exists('G', 15));
+        assert!(!Line::exists('H', 0) && !Line::exists('B', 16) && !Line::exists('\u{87}', 3));
+    }
+
+    #[test]
+    fn the_pins_behind_the_backup_power_switch_are_driven_at_2_megahertz() {
+        for pin in [13, 14, 15] {
+            assert_eq!(Line::new('C', pin).output_speed(), Speed::Low);
+        }
+        assert_eq!(Line::new('C', 12).output_speed(), Speed::High);
+        assert_eq!(Line::new('B', 13).output_speed(), Speed::High);
+        assert_eq!(OUTPUT_PUSH_PULL | Speed::Low.mode(), 0x2);
     }
 
     #[test]

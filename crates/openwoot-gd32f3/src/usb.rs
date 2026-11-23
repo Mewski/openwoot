@@ -11,7 +11,7 @@ mod speed;
 
 pub use bus::Bus;
 pub use control_pipe::ControlPipe;
-pub use driver::{Core, Driver};
+pub use driver::{Core, Driver, supports_system_clock};
 pub use endpoint::{Endpoint, In, Out};
 pub use events::InterruptHandler;
 pub use speed::negotiated_speed;
