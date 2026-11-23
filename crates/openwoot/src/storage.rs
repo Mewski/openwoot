@@ -7,6 +7,7 @@ mod partition;
 mod record;
 mod settings;
 mod store;
+mod stored_keys;
 
 pub use device_info::{
     AuxRecord, DeviceInfo, DeviceInfoError, DeviceInfoSource, LEGACY_SERIAL_LEN, McuPage,

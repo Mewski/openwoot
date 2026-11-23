@@ -3,6 +3,7 @@ const WIRE_FIXED64: u64 = 1;
 const WIRE_BYTES: u64 = 2;
 const WIRE_FIXED32: u64 = 5;
 const VARINT_MAX_BYTES: usize = 10;
+const VARINT_LAST_BYTE_MAX: u8 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Wire<'a> {
@@ -34,6 +35,9 @@ impl<'a> Fields<'a> {
         let mut value = 0u64;
         for index in 0..VARINT_MAX_BYTES {
             let (&byte, rest) = self.rest.split_first().ok_or(Malformed)?;
+            if index + 1 == VARINT_MAX_BYTES && byte > VARINT_LAST_BYTE_MAX {
+                return Err(Malformed);
+            }
             self.rest = rest;
             value |= u64::from(byte & 0x7F) << (7 * index);
             if byte & 0x80 == 0 {
@@ -164,5 +168,21 @@ mod tests {
             0x08, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01
         ]));
         assert!(is_well_formed(&[]));
+    }
+
+    #[test]
+    fn a_varint_wider_than_64_bits_is_malformed() {
+        let widest = [
+            0x08, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01,
+        ];
+        assert_eq!(
+            Fields::new(&widest).next(),
+            Some(Ok((1, Wire::Varint(u64::MAX))))
+        );
+        for last in [0x02, 0x7F] {
+            let mut wider = widest;
+            wider[10] = last;
+            assert!(!is_well_formed(&wider), "{last:#04x}");
+        }
     }
 }

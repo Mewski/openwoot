@@ -54,3 +54,44 @@ impl Record for lightbar::Entries {
     const ITEM: u8 = 0x14;
     const VERSION: u8 = 1;
 }
+
+#[cfg(test)]
+mod tests {
+    use openwoot_protocol::{advanced, gamepad, keys};
+
+    use super::*;
+    use crate::keys::{ActiveProfile, Keymaps};
+
+    const FORMAT_ITEM: u8 = 0;
+
+    fn assert_unique(items: &[u8]) {
+        for (index, item) in items.iter().enumerate() {
+            assert!(!items[..index].contains(item), "item {item:#04x} twice");
+        }
+    }
+
+    #[test]
+    fn every_record_of_a_scope_has_its_own_item() {
+        assert_unique(&[
+            <keys::Settings as Record>::ITEM,
+            <Keymaps as Record>::ITEM,
+            <keys::Overrides as Record>::ITEM,
+            <advanced::Keys as Record>::ITEM,
+            <gamepad::Mapping as Record>::ITEM,
+            <gamepad::Settings as Record>::ITEM,
+            <lighting::Settings as Record>::ITEM,
+            <Colors as Record>::ITEM,
+            <Info as Record>::ITEM,
+            <Revision as Record>::ITEM,
+            <lightbar::Settings as Record>::ITEM,
+        ]);
+        assert_unique(&[
+            FORMAT_ITEM,
+            <ActiveProfile as Record>::ITEM,
+            <global::Settings as Record>::ITEM,
+            <device::Settings as Record>::ITEM,
+            <Count as Record>::ITEM,
+            <lightbar::Entries as Record>::ITEM,
+        ]);
+    }
+}

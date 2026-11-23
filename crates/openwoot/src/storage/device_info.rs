@@ -109,7 +109,7 @@ impl DeviceInfo {
             let bytes = area
                 .get(RAW_AUX_AT..RAW_AUX_AT + aux_len)
                 .ok_or(DeviceInfoError::Malformed)?;
-            Some(AuxRecord::from_message(bytes)?)
+            AuxRecord::from_message(bytes).ok()
         } else {
             None
         };
@@ -132,10 +132,10 @@ impl DeviceInfo {
         for field in Fields::new(message) {
             match field? {
                 (1, Wire::Bytes(bytes)) => serial = Some(SerialNumber::decode(bytes)?),
-                (2, Wire::Bytes(bytes)) => info.aux = Some(AuxRecord::from_message(bytes)?),
+                (2, Wire::Bytes(bytes)) => info.aux = AuxRecord::from_message(bytes).ok(),
                 (3, Wire::Varint(layout)) => info.physical_layout = Some(narrow(layout)?),
-                (4, Wire::Varint(mode)) => info.lock_mode = Some(narrow(mode)?),
-                (1..=4, _) => return Err(DeviceInfoError::Malformed),
+                (4, Wire::Varint(mode)) => info.lock_mode = narrow(mode).ok(),
+                (1 | 3, _) => return Err(DeviceInfoError::Malformed),
                 _ => {}
             }
         }
@@ -232,6 +232,41 @@ mod tests {
         let beyond =
             DeviceInfo::from_sector(&sector_with(&raw, None), Unmarked::RawRecord).unwrap();
         assert_eq!(beyond.aux, None);
+    }
+
+    #[test]
+    fn an_auxiliary_record_or_lock_mode_that_does_not_decode_is_left_out() {
+        let mut too_long = vec![0x12, 59, 0x0A, 57];
+        too_long.extend_from_slice(&[0x55; 57]);
+        for unused in [
+            too_long,
+            vec![0x12, 0x02, 0xFF, 0xFF],
+            vec![0x12, 0x02, 0x10, 0x05],
+            vec![0x10, 0x05],
+            vec![0x20, 0xAC, 0x02],
+            vec![0x22, 0x00],
+        ] {
+            let mut rest = unused.clone();
+            rest.extend_from_slice(&[0x18, 0x01]);
+            let message = record(&SERIAL_MESSAGE, &rest);
+            let mut short = vec![u8::try_from(message.len()).unwrap()];
+            short.extend_from_slice(&message);
+            let info = DeviceInfo::from_sector(
+                &sector_with(&short, Some(MAGIC_SHORT)),
+                Unmarked::ShortFormat,
+            )
+            .unwrap();
+            assert_eq!(info.serial.product_id, 300, "{unused:02x?}");
+            assert_eq!(info.physical_layout, Some(1), "{unused:02x?}");
+            assert_eq!((info.aux, info.lock_mode), (None, None), "{unused:02x?}");
+        }
+        let mut raw = vec![
+            0x02, 0x00, 23, 10, 0x05, 0x00, 0x01, 0x00, 0x2A, 0x00, 0x01, 0x00,
+        ];
+        raw.extend_from_slice(&[3, 0xFF, 0x00, 0x01]);
+        let info = DeviceInfo::from_sector(&sector_with(&raw, None), Unmarked::RawRecord).unwrap();
+        assert_eq!(info.serial.text().as_str(), "A02B2310W051P00042");
+        assert_eq!(info.aux, None);
     }
 
     #[test]

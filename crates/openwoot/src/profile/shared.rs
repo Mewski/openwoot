@@ -19,6 +19,8 @@ pub struct Shared<M: RawMutex> {
     profile_state: Mutex<M, Cell<Option<ProfileState>>>,
     host_signals: HostExchange<M>,
     fast_scan: AtomicBool,
+    activating: AtomicBool,
+    brightness_pending: AtomicBool,
     changes: AtomicU16,
     brightness: Signal<M, u8>,
 }
@@ -33,6 +35,8 @@ impl<M: RawMutex> Shared<M> {
             profile_state: Mutex::new(Cell::new(None)),
             host_signals: HostExchange::new(),
             fast_scan: AtomicBool::new(false),
+            activating: AtomicBool::new(false),
+            brightness_pending: AtomicBool::new(false),
             changes: AtomicU16::new(0),
             brightness: Signal::new(),
         }
@@ -43,7 +47,12 @@ impl<M: RawMutex> Shared<M> {
             .lock(|cell| edit(cell.borrow_mut().get_or_insert_with(Appearance::empty)))
     }
 
+    pub fn begin_activation(&self) {
+        self.activating.store(true, Ordering::Relaxed);
+    }
+
     pub fn activate(&self, fast_scan: bool) {
+        self.activating.store(false, Ordering::Relaxed);
         self.fast_scan.store(fast_scan, Ordering::Relaxed);
         self.mark(
             Changes::LIGHTING
@@ -164,16 +173,25 @@ impl<M: RawMutex> Shared<M> {
     }
 
     pub fn save_brightness(&self, level: u8) {
+        if self.activating.load(Ordering::Relaxed) {
+            return;
+        }
         self.appearance.lock(|cell| {
             if let Some(appearance) = cell.borrow_mut().as_mut() {
                 appearance.settings.brightness = level;
             }
         });
+        self.brightness_pending.store(true, Ordering::Release);
         self.brightness.signal(level);
     }
 
     pub async fn brightness_saved(&self) -> u8 {
         self.brightness.wait().await
+    }
+
+    #[must_use]
+    pub fn take_brightness_save(&self) -> bool {
+        self.brightness_pending.swap(false, Ordering::AcqRel)
     }
 
     fn mark(&self, changes: Changes) {
@@ -194,5 +212,46 @@ impl<M: RawMutex> core::fmt::Debug for Shared<M> {
             .field("fast_scan", &self.fast_scan)
             .field("changes", &self.changes)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+
+    use super::*;
+
+    #[test]
+    fn a_brightness_level_saved_while_a_profile_is_activated_is_dropped() {
+        let shared = Shared::<NoopRawMutex>::new();
+        shared.edit(|appearance| appearance.settings.brightness = 200);
+        shared.begin_activation();
+        shared.save_brightness(10);
+        assert!(!shared.take_brightness_save());
+        assert_eq!(
+            shared.read(|appearance| appearance.settings.brightness),
+            Some(200)
+        );
+        shared.activate(false);
+        shared.save_brightness(20);
+        assert_eq!(
+            shared.read(|appearance| appearance.settings.brightness),
+            Some(20)
+        );
+        assert!(shared.take_brightness_save());
+        assert!(!shared.take_brightness_save());
+    }
+
+    #[test]
+    fn a_brightness_save_stays_pending_after_its_wake_up_until_one_side_takes_it() {
+        let shared = Shared::<NoopRawMutex>::new();
+        shared.edit(|appearance| appearance.settings.brightness = 200);
+        shared.save_brightness(30);
+        assert_eq!(embassy_futures::block_on(shared.brightness_saved()), 30);
+        assert!(shared.take_brightness_save());
+        shared.save_brightness(40);
+        assert!(shared.take_brightness_save());
+        assert_eq!(embassy_futures::block_on(shared.brightness_saved()), 40);
+        assert!(!shared.take_brightness_save());
     }
 }

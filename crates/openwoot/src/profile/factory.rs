@@ -77,7 +77,12 @@ impl Preset {
 
     #[must_use]
     pub fn overrides(&self, keys: usize) -> Overrides {
-        let mut overrides: Overrides = core::iter::repeat_n(Override::default(), keys).collect();
+        let mut overrides = Overrides::new();
+        for _ in 0..keys {
+            if overrides.push(Override::default()).is_err() {
+                break;
+            }
+        }
         for (key, actuation) in self.actuation_points {
             if let Some(entry) = overrides.get_mut(usize::from(key.get())) {
                 entry.actuation = Some(*actuation);
@@ -88,7 +93,13 @@ impl Preset {
 
     #[must_use]
     pub fn advanced_keys(&self) -> advanced::Keys {
-        self.advanced.iter().copied().collect()
+        let mut keys = advanced::Keys::new();
+        for key in self.advanced {
+            if keys.push(*key).is_err() {
+                break;
+            }
+        }
+        keys
     }
 }
 
@@ -192,6 +203,23 @@ mod tests {
                 .iter()
                 .all(|entry| entry.actuation.is_none())
         );
+    }
+
+    #[test]
+    fn more_keys_than_a_part_holds_are_cut_instead_of_panicking() {
+        static CROWDED: [advanced::Key; advanced::MAX_ENTRIES + 1] = [advanced::Key {
+            key: Index::new(0),
+            layer: keys::Layer::Base,
+            behaviour: advanced::Behaviour::Toggle(keys::Action::None),
+        };
+            advanced::MAX_ENTRIES + 1];
+        let crowded = Preset {
+            advanced: &CROWDED,
+            ..preset("", 0, &[], None)
+        };
+        assert_eq!(crowded.advanced_keys().len(), advanced::MAX_ENTRIES);
+        let capacity = Overrides::new().capacity();
+        assert_eq!(crowded.overrides(capacity + 1).len(), capacity);
     }
 
     #[test]

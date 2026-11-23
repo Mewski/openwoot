@@ -3,6 +3,7 @@ use serde::{Serialize, de::DeserializeOwned};
 
 pub(super) const KEY_LEN: usize = 2;
 pub(super) const VERSION_LEN: usize = 1;
+pub(super) const MAX_VALUE_LEN: usize = 2048;
 
 const GLOBAL_SLOT: u8 = 0xFF;
 
@@ -140,9 +141,11 @@ impl<'a, F: Fn(&mut [u8]) -> Option<usize>> Value<'a> for Encoder<F> {
 }
 
 fn split(buffer: &mut [u8]) -> Result<(&mut u8, &mut [u8]), SerializationError> {
-    buffer
+    let (version, body) = buffer
         .split_first_mut()
-        .ok_or(SerializationError::BufferTooSmall)
+        .ok_or(SerializationError::BufferTooSmall)?;
+    let capacity = body.len().min(MAX_VALUE_LEN);
+    Ok((version, body.get_mut(..capacity).unwrap_or_default()))
 }
 
 #[cfg(test)]
@@ -213,6 +216,19 @@ mod tests {
         };
         let len = encoder.serialize_into(&mut buffer).unwrap();
         assert_eq!(buffer[..len], [3, 9]);
+    }
+
+    #[test]
+    fn the_body_offered_to_an_encoder_ends_at_the_largest_value() {
+        let mut buffer = [0; 2 * MAX_VALUE_LEN];
+        let whole = Encoder {
+            version: 1,
+            encode: |body: &mut [u8]| Some(body.len()),
+        };
+        assert_eq!(
+            whole.serialize_into(&mut buffer),
+            Ok(VERSION_LEN + MAX_VALUE_LEN)
+        );
     }
 
     #[test]

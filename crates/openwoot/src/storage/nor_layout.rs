@@ -2,6 +2,8 @@ use openwoot_image::Region;
 
 pub const SECTOR_SIZE: u32 = 4096;
 
+pub(super) const MAXIMUM_SETTINGS_SECTORS: u32 = 128;
+
 const MINIMUM_SETTINGS_SECTORS: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,6 +24,7 @@ impl NorLayout {
             && settings.end.is_multiple_of(SECTOR_SIZE)
             && settings.start < settings.end
             && (settings.end - settings.start) / SECTOR_SIZE >= MINIMUM_SETTINGS_SECTORS
+            && (settings.end - settings.start) / SECTOR_SIZE <= MAXIMUM_SETTINGS_SECTORS
             && settings.end <= self.capacity;
         let device_info_apart = match self.device_info {
             Some(device_info) => {
@@ -101,6 +104,10 @@ mod tests {
                 end: CHIP + 0x1000,
             },
             Region { start: 0, end: 0 },
+            Region {
+                start: 0,
+                end: (MAXIMUM_SETTINGS_SECTORS + 1) * SECTOR_SIZE,
+            },
         ] {
             assert!(!layout(settings, None).is_valid(), "{settings:?}");
         }

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     partition::Partition,
-    record::{Record, Scope},
+    record::{Record, RecordKey, Scope},
     settings::{Error, Settings},
 };
 
@@ -43,8 +43,12 @@ impl<F: MultiwriteNorFlash> Settings<F> {
             return Ok(Opened::Formatted(FormatReason::Requested));
         }
         match self.load::<Format>(Scope::Global).await {
-            Ok(Some(format)) if format == CURRENT_FORMAT => Ok(Opened::Kept),
-            Ok(_) | Err(Error::Corrupted | Error::Unencodable | Error::Internal) => {
+            Ok(Some(format)) if format == CURRENT_FORMAT => {
+                self.index().await;
+                Ok(Opened::Kept)
+            }
+            Ok(_)
+            | Err(Error::Corrupted | Error::TooBig | Error::Unencodable | Error::Internal) => {
                 self.format().await?;
                 Ok(Opened::Formatted(FormatReason::Unrecognised))
             }
@@ -57,6 +61,10 @@ impl<F: MultiwriteNorFlash> Settings<F> {
     }
 
     async fn format(&mut self) -> Result<(), Error> {
+        let removed = self.remove(RecordKey::of::<Format>(Scope::Global)).await;
+        if let Err(Error::Flash(kind)) = removed {
+            return Err(Error::Flash(kind));
+        }
         self.erase().await?;
         self.store(Scope::Global, &CURRENT_FORMAT).await
     }

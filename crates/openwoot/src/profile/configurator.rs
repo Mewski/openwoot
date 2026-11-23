@@ -50,7 +50,10 @@ where
                     let _ = self.model.lock().await.activate(Slot::new(profile)).await;
                 }
                 Either::Second(_) => {
-                    let _ = self.model.lock().await.save_brightness().await;
+                    let mut model = self.model.lock().await;
+                    if shared.take_brightness_save() {
+                        let _ = model.save_brightness().await;
+                    }
                 }
             }
         }
@@ -90,6 +93,16 @@ where
     async fn set_device_settings(&mut self, settings: device::Settings) -> Result<(), Rejection> {
         self.model.lock().await.set_device_settings(settings);
         Ok(())
+    }
+
+    async fn layout(&mut self) -> Result<device::Layout, Rejection> {
+        let variant = usize::from(self.model.lock().await.variant());
+        let layouts = &self.capabilities.layouts;
+        layouts
+            .get(variant)
+            .or(layouts.first())
+            .copied()
+            .ok_or(Rejection::Unsupported)
     }
 
     async fn global_settings(&mut self) -> Result<global::Settings, Rejection> {
