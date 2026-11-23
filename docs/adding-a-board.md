@@ -8,17 +8,22 @@ under `boards/`, and the host tool reads everything it needs from the image desc
 
 | File | Content |
 | --- | --- |
-| `Cargo.toml` | package `<board>`, a library and the binary `openwoot-<board>` (`test = false`); dependencies on `openwoot`, `openwoot-image`, `cortex-m-rt` and exactly one chip HAL |
+| `Cargo.toml` | package `<board>`, a library and the binary `openwoot-<board>` (`test = false`); dependencies on exactly one chip HAL, on `openwoot`, `openwoot-drivers`, `openwoot-image`, `openwoot-protocol`, `cortex-m-rt`, `embassy-futures`, `embassy-sync` and `static_cell`, for `target_os = "none"` also on `embassy-executor` and `embassy-usb`, and the build dependency `openwoot-image` (copy an existing board's manifest) |
 | `memory.x` | the `FLASH` and `RAM` regions and the `.app_descriptor` section behind the vector table (copy an existing board and change the two regions) |
-| `build.rs` | the same in every board: reads `memory.x`, generates the constant `IMAGE` and passes `link.x` to the linker for thumb targets |
-| `src/lib.rs` | the board facts as constants (name, USB ids, update mode, protected flash areas, key matrix), `DESCRIPTOR`, `Board` (the configured drivers by board function, built by `Board::new`), re-exports `hal` and `entry`, and tests of the facts |
+| `build.rs` | the same in every board: reads `memory.x`, generates the constants `IMAGE` and `RAM` and, for thumb targets, passes `--nmagic`, `-Tlink.x` and `--emit-relocs` to the linker of the binary. `--emit-relocs` is required: `cargo xtask check` builds its call graph from the relocations of the image, and without them it rejects the image |
+| `src/lib.rs` | the board facts as constants (name, USB ids, update mode with its `UpdateProtocol`, or `None` while the bootloader's protocol is unknown, protected flash areas, key matrix), a constant assertion that the image area of `memory.x` starts at the end of the bootloader and ends at the serial page, `DESCRIPTOR`, `Board` (the configured drivers by board function, built by `Board::new`), re-exports `hal` and `entry`, and tests of the facts |
 | `src/scan.rs`, `src/lighting.rs`, `src/storage.rs` | the data of each area: sensor wiring and maps, LED maps and variants, flash layout with the sources of the device information and the layout variant (`DEVICE_INFO`, `LAYOUT_VARIANT`) |
-| `src/main.rs` | `hal::app_descriptor!(DESCRIPTOR)`, the `runtime::State` static the tasks share, the `#[entry]` function that builds the `Board` and the `runtime::Firmware` and spawns the tasks, the task declarations and the panic handler |
+| `src/keys.rs`, `src/profiles.rs` | the factory keymap of each layer with the patches of the layout variants, the capabilities reported to the host, and the factory profiles (`FACTORY`, and an `EDITION` where the board has one) |
+| `src/main.rs` | `hal::app_descriptor!(DESCRIPTOR)`, the `runtime::State` static the tasks share, the `#[entry]` function, which only starts the executors (`hal::executor::run(start)`), the `#[inline(never)]` function `start` that builds the `Board` and the `runtime::Firmware` and spawns the tasks (`scanning` alone on the key executor), the task declarations and the panic handler, which resets the microcontroller |
 | `README.md` | the board, its state and its memory layout |
 
 `FLASH` in `memory.x` starts behind the factory bootloader and ends before the pages that hold
-the serial number and device information, so nothing is ever linked into them; the board's tests
-check that against its constants.
+the serial number and device information, so nothing is ever linked into them. `RAM` ends where
+the stack starts: `cortex-m-rt` puts the initial stack pointer at its end, and the host tool and
+`cargo xtask check` refuse an image whose stack pointer is anywhere else. The constant
+assertion in `src/lib.rs` fails the build when `memory.x` and the board's constants disagree, and
+the board's tests check the same. Every board has the same set of files (`cargo xtask check`
+compares them).
 
 ## A new microcontroller family
 

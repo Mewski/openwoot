@@ -17,6 +17,8 @@ Peripheral names are GigaDevice's, which number instances from 0 (`TIMER1` is ST
 | Multiplexer lines, converter inputs, sample time, sensor maps | `boards/<board>/src/scan.rs` (`WIRING`) |
 | LED driver address and set-up, LED tables, light bar | `boards/<board>/src/lighting.rs` |
 | NOR chip select, NOR layout, device-information source | `boards/<board>/src/storage.rs` |
+| Factory keymap of each layer and layout variant, capabilities reported to the host | `boards/<board>/src/keys.rs` |
+| Factory profiles and the special edition | `boards/<board>/src/profiles.rs` |
 | Image area and RAM | `boards/<board>/memory.x` |
 | Register set-up of every peripheral | the chip HAL: `rcu`, `gpio`, `scan`, `time`, `i2c`, `spi`, `usb`, `system`, `flash`, private `dma` and `basepri` |
 | LED driver and NOR flash commands | `openwoot-drivers` (`is31fl3741`, `spi_nor`) |
@@ -27,7 +29,7 @@ Peripheral names are GigaDevice's, which number instances from 0 (`TIMER1` is ST
 | --- | --- | --- |
 | Chip | GigaDevice GD32F425 (pin-compatible with the GD32F427; the exact type and package are not determined) | GigaDevice GD32F303, extra-density device (package not determined) |
 | Core | Arm Cortex-M4F, single-precision FPU, target `thumbv7em-none-eabihf` | the same |
-| Flash | at least 1024 KiB at `0x0800_0000` | at least 1024 KiB at `0x0800_0000` |
+| Flash | at least 1024 KiB at `0x0800_0000` | at least 1024 KiB at `0x0800_0000`; according to the manual only the first 256 KiB are fetched without waiting, see [Unverified on the Wooting 60HE+](#unverified-on-the-wooting-60he) |
 | RAM | 192 KiB at `0x2000_0000` | 96 KiB at `0x2000_0000` |
 | Vector table | 16 core + 91 device entries | 16 core + 60 device entries |
 | Factory unique id (96 bit, `hal::flash::unique_id`, reported to the host) | `0x1fff_7a10` | `0x1fff_f7e8` |
@@ -50,11 +52,13 @@ The PACs are generated from GigaDevice's SVD files (`crates/gd32f425-pac/`, `cra
 | I2C | 400 kHz fast mode from APB1 | 400 kHz fast mode from APB1 |
 | USB clock | 60 MHz from the external ULPI transceiver (the PLL's 44.4 MHz output is unused) | system clock / 2.5 = 48 MHz |
 
+On the 60HE+ the HAL does not rely on the state the bootloader leaves: the clock set-up waits until the system clock has left the PLL and the PLL has stopped before it reprograms it, the USB clock source is set to the PLL (`RCU_ADDCTL.CK48MSEL` = 0), and ADC0, ADC1, TIMER4, I2C0 and SPI1 are reset through the RCU before they are configured (the USB controller through its own reset bit).
+
 `hal::time` and the scan trigger divide their timer clock down to 1 MHz (prescaler 199 on the 80HE, 119 on the 60HE+).
 
 ## Memory map
 
-`memory.x` is the single source of the image area and RAM; `build.rs` turns it into the constant `IMAGE`, and each board tests that the image lies between the bootloader and the serial page. Nothing in the firmware erases or programs the microcontroller flash.
+`memory.x` is the single source of the image area and RAM; `build.rs` turns it into the constant `IMAGE`. A constant assertion in each board's `src/lib.rs` fails the build unless the image area starts at the end of the bootloader and ends at the serial page, and each board's tests check the same. Nothing in the firmware erases or programs the microcontroller flash.
 
 | Area | Wooting 80HE | Wooting 60HE+ |
 | --- | --- | --- |
@@ -88,7 +92,7 @@ DMA channels are reached only through the HAL's private `dma::Channel`, one type
 
 ### Sensor scan
 
-Each key has a hall-effect sensor on a 16:1 analog multiplexer. All multiplexers share four address lines; each has an enable line (low = on) and its own converter input. `TIMER1` channel 1 counts microseconds in single-pulse mode and its compare edge triggers each conversion; the DMA channel moves each 32-bit result word into the sample buffer (circular, 1 word in single-input mode, one per input in parallel mode); the end-of-conversion interrupt runs the scanner. Address lines are written with one store of a precomputed set/reset word; enables and address lines are push-pull outputs at 50 MHz.
+Each key has a hall-effect sensor on a 16:1 analog multiplexer. All multiplexers share four address lines; each has an enable line (low = on) and its own converter input. `TIMER1` channel 1 counts microseconds in single-pulse mode and its compare edge triggers each conversion; the DMA channel moves each 32-bit result word into the sample buffer (circular, 1 word in single-input mode, one per input in parallel mode); the end-of-conversion interrupt runs the scanner. Address lines are written with one store of a precomputed set/reset word; enables and address lines are push-pull outputs at 50 MHz, except PC13 and PC14 (60HE+ enables), which run at 2 MHz, the manual's limit for PC13 to PC15. Each line gets its level before it becomes an output, so no enable is pulled low during start-up.
 
 | | Wooting 80HE | Wooting 60HE+ |
 | --- | --- | --- |
@@ -104,11 +108,11 @@ Each key has a hall-effect sensor on a 16:1 analog multiplexer. All multiplexers
 | overruns | `ADC0` overrun flag counted (`scan overruns` in `openwoot status`); the transport restarts | not detected |
 | layout variant | from the device-information record | bit 0 of the user option byte |
 
-Between cycles the trigger source is parked (80HE: `TIMER0` channel 0, which never runs; 60HE+: software trigger). A cycle that does not end within 50 ms is restarted by the key task (`scan::Converter::recover`).
+Between cycles the trigger source is parked (80HE: `TIMER0` channel 0, which never runs; 60HE+: software trigger). On the 60HE+ every change of the trigger source is two writes (clear, then set): a write to `ADC_CTL1` with `ADCON` set that leaves every other bit unchanged starts a conversion. A cycle that does not end within 50 ms is restarted by the key task (`scan::Converter::recover`).
 
 ### Time driver
 
-`hal::time` is the embassy-time driver at 1 MHz (`TICK_HZ`) on `TIMER4`. The update interrupt and a compare at half the counter range (channel 0) extend the count to 64 bits; channel 1 is the alarm. The 80HE counter is 32 bits wide, the 60HE+ counter 16 bits. The scan reads the low 16 bits of the counter directly.
+`hal::time` is the embassy-time driver at 1 MHz (`TICK_HZ`) on `TIMER4`. The update interrupt and a compare at half the counter range (channel 0) extend the count to 64 bits; channel 1 is the alarm. The 80HE counter is 32 bits wide, the 60HE+ counter 16 bits; on the 60HE+ the timer interrupt has to be served within half a counter period (32.768 ms) of an overflow or half-range event, or the time reads one period (65.536 ms) early until it is. The scan reads the low 16 bits of the counter directly.
 
 ### LED bus and LED driver
 
@@ -120,7 +124,7 @@ Both boards drive their LEDs with one ISSI IS31FL3741 (9 switch lines x 39 curre
 | DMA | `DMA0` channel 6, sub-peripheral 1, interrupt `DMA0_Channel6` | `DMA0` channel 5, interrupt `DMA0_Channel5` |
 | enable line | PB8, high after the driver's software reset | PB5, the same |
 | running configuration | `0x11`: switch lines SW1 to SW8 | `0x31`: SW1 to SW6 |
-| LED numbers | 1 to 104 (105 = none); 10 light-bar LEDs (51, 64, 77, 90, 103, 52, 65, 78, 91, 104) | 0 to 107 (108 = none); no light bar; red limited to 232 |
+| LED numbers | 1 to 104; 10 light-bar LEDs (51, 64, 77, 90, 103, 52, 65, 78, 91, 104) | 0 to 49 and 90 to 107; no light bar; red limited to 232 |
 | frame | 10 pages of up to 36 registers | 7 pages of up to 30 registers |
 
 Start-up: software reset, shutdown, enable line high, all scaling registers `0xff`, global current `0xff`, pull-up/pull-down register `0x35`; the running configuration is written when lighting starts.
@@ -134,6 +138,8 @@ Start-up: software reset, shutdown, enable line high, all scaling registers `0xf
 | clock, data out, data in | PB3, PA7, PB4 (alternate function 5) | PB13, PB15 (alternate function), PB14 (floating input) |
 | chip select | PD2 | PB12 |
 | DMA | receive `DMA1` channel 2, transmit `DMA1` channel 3 (sub-peripheral 3), interrupt `DMA1_Channel2` | receive `DMA0` channel 3, transmit `DMA0` channel 4, interrupt `DMA0_Channel3` |
+
+`Board::new` opens the settings store before it builds the USB driver, because the stored device settings choose the USB face. When the store has to be formatted (the first start after the stock firmware, a format request of the bootloader, a corrupted store) its 128 sectors are erased, and the keyboard is absent from USB until that is done: several seconds, not measured.
 
 ### USB
 
@@ -163,7 +169,7 @@ Three backup registers survive a reset and carry requests between the firmware a
 | 3 | the key executor (UART4 vector), which runs the board's `scanning` task |
 | thread mode | the thread executor: USB device, configuration channel, reports, lighting, profiles |
 
-Critical sections (`critical-section` with the HAL's `basepri` implementation) raise BASEPRI to `0x10`: they mask levels 1 to 15 and never the scan, which takes no critical section. `Priority` cannot express level 0 outside the HAL. Fault vectors and every unclaimed vector end in the `cortex-m-rt` default handler; there is no watchdog.
+Critical sections (`critical-section` with the HAL's `basepri` implementation) raise BASEPRI to `0x10`: they mask levels 1 to 15 and never the scan, which takes no critical section. `Priority` cannot express level 0 outside the HAL. Before it enables anything, `executor::run` selects priority group 0 (all four priority bits pre-empt, as the BASEPRI mask assumes); on the 60HE+ it also stops SysTick, disables and unpends every device interrupt and clears BASEPRI and PRIMASK, so nothing the factory bootloader left behind reaches a vector this firmware does not own. Fault vectors and every unclaimed vector end in the `cortex-m-rt` default handler, which loops; there is no watchdog. A panic resets the microcontroller: the panic handler of each board calls `hal::system::reset`, so the keyboard starts again instead of staying on the bus without answering.
 
 ## DMA priorities
 
@@ -186,8 +192,10 @@ The scan channel shares its controller with the NOR bus on both boards. The conv
 Every 60HE+ fact on this page comes from that board's stock firmware and has not been confirmed on hardware. In particular:
 
 - the exact chip and package, and whether the board carries a crystal the firmware does not use;
+- whether USB runs reliably on the internal oscillator: the 48 MHz USB clock is IRC8M / 2 × 30 / 2.5, while the manual asks for 48 MHz within 500 ppm, calls IRC8M less accurate than a crystal and offers IRC48M trimmed by the CTC unit from the USB start-of-frame as the crystal-less source, which the firmware does not use;
 - every pin, the function of PB5 (presumably the LED driver's shutdown input) and the wiring of the D+ pull-up on PA15;
 - the reference source on PA4 and its zero-field level;
+- the speed of code and constants beyond the first 256 KiB of the flash. GigaDevice's GD32F30x manual (sections 2.1 and 2.2) says: "No waiting time within first 256K bytes when CPU executes instructions. A long delay when CPU fetches the instructions out of the range", and gives no figure. The boundary is `0x0804_0000`; the image starts at `0x0800_7000`, so only its first 228 KiB lie below it, and the image is about three times that size. In the build this was checked on, every interrupt handler (the scan's among them), every task and the travel-curve table lay above the boundary. The scan and USB timing must be measured on the board before it is relied on; if the delay matters, the scan path and its tables have to be linked into the first 228 KiB or run from RAM;
 - the USBD port and its control-transfer handling (host-tested against a model of the endpoint register only);
 - the factory bootloader: how its update mode is entered and left and what it does with the backup registers; the image descriptor names no update mode, so `openwoot flash` refuses the board ([flashing](flashing.md)).
 

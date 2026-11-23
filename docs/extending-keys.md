@@ -8,8 +8,8 @@ How a key press becomes a report, and where a new key feature goes.
 | --- | --- | --- |
 | scan cycle | `scan::Shared`, conversion interrupt | samples every sensor, turns the value into travel 0..4095 and queues an event for every key that is not at rest, once more when it returns to rest, and while `Sensor::hold_events` is set |
 | key task | `runtime::KeyTask` on the key executor | after every cycle: takes configuration changes (`keys::Shared`), refreshes each key's switch facts, runs one pass, publishes the reports (`runtime::KeyReports`), forwards key events and notices to lighting, sets `hold_events`, and fills a pending sensor readout (`GetSensorValues`); it awaits nothing but the scan cycle (hand-offs to storage, lighting and USB never wait), and a cycle that does not end within 50 ms is restarted (`scan::Shared::recover`, `scan::Converter::recover`) |
-| pass | `keys::Keys::pass` | per event: binding layer, press decision or advanced-key input stage, press/release edge, output (advanced-key output stage or keymap action); then the two-key resolvers, the gamepad report and the release of special actions |
-| sink | `keys::Keys::apply_action` | one action into the key-state report and the keyboard (6KRO or NKRO by the descriptor), system, consumer, mouse report, a special action (`keys::Functions`) or the gamepad input |
+| pass | `keys::Keys::pass` | per event: binding layer, press decision or advanced-key input stage (a press that decides a waiting mod-tap is decided again on the layer it ends up on), press/release edge, output (advanced-key output stage or keymap action, then the key's gamepad binding); then the two-key resolvers, the gamepad report and the release of special actions; while key reports are off every key takes the plain press decision and advanced keys rest |
+| sink | `keys::Keys::apply_action` | one action into the key-state report and the keyboard (6KRO in the boot format of the descriptor or of the host's boot protocol, NKRO otherwise), system, consumer, mouse report, a special action (`keys::Functions`) or the gamepad input |
 | reports | `runtime::Reports` on the USB executor | writes every report that changed since it was last sent |
 
 A key press reaches its report at the end of the scan cycle that sampled it (one cycle of latency); `tests/it/keys/pipeline.rs` checks this through a simulated converter.
@@ -19,11 +19,11 @@ Travel is the unit of every threshold inside `keys`: the configuration's distanc
 ## Where a feature goes
 
 - A new press decision: `keys/actuation.rs` (`Actuation::update`), selected per key in `keys/engine.rs` (`trigger`).
-- A new advanced key: a variant of `openwoot_protocol::advanced::Behaviour` (new endpoint path, see `docs/protocol.md`), its engine form in `keys::Behaviour`, a state type in `keys/advanced/` with an input stage (`input`, fed with the key's travel or press state) and an output stage (`run`, returning the actions to apply), and the two `match` arms in `Keys::advanced_input` and `Keys::run_advanced`.
+- A new advanced key: a variant of `openwoot_protocol::advanced::Behaviour` (new endpoint path, see `docs/protocol.md`), its engine form in `keys::Behaviour`, its kind, actions and initial state (`Behaviour::kind`, `actions`, `initial_state`) and its conversion (`Entry::from_settings`), a state type in `keys/advanced/` with an input stage (`input`, fed with the key's travel or press state) and an output stage (`run`, returning the actions to apply), and the two `match` arms in `Keys::advanced_input` and `Keys::run_advanced`, which fall through silently when an arm is missing. A two-key behaviour instead keeps both keys in one `PairState` (`capture` in the input stage, `record` in the output stage) and decides in `Keys::resolve_pairs` (`resolve_depth`, `resolve_socd`) after every event of the pass.
 - A new key action: a variant of `openwoot_protocol::keys::Action`, its report in `Keys::apply_action` and its key-state code in `keys/output.rs`.
-- A new special (Fn) action: a variant of `keys::Special` with its code, and its effect in `layout::Standard` (layers, profiles, key flags, lighting notices through `keys::Effects`).
+- A new special (Fn) action: a variant of `keys::Special` with its code in both `Special::code` and `Special::from_code` (below `SPECIALS` in `keys/special.rs`, which sizes the request table; a code beyond it is never held or released), and its effect in `layout::Standard` (layers, profiles, key flags, lighting notices through `keys::Effects`).
 - Something lighting must show: a `keys::Notice` variant, applied in `runtime::KeyNotices::apply`.
-- Factory keymaps: `boards/<board>/src/keys.rs` (`layout::DefaultKeymap` with the layers and the layer-0 patches of each layout variant).
+- Factory keymaps: `boards/<board>/src/keys.rs` (`layout::DefaultKeymap` with the layers and the per-layer patches of each layout variant of each layout variant).
 
 ## Settings and storage
 
