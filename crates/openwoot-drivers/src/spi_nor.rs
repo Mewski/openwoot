@@ -12,8 +12,13 @@ const SECTOR_ERASE: u8 = 0x20;
 const UNIQUE_ID: u8 = 0x4B;
 const READ_ID: u8 = 0x90;
 const STATUS_BUSY: u8 = 1 << 0;
+const STATUS_WRITE_ENABLED: u8 = 1 << 1;
 const DUMMY: u8 = 0xFF;
 const UNIQUE_ID_DUMMY_BYTES: usize = 4;
+const ADDRESSABLE: u32 = 1 << 24;
+const READY_POLLS: u32 = 100_000;
+const PACED_READY_POLLS: u32 = 20_000;
+const READY_POLL_PAUSE_NANOSECONDS: u32 = 100_000;
 
 pub const PAGE_SIZE: u32 = 256;
 pub const SECTOR_SIZE: u32 = 4096;
@@ -26,6 +31,7 @@ pub const UNIQUE_ID_LEN: usize = 8;
 pub struct SpiNor<D> {
     device: D,
     capacity: u32,
+    stalled: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,6 +48,10 @@ pub enum Error<E> {
     NotAligned,
     #[error("the flash access lies outside the chip")]
     OutOfBounds,
+    #[error("the flash chip did not become ready")]
+    NotReady,
+    #[error("the flash chip did not accept the write enable")]
+    WriteRefused,
 }
 
 impl Identification {
@@ -54,7 +64,11 @@ impl Identification {
 impl<D: SpiDevice> SpiNor<D> {
     #[must_use]
     pub const fn new(device: D, capacity: u32) -> Self {
-        Self { device, capacity }
+        Self {
+            device,
+            capacity,
+            stalled: false,
+        }
     }
 
     pub fn release(self) -> D {
@@ -93,10 +107,23 @@ impl<D: SpiDevice> SpiNor<D> {
     }
 
     pub async fn wait_ready(&mut self) -> Result<(), Error<D::Error>> {
-        while self.status().await? & STATUS_BUSY != 0 {
+        let polls = if self.stalled {
+            1
+        } else {
+            READY_POLLS + PACED_READY_POLLS
+        };
+        for poll in 0..polls {
+            if self.status().await? & STATUS_BUSY == 0 {
+                self.stalled = false;
+                return Ok(());
+            }
+            if poll >= READY_POLLS {
+                self.pause().await?;
+            }
             yield_now().await;
         }
-        Ok(())
+        self.stalled = true;
+        Err(Error::NotReady)
     }
 
     async fn status(&mut self) -> Result<u8, Error<D::Error>> {
@@ -112,8 +139,22 @@ impl<D: SpiDevice> SpiNor<D> {
         Ok(status)
     }
 
+    async fn pause(&mut self) -> Result<(), Error<D::Error>> {
+        self.device
+            .transaction(&mut [Operation::DelayNs(READY_POLL_PAUSE_NANOSECONDS)])
+            .await
+            .map_err(Error::Bus)
+    }
+
     async fn enable_write(&mut self) -> Result<(), Error<D::Error>> {
-        self.device.write(&[WRITE_ENABLE]).await.map_err(Error::Bus)
+        self.device
+            .write(&[WRITE_ENABLE])
+            .await
+            .map_err(Error::Bus)?;
+        if self.status().await? & STATUS_WRITE_ENABLED == 0 {
+            return Err(Error::WriteRefused);
+        }
+        Ok(())
     }
 
     async fn program_page(&mut self, address: u32, bytes: &[u8]) -> Result<(), Error<D::Error>> {
@@ -143,7 +184,7 @@ impl<D: SpiDevice> SpiNor<D> {
 impl<E: core::fmt::Debug> NorFlashError for Error<E> {
     fn kind(&self) -> NorFlashErrorKind {
         match self {
-            Self::Bus(_) => NorFlashErrorKind::Other,
+            Self::Bus(_) | Self::NotReady | Self::WriteRefused => NorFlashErrorKind::Other,
             Self::NotAligned => NorFlashErrorKind::NotAligned,
             Self::OutOfBounds => NorFlashErrorKind::OutOfBounds,
         }
@@ -224,7 +265,7 @@ impl<D> SpiNor<D> {
             return Err(Error::NotAligned);
         }
         match offset.checked_add(len) {
-            Some(end) if end <= self.capacity => Ok(()),
+            Some(end) if end <= self.capacity && end <= ADDRESSABLE => Ok(()),
             _ => Err(Error::OutOfBounds),
         }
     }

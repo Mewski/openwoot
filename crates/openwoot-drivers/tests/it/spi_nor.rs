@@ -1,20 +1,26 @@
-use core::convert::Infallible;
-
 use embassy_futures::block_on;
-use embedded_hal_async::spi::{ErrorType, Operation, SpiDevice};
+use embedded_hal_async::spi::{ErrorKind, ErrorType, Operation, SpiDevice};
 use embedded_storage_async::nor_flash::{NorFlash, ReadNorFlash};
 use openwoot_drivers::spi_nor::{Error, GIGADEVICE, Identification, SpiNor, WINBOND};
 
 const CAPACITY: u32 = 64 * 1024;
 const BUSY_POLLS: u32 = 3;
+const READY_POLLS: u32 = 120_000;
 const UNIQUE_ID: [u8; 8] = [0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76, 0x87];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Fault;
 
 struct Chip {
     memory: Vec<u8>,
     write_enabled: bool,
+    latching: bool,
     busy_polls: u32,
     commands: Vec<Vec<u8>>,
     status_reads: u32,
+    paused_nanoseconds: u64,
+    transactions: usize,
+    faulty_transaction: Option<usize>,
 }
 
 impl Chip {
@@ -22,9 +28,13 @@ impl Chip {
         Self {
             memory: vec![0xFF; CAPACITY as usize],
             write_enabled: false,
+            latching: true,
             busy_polls: 0,
             commands: Vec::new(),
             status_reads: 0,
+            paused_nanoseconds: 0,
+            transactions: 0,
+            faulty_transaction: None,
         }
     }
 
@@ -35,7 +45,7 @@ impl Chip {
                 self.status_reads += 1;
                 let busy = self.busy_polls > 0;
                 self.busy_polls = self.busy_polls.saturating_sub(1);
-                buffer.fill(u8::from(busy));
+                buffer.fill(u8::from(busy) | (u8::from(self.write_enabled) << 1));
             }
             Some(0x0B) => {
                 assert_eq!(sent.len(), 5, "fast read needs address and one dummy byte");
@@ -68,7 +78,7 @@ impl Chip {
             assert_eq!(self.busy_polls, 0, "command {opcode:#04x} sent while busy");
         }
         match opcode {
-            0x06 => self.write_enabled = true,
+            0x06 => self.write_enabled = self.latching,
             0x02 => {
                 assert!(self.write_enabled, "page program without write enable");
                 let start = address(&sent) as usize;
@@ -105,15 +115,23 @@ impl Chip {
     }
 }
 
+impl embedded_hal_async::spi::Error for Fault {
+    fn kind(&self) -> ErrorKind {
+        ErrorKind::Other
+    }
+}
+
 impl ErrorType for Chip {
-    type Error = Infallible;
+    type Error = Fault;
 }
 
 impl SpiDevice for Chip {
-    async fn transaction(
-        &mut self,
-        operations: &mut [Operation<'_, u8>],
-    ) -> Result<(), Infallible> {
+    async fn transaction(&mut self, operations: &mut [Operation<'_, u8>]) -> Result<(), Fault> {
+        let number = self.transactions;
+        self.transactions += 1;
+        if self.faulty_transaction == Some(number) {
+            return Err(Fault);
+        }
         let mut sent = Vec::new();
         let mut read = 0;
         for operation in operations {
@@ -126,10 +144,14 @@ impl SpiDevice for Chip {
                 Operation::Transfer(..) | Operation::TransferInPlace(..) => {
                     unreachable!("the driver only writes and reads")
                 }
-                Operation::DelayNs(_) => {}
+                Operation::DelayNs(nanoseconds) => {
+                    self.paused_nanoseconds += u64::from(*nanoseconds);
+                }
             }
         }
-        self.finish(sent);
+        if !sent.is_empty() {
+            self.finish(sent);
+        }
         embassy_futures::yield_now().await;
         Ok(())
     }
@@ -226,4 +248,105 @@ fn misaligned_and_outside_accesses_are_refused_without_bus_traffic() {
         Err(Error::OutOfBounds)
     );
     assert_eq!(flash.release().commands, Vec::<Vec<u8>>::new());
+}
+
+#[test]
+fn addresses_beyond_three_bytes_are_refused_without_bus_traffic() {
+    let mut flash = SpiNor::new(Chip::new(), 0x0200_0000);
+    assert_eq!(
+        block_on(flash.erase(0x0100_0000, 0x0100_1000)),
+        Err(Error::OutOfBounds)
+    );
+    assert_eq!(
+        block_on(flash.write(0x0100_0000, &[0; 4])),
+        Err(Error::OutOfBounds)
+    );
+    let mut buffer = [0; 4];
+    assert_eq!(
+        block_on(flash.read(0x00FF_FFFE, &mut buffer)),
+        Err(Error::OutOfBounds)
+    );
+    assert_eq!(flash.release().commands, Vec::<Vec<u8>>::new());
+}
+
+#[test]
+fn a_chip_that_stays_busy_ends_in_an_error_and_then_fails_at_once() {
+    let mut chip = Chip::new();
+    chip.busy_polls = u32::MAX;
+    let mut flash = SpiNor::new(chip, CAPACITY);
+    assert_eq!(block_on(flash.identification()), Err(Error::NotReady));
+    assert_eq!(block_on(flash.unique_id()), Err(Error::NotReady));
+    let chip = flash.release();
+    assert_eq!(chip.status_reads, READY_POLLS + 1);
+    assert_eq!(chip.paused_nanoseconds, 2_000_000_000);
+    assert!(chip.commands.iter().all(|command| *command == [0x05]));
+}
+
+#[test]
+fn a_chip_that_becomes_ready_again_is_served_again() {
+    let mut chip = Chip::new();
+    chip.busy_polls = READY_POLLS + 2;
+    let mut flash = SpiNor::new(chip, CAPACITY);
+    for _ in 0..3 {
+        assert_eq!(block_on(flash.identification()), Err(Error::NotReady));
+    }
+    assert!(block_on(flash.identification()).unwrap().is_known());
+    assert_eq!(flash.release().status_reads, READY_POLLS + 3);
+}
+
+#[test]
+fn a_chip_that_does_not_latch_the_write_enable_gets_no_program_or_erase() {
+    let mut chip = Chip::new();
+    chip.latching = false;
+    let mut flash = SpiNor::new(chip, CAPACITY);
+    assert_eq!(
+        block_on(flash.write(0x100, &[1, 2, 3, 4])),
+        Err(Error::WriteRefused)
+    );
+    assert_eq!(block_on(flash.erase(0, 0x1000)), Err(Error::WriteRefused));
+    let chip = flash.release();
+    assert!(
+        chip.commands
+            .iter()
+            .all(|command| matches!(command.first(), Some(0x05 | 0x06)))
+    );
+    assert!(chip.memory.iter().all(|byte| *byte == 0xFF));
+}
+
+#[test]
+fn a_bus_fault_ends_the_operation_and_the_next_one_starts_over() {
+    let mut chip = Chip::new();
+    chip.faulty_transaction = Some(3);
+    let mut flash = SpiNor::new(chip, CAPACITY);
+    assert_eq!(
+        block_on(flash.write(0x100, &[1, 2, 3, 4])),
+        Err(Error::Bus(Fault))
+    );
+    assert_eq!(block_on(flash.write(0x100, &[1, 2, 3, 4])), Ok(()));
+    let mut back = [0; 4];
+    block_on(flash.read(0x100, &mut back)).unwrap();
+    assert_eq!(back, [1, 2, 3, 4]);
+}
+
+#[test]
+fn an_erase_dropped_half_way_leaves_the_next_operation_waiting_for_the_chip() {
+    let mut flash = SpiNor::new(Chip::new(), CAPACITY);
+    {
+        let mut erase = core::pin::pin!(flash.erase(0, 0x2000));
+        for _ in 0..4 {
+            assert!(embassy_futures::poll_once(erase.as_mut()).is_pending());
+        }
+    }
+    block_on(flash.write(0x100, &[1, 2, 3, 4])).unwrap();
+    let mut back = [0; 4];
+    block_on(flash.read(0x100, &mut back)).unwrap();
+    assert_eq!(back, [1, 2, 3, 4]);
+    let chip = flash.release();
+    let opcodes: Vec<u8> = chip
+        .commands
+        .iter()
+        .map(|command| command[0])
+        .filter(|opcode| *opcode != 0x05)
+        .collect();
+    assert_eq!(opcodes, [0x06, 0x20, 0x06, 0x02, 0x0B]);
 }

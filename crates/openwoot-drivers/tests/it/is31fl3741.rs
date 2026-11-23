@@ -23,6 +23,7 @@ type Log = Rc<RefCell<Vec<Event>>>;
 struct Bus {
     log: Log,
     failing: Rc<Cell<bool>>,
+    passing: Rc<Cell<Option<usize>>>,
 }
 
 impl ErrorType for Bus {
@@ -41,6 +42,11 @@ impl I2c for Bus {
     ) -> Result<(), Self::Error> {
         if self.failing.get() {
             return Err(ErrorKind::NoAcknowledge(NoAcknowledgeSource::Address));
+        }
+        match self.passing.get() {
+            Some(0) => return Err(ErrorKind::NoAcknowledge(NoAcknowledgeSource::Data)),
+            Some(passing) => self.passing.set(Some(passing - 1)),
+            None => {}
         }
         for operation in operations {
             if let Operation::Write(bytes) = operation {
@@ -167,5 +173,82 @@ fn a_failed_select_forgets_the_page() {
     let mut expected = Vec::new();
     expected.extend(select(0));
     expected.push(write(&[0, 2]));
+    assert_eq!(*bus.log.borrow(), expected);
+}
+
+#[test]
+fn a_failed_register_write_forgets_the_page() {
+    let (mut driver, bus) = driver();
+    bus.passing.set(Some(2));
+    assert!(matches!(
+        block_on(driver.write_pwm(PwmBank::Second, 0, &[1])),
+        Err(Error::Bus(_))
+    ));
+    assert_eq!(driver.page(), None);
+    bus.passing.set(None);
+    bus.log.borrow_mut().clear();
+    block_on(driver.write_pwm(PwmBank::Second, 0, &[2])).unwrap();
+    let mut expected = Vec::new();
+    expected.extend(select(1));
+    expected.push(write(&[0, 2]));
+    assert_eq!(*bus.log.borrow(), expected);
+}
+
+#[test]
+fn initialization_selects_the_function_page_whatever_was_selected_before() {
+    let (mut driver, bus) = driver();
+    block_on(driver.run(Configuration::new(0x11))).unwrap();
+    assert_eq!(driver.page(), Some(Page::Function));
+    bus.log.borrow_mut().clear();
+    block_on(driver.initialize()).unwrap();
+    let mut expected = Vec::new();
+    expected.extend(select(4));
+    expected.push(write(&[0x3F, 0xAE]));
+    assert_eq!(bus.log.borrow()[..3], expected[..]);
+}
+
+#[test]
+fn a_reset_written_as_a_register_forgets_the_page() {
+    let (mut driver, bus) = driver();
+    block_on(driver.write_registers(Page::Function, 0x3F, &[0xAE])).unwrap();
+    assert_eq!(driver.page(), None);
+    block_on(driver.run(Configuration::new(0x11))).unwrap();
+    let mut expected = Vec::new();
+    expected.extend(select(4));
+    expected.push(write(&[0x3F, 0xAE]));
+    expected.extend(select(4));
+    expected.push(write(&[0x00, 0x11]));
+    assert_eq!(*bus.log.borrow(), expected);
+}
+
+struct BrokenEnableLine;
+
+impl embedded_hal::digital::ErrorType for BrokenEnableLine {
+    type Error = embedded_hal::digital::ErrorKind;
+}
+
+impl OutputPin for BrokenEnableLine {
+    fn set_low(&mut self) -> Result<(), Self::Error> {
+        Err(embedded_hal::digital::ErrorKind::Other)
+    }
+
+    fn set_high(&mut self) -> Result<(), Self::Error> {
+        Err(embedded_hal::digital::ErrorKind::Other)
+    }
+}
+
+#[test]
+fn a_failing_enable_line_stops_initialization_while_the_chip_is_shut_down() {
+    let bus = Bus::default();
+    let mut driver = Is31fl3741::new(bus.clone(), BrokenEnableLine, 0x30);
+    assert!(matches!(
+        block_on(driver.initialize()),
+        Err(Error::Enable(embedded_hal::digital::ErrorKind::Other))
+    ));
+    let mut expected = Vec::new();
+    expected.extend(select(4));
+    expected.push(write(&[0x3F, 0xAE]));
+    expected.extend(select(4));
+    expected.push(write(&[0x00, 0x00]));
     assert_eq!(*bus.log.borrow(), expected);
 }

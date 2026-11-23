@@ -120,9 +120,9 @@ impl<Bus: I2c, Enable: OutputPin> Is31fl3741<Bus, Enable> {
     }
 
     pub async fn initialize(&mut self) -> Result<(), Error<Bus::Error, Enable::Error>> {
+        self.page = None;
         self.write_register(Page::Function, FUNCTION_RESET, RESET_KEY)
             .await?;
-        self.page = None;
         self.write_register(Page::Function, FUNCTION_CONFIGURATION, SHUTDOWN)
             .await?;
         self.enable.set_high().map_err(Error::Enable)?;
@@ -188,10 +188,11 @@ impl<Bus: I2c, Enable: OutputPin> Is31fl3741<Bus, Enable> {
         let Some(transfer) = self.buffer.get(..=values.len()) else {
             return Err(outside);
         };
-        self.bus
-            .write(self.address, transfer)
-            .await
-            .map_err(Error::Bus)
+        let written = self.bus.write(self.address, transfer).await;
+        if written.is_err() || (page == Page::Function && end > usize::from(FUNCTION_RESET)) {
+            self.page = None;
+        }
+        written.map_err(Error::Bus)
     }
 
     pub fn release(self) -> (Bus, Enable) {
