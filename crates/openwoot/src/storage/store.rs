@@ -5,7 +5,7 @@ use openwoot_drivers::spi_nor::SpiNor;
 use super::{
     device_info::{DeviceInfo, DeviceInfoSource},
     format::Opened,
-    layout_variant::LayoutVariantSource,
+    layout_variant::{LayoutOverride, LayoutVariantSource},
     nor_identity::NorIdentity,
     nor_layout::SettingsRegion,
     partition::Partition,
@@ -38,11 +38,14 @@ impl<'s, D: SpiDevice> Storage<'s, SpiNor<D>> {
             _ => None,
         };
         let device_info = device_info.read(&mut nor).await.ok();
-        let layout_variant = layout_variant.variant(device_info.as_ref());
+        let mut layout_variant = layout_variant.variant(device_info.as_ref());
         let opened = cell
             .open(Partition::new(nor, settings), format_requested)
             .await;
-        let settings = opened.is_ok().then_some(cell);
+        let mut settings = opened.is_ok().then_some(cell);
+        if let Some(stored) = settings.as_deref_mut() {
+            layout_variant = LayoutOverride::variant_or(stored, layout_variant).await;
+        }
         Self {
             settings,
             opened,

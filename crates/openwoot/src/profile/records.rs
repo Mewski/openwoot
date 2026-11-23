@@ -1,4 +1,4 @@
-use openwoot_protocol::{device, global, lightbar, lighting, profile::Info};
+use openwoot_protocol::{device, global, lightbar, lighting, profile::Info, switches};
 use serde::{Deserialize, Serialize};
 
 use super::Colors;
@@ -55,12 +55,20 @@ impl Record for lightbar::Entries {
     const VERSION: u8 = 1;
 }
 
+impl Record for switches::Settings {
+    const ITEM: u8 = 0x15;
+    const VERSION: u8 = 1;
+}
+
 #[cfg(test)]
 mod tests {
     use openwoot_protocol::{advanced, gamepad, keys};
 
     use super::*;
-    use crate::keys::{ActiveProfile, Keymaps};
+    use crate::{
+        keys::{ActiveProfile, Keymaps},
+        storage::LayoutOverride,
+    };
 
     const FORMAT_ITEM: u8 = 0;
 
@@ -92,6 +100,8 @@ mod tests {
             <device::Settings as Record>::ITEM,
             <Count as Record>::ITEM,
             <lightbar::Entries as Record>::ITEM,
+            <switches::Settings as Record>::ITEM,
+            <LayoutOverride as Record>::ITEM,
         ]);
     }
 }

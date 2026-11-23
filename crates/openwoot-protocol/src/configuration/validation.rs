@@ -5,6 +5,7 @@ use super::Capabilities;
 use crate::{
     device::Layout,
     lightbar::{MAX_HOLD_MS, MAX_HOST_SIGNALS},
+    switches::MAX_TUNED,
 };
 
 pub trait Validate {
@@ -70,6 +71,10 @@ pub enum Invalid {
     NoHostSignals,
     #[error("switch model {0} is unknown to the keyboard")]
     SwitchModelUnknown(u8),
+    #[error("travel offset {offset} reaches the travel {travel} of switch model {model}")]
+    TravelOffsetReachesTravel { model: u8, offset: u8, travel: u8 },
+    #[error("more than {MAX_TUNED} distinct switches have a travel offset")]
+    TunedSwitchesExceedLimit,
     #[error("layout `{0:?}` does not exist on the keyboard")]
     LayoutMissing(Layout),
 }

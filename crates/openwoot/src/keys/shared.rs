@@ -7,8 +7,10 @@ use embassy_sync::{
     blocking_mutex::{Mutex, raw::RawMutex},
     signal::Signal,
 };
+use openwoot_protocol::{configuration::Invalid, switches};
 
-use super::{Parts, Profile};
+use super::{FittedSwitches, Parts, Profile, fitting::tune};
+use crate::analog::{self, SwitchModel};
 
 pub trait ProfileSource {
     fn read<R>(&self, read: impl FnOnce(&Profile) -> R) -> Option<R>;
@@ -21,6 +23,8 @@ pub struct Shared<M: RawMutex> {
     active: AtomicU8,
     requests: Signal<M, u8>,
     rebound_filter: AtomicBool,
+    switches: Mutex<M, RefCell<FittedSwitches>>,
+    switch_change: AtomicBool,
 }
 
 impl<M: RawMutex> Shared<M> {
@@ -33,6 +37,8 @@ impl<M: RawMutex> Shared<M> {
             active: AtomicU8::new(0),
             requests: Signal::new(),
             rebound_filter: AtomicBool::new(false),
+            switches: Mutex::new(RefCell::new(FittedSwitches::new())),
+            switch_change: AtomicBool::new(false),
         }
     }
 
@@ -60,6 +66,36 @@ impl<M: RawMutex> Shared<M> {
     #[must_use]
     pub fn rebound_filter(&self) -> bool {
         self.rebound_filter.load(Ordering::Relaxed)
+    }
+
+    pub fn set_switches(&self, settings: &switches::Settings) -> Result<(), Invalid> {
+        let tuned = tune(settings)?;
+        let changed = self
+            .switches
+            .lock(|cell| cell.borrow_mut().replace(settings, tuned));
+        if changed {
+            self.switch_change.store(true, Ordering::Release);
+        }
+        Ok(())
+    }
+
+    pub fn switches<R>(&self, read: impl FnOnce(&switches::Settings) -> R) -> R {
+        self.switches.lock(|cell| read(cell.borrow().settings()))
+    }
+
+    #[must_use]
+    pub fn fitted_switch(&self, index: usize, factory: SwitchModel) -> analog::Switch {
+        self.switches.lock(|cell| {
+            cell.try_borrow()
+                .map_or(analog::Switch::untuned(factory), |fitted| {
+                    fitted.switch(index, factory)
+                })
+        })
+    }
+
+    #[must_use]
+    pub fn take_switch_change(&self) -> bool {
+        self.switch_change.swap(false, Ordering::AcqRel)
     }
 
     pub fn change<R>(&self, parts: Parts, change: impl FnOnce(&mut Profile) -> R) -> Option<R> {

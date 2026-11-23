@@ -5,6 +5,7 @@ use openwoot_protocol::keys::ScanMode;
 
 use super::{KeyNotices, KeyReports};
 use crate::{
+    analog::SwitchModel,
     diagnostics::Diagnostics,
     keys::{Functions, Keys, Notice, Parts, ProfileSource, Shared, Switch},
     lighting::{KeyActivity, KeyEvent, KeyEvents, LockState},
@@ -15,6 +16,9 @@ use crate::{
 const CALIBRATION_TIMEOUT: Duration = Duration::from_secs(1);
 const CYCLE_TIMEOUT: Duration = Duration::from_millis(50);
 const RETRY_DELAY: Duration = Duration::from_millis(1);
+const SWITCH_DEPENDENT: Parts = Parts::SETTINGS
+    .union(Parts::OVERRIDES)
+    .union(Parts::ADVANCED);
 
 pub struct KeyTask<'d, M: RawMutex> {
     pub shared: &'d Shared<M>,
@@ -33,6 +37,7 @@ pub struct Progress {
     locks: Option<LockState>,
     rebound_filter: Option<bool>,
     suspended: bool,
+    factory_switch: Option<SwitchModel>,
 }
 
 impl<M: RawMutex> KeyTask<'_, M> {
@@ -103,13 +108,17 @@ impl<M: RawMutex> KeyTask<'_, M> {
         keys.set_xinput_player(self.host.xinput_player());
         let travel = scan.travel();
         let processed = scan.with(|scanner| {
+            let switched = self.fit_switches::<S, INPUTS, ADDRESSES, COLUMNS>(scanner, progress);
             let map = *scanner.map();
             for (position, key) in map.iter() {
                 if let Some(sensor) = scanner.sensor(position) {
                     keys.set_switch(key, Switch::from_switch(sensor.switch()));
                 }
             }
-            let parts = self.shared.take_changes();
+            let mut parts = self.shared.take_changes();
+            if switched {
+                parts = parts.union(SWITCH_DEPENDENT);
+            }
             if !parts.is_empty() {
                 keys.configure(self.shared, parts);
                 let scan_mode = self.shared.read(|profile| profile.settings.scan_mode);
@@ -164,6 +173,31 @@ impl<M: RawMutex> KeyTask<'_, M> {
             self.diagnostics.keys_passed();
             self.deliver(keys, progress, now_ms);
         }
+    }
+
+    fn fit_switches<
+        S: Sensing,
+        const INPUTS: usize,
+        const ADDRESSES: usize,
+        const COLUMNS: usize,
+    >(
+        &self,
+        scanner: &mut scan::Scanner<S, INPUTS, ADDRESSES>,
+        progress: &mut Progress,
+    ) -> bool {
+        if !self.shared.take_switch_change() {
+            return false;
+        }
+        let factory = *progress.factory_switch.get_or_insert_with(|| {
+            scanner
+                .map()
+                .iter()
+                .next()
+                .and_then(|(position, _)| scanner.sensor(position))
+                .map_or(SwitchModel::DEFAULT, |sensor| sensor.switch().kind())
+        });
+        scanner.apply_switches(|key| self.shared.fitted_switch(key.index(COLUMNS), factory));
+        true
     }
 
     fn deliver<F: Functions, const ROWS: usize, const COLUMNS: usize>(

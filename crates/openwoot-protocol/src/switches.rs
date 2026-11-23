@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::configuration::{Capabilities, Invalid, MAX_KEYS, Validate};
 
 pub const MAX_MODELS: usize = 64;
+pub const MAX_TUNED: usize = 16;
 
 pub type Models = Vec<Model, MAX_MODELS>;
 
@@ -26,6 +27,52 @@ pub struct Model {
     pub group: u8,
 }
 
+impl Switch {
+    #[must_use]
+    pub const fn is_tuned(&self) -> bool {
+        self.travel_offset != 0
+    }
+
+    pub fn check_travel(&self, models: &[Model]) -> Result<(), Invalid> {
+        let model = models
+            .get(usize::from(self.model))
+            .ok_or(Invalid::SwitchModelUnknown(self.model))?;
+        if self.travel_offset < model.travel {
+            Ok(())
+        } else {
+            Err(Invalid::TravelOffsetReachesTravel {
+                model: self.model,
+                offset: self.travel_offset,
+                travel: model.travel,
+            })
+        }
+    }
+}
+
+impl Settings {
+    #[must_use]
+    pub fn of_key(&self, index: usize) -> Option<Switch> {
+        self.keys.get(index).copied().flatten().or(self.default)
+    }
+
+    pub fn switches(&self) -> impl Iterator<Item = &Switch> {
+        self.default.iter().chain(self.keys.iter().flatten())
+    }
+
+    pub fn check_models(&self, models: &[Model]) -> Result<(), Invalid> {
+        let mut tuned = Vec::<Switch, MAX_TUNED>::new();
+        for switch in self.switches() {
+            switch.check_travel(models)?;
+            if switch.is_tuned() && !tuned.contains(switch) {
+                tuned
+                    .push(*switch)
+                    .map_err(|_| Invalid::TunedSwitchesExceedLimit)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Validate for Switch {
     fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
         if self.model < capabilities.switch_models {
@@ -39,9 +86,7 @@ impl Validate for Switch {
 impl Validate for Settings {
     fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
         capabilities.check_key_count(self.keys.len())?;
-        self.default
-            .iter()
-            .chain(self.keys.iter().flatten())
+        self.switches()
             .try_for_each(|switch| switch.validate(capabilities))
     }
 }

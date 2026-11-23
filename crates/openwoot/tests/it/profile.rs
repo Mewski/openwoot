@@ -4,19 +4,20 @@ use embassy_futures::block_on;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use embassy_usb_driver::Speed as BusSpeed;
 use openwoot::{
+    analog::{self, SwitchModel},
     keys::{self, ProfileSource},
     layout::DefaultKeymap,
     lighting::{LedMatrix, Lighting, from_rgb565},
     profile::{self, Changes, Configurator, Factory, Model, Preset},
     protocol::Configuration,
     runtime::{Firmware, State},
-    storage::{NorLayout, Partition, Scope, Settings},
+    storage::{LayoutOverride, NorLayout, Partition, Scope, Settings},
     usb::{Face, KeyboardFormat, Mode, PollingRate, Speed},
 };
 use openwoot_image::Region;
 use openwoot_protocol::{
     advanced,
-    configuration::{Capabilities, Rejection},
+    configuration::{Capabilities, Invalid, Rejection},
     device, gamepad, global,
     heapless::Vec,
     keys::{Action, Distance, Index, Keymap, Layer, RapidTrigger, ScanMode, TapDuration},
@@ -25,6 +26,7 @@ use openwoot_protocol::{
         ReactiveFade, Rgb, Settings as LightingSettings,
     },
     profile::{Info, Slot, Summary},
+    switches,
 };
 
 use crate::{
@@ -34,7 +36,7 @@ use crate::{
 };
 
 type Mutual = CriticalSectionRawMutex;
-type ProfileModel<'a> = Model<'a, Mutual, Nor, ROWS, COLUMNS>;
+pub(crate) type ProfileModel<'a> = Model<'a, Mutual, Nor, ROWS, COLUMNS>;
 type ProbedModel<'a> = Model<'a, Mutual, Probe, ROWS, COLUMNS>;
 
 const LAYOUT: NorLayout = NorLayout {
@@ -128,7 +130,7 @@ static PRESETS: [Preset; 2] = [
         lightbar_brightness: Some(90),
     },
 ];
-static FACTORY: Factory<ROWS, COLUMNS> = Factory {
+pub(crate) static FACTORY: Factory<ROWS, COLUMNS> = Factory {
     keymap: DefaultKeymap {
         layers: &LAYERS,
         variant_patches: &[],
@@ -222,7 +224,7 @@ impl Leds {
     }
 }
 
-fn storage() -> Settings<Nor> {
+pub(crate) fn storage() -> Settings<Nor> {
     let layout = NorLayout {
         capacity: 6 * SECTOR,
         settings: Region {
@@ -267,7 +269,7 @@ fn typed(usage: u8) -> Keymap {
     Vec::from_array([Action::Keyboard(usage); ROWS * COLUMNS])
 }
 
-fn open<'a>(
+pub(crate) fn open<'a>(
     keys: &'a keys::Shared<Mutual>,
     shared: &'a profile::Shared<Mutual>,
     storage: Option<&'a mut Settings<Nor>>,
@@ -846,4 +848,302 @@ fn the_layout_is_the_one_of_the_layout_variant_of_the_unit() {
             "variant {variant}"
         );
     }
+}
+
+pub(crate) fn switch_capabilities() -> Capabilities {
+    Capabilities {
+        key_rows: u8::try_from(ROWS).unwrap_or(u8::MAX),
+        key_columns: u8::try_from(COLUMNS).unwrap_or(u8::MAX),
+        profiles: 4,
+        layouts: Vec::from_array([device::Layout::Ansi, device::Layout::Iso]),
+        lightbar_leds: 0,
+        host_signals: false,
+        switch_models: SwitchModel::COUNT,
+        edition: None,
+    }
+}
+
+pub(crate) const fn chosen(model: u8, travel_offset: u8) -> switches::Switch {
+    switches::Switch {
+        model,
+        travel_offset,
+    }
+}
+
+pub(crate) fn factory_switches() -> switches::Settings {
+    switches::Settings {
+        default: None,
+        keys: Vec::from_array([None; ROWS * COLUMNS]),
+    }
+}
+
+fn mixed_switches() -> switches::Settings {
+    let mut settings = factory_switches();
+    settings.default = Some(chosen(2, 0));
+    if let Some(key) = settings.keys.get_mut(1) {
+        *key = Some(chosen(0, 20));
+    }
+    settings
+}
+
+#[test]
+fn a_fresh_keyboard_has_the_factory_switch_on_every_key_and_lists_the_known_models() {
+    let kind = |id| SwitchModel::new(id).unwrap();
+    let keys = keys::Shared::new();
+    let shared = profile::Shared::new();
+    let mut settings = storage();
+    let model = Mutex::new(open(&keys, &shared, Some(&mut settings)));
+    let mut configurator = Configurator::new(&model, switch_capabilities());
+    assert_eq!(block_on(configurator.switches()), Ok(factory_switches()));
+    let models = block_on(configurator.switch_models()).unwrap();
+    assert_eq!(models.len(), usize::from(SwitchModel::COUNT));
+    assert_eq!(
+        models.first(),
+        Some(&switches::Model {
+            travel: 80,
+            group: 0
+        })
+    );
+    assert_eq!(
+        models.get(3),
+        Some(&switches::Model {
+            travel: 68,
+            group: 7
+        })
+    );
+    let mut narrow = Configurator::new(
+        &model,
+        Capabilities {
+            switch_models: 3,
+            ..switch_capabilities()
+        },
+    );
+    assert_eq!(
+        block_on(narrow.switch_models()).map(|models| models.len()),
+        Ok(3)
+    );
+    for id in 0..SwitchModel::COUNT {
+        assert_eq!(
+            keys.fitted_switch(usize::from(id), kind(id)),
+            analog::Switch::new(kind(id), None)
+        );
+    }
+}
+
+#[test]
+fn switches_reach_the_keys_at_once_are_stored_by_save_and_dropped_by_revert() {
+    let kind = |id| SwitchModel::new(id).unwrap();
+    let keys = keys::Shared::new();
+    let shared = profile::Shared::new();
+    let mut settings = storage();
+    {
+        let model = Mutex::new(open(&keys, &shared, Some(&mut settings)));
+        let mut configurator = Configurator::new(&model, switch_capabilities());
+        let _ = keys.take_switch_change();
+        block_on(configurator.set_switches(mixed_switches())).unwrap();
+        assert!(keys.take_switch_change());
+        assert_eq!(block_on(configurator.switches()), Ok(mixed_switches()));
+        assert_eq!(
+            keys.fitted_switch(0, SwitchModel::DEFAULT),
+            analog::Switch::new(kind(2), None)
+        );
+        assert_eq!(
+            keys.fitted_switch(1, SwitchModel::DEFAULT),
+            analog::Switch::new(kind(0), Some(20))
+        );
+        block_on(configurator.revert()).unwrap();
+        assert_eq!(block_on(configurator.switches()), Ok(factory_switches()));
+        assert!(keys.take_switch_change());
+        assert_eq!(
+            keys.fitted_switch(1, kind(1)),
+            analog::Switch::new(kind(1), None)
+        );
+        block_on(configurator.revert()).unwrap();
+        assert!(!keys.take_switch_change());
+        block_on(configurator.set_switches(mixed_switches())).unwrap();
+        block_on(configurator.save()).unwrap();
+        assert_eq!(block_on(configurator.profile_revision(Slot::new(0))), Ok(0));
+        block_on(configurator.revert()).unwrap();
+        assert_eq!(block_on(configurator.switches()), Ok(mixed_switches()));
+    }
+    assert_eq!(
+        block_on(settings.load::<switches::Settings>(Scope::Global)),
+        Ok(Some(mixed_switches()))
+    );
+    let restarted = keys::Shared::new();
+    let model = open(&restarted, &shared, Some(&mut settings));
+    assert_eq!(model.switches(), mixed_switches());
+    assert!(restarted.take_switch_change());
+    assert_eq!(
+        restarted.fitted_switch(1, SwitchModel::DEFAULT),
+        analog::Switch::new(kind(0), Some(20))
+    );
+}
+
+#[test]
+fn switches_the_keyboard_cannot_fit_are_refused_and_change_nothing() {
+    let keys = keys::Shared::new();
+    let shared = profile::Shared::new();
+    let model = Mutex::new(open(&keys, &shared, None));
+    let mut configurator = Configurator::new(&model, switch_capabilities());
+    let mut longest = factory_switches();
+    longest.keys[0] = Some(chosen(0, 79));
+    longest.keys[1] = Some(chosen(2, 65));
+    assert_eq!(block_on(configurator.set_switches(longest.clone())), Ok(()));
+    let _ = keys.take_switch_change();
+    for (model, offset, travel) in [(0, 80, 80), (0, 255, 80), (2, 66, 66)] {
+        let mut beyond = longest.clone();
+        beyond.keys[2] = Some(chosen(model, offset));
+        assert_eq!(
+            block_on(configurator.set_switches(beyond)),
+            Err(Rejection::Invalid(Invalid::TravelOffsetReachesTravel {
+                model,
+                offset,
+                travel
+            }))
+        );
+    }
+    let default_beyond = switches::Settings {
+        default: Some(chosen(0, 80)),
+        ..longest.clone()
+    };
+    assert_eq!(
+        block_on(configurator.set_switches(default_beyond)),
+        Err(Rejection::Invalid(Invalid::TravelOffsetReachesTravel {
+            model: 0,
+            offset: 80,
+            travel: 80
+        }))
+    );
+    let mut unknown = longest.clone();
+    unknown.keys[2] = Some(chosen(SwitchModel::COUNT, 0));
+    assert_eq!(
+        block_on(configurator.set_switches(unknown)),
+        Err(Rejection::Invalid(Invalid::SwitchModelUnknown(
+            SwitchModel::COUNT
+        )))
+    );
+    let mut many = factory_switches();
+    many.default = Some(chosen(1, 17));
+    for (offset, key) in (1..).zip(many.keys.iter_mut()) {
+        *key = Some(chosen(1, offset));
+    }
+    assert_eq!(
+        block_on(configurator.set_switches(many)),
+        Err(Rejection::Invalid(Invalid::TunedSwitchesExceedLimit))
+    );
+    assert!(!keys.take_switch_change());
+    assert_eq!(block_on(configurator.switches()), Ok(longest));
+    assert_eq!(
+        block_on(configurator.save()),
+        Err(Rejection::StorageInaccessible)
+    );
+}
+
+#[test]
+fn a_stored_switch_setting_that_fails_validation_gives_way_to_the_factory_switches() {
+    let kind = |id| SwitchModel::new(id).unwrap();
+    let shared = profile::Shared::new();
+    let mut beyond = mixed_switches();
+    beyond.keys[2] = Some(chosen(0, 80));
+    let mut short = mixed_switches();
+    short.keys.pop();
+    let mut unknown = mixed_switches();
+    unknown.default = Some(chosen(SwitchModel::COUNT, 0));
+    for stored in [beyond, short, unknown] {
+        let keys = keys::Shared::new();
+        let mut settings = storage();
+        block_on(settings.store(Scope::Global, &stored)).unwrap();
+        let model = open(&keys, &shared, Some(&mut settings));
+        assert_eq!(model.switches(), factory_switches(), "{stored:?}");
+        assert_eq!(
+            keys.fitted_switch(2, kind(1)),
+            analog::Switch::new(kind(1), None)
+        );
+    }
+}
+
+#[test]
+fn a_layout_is_stored_by_save_and_chosen_at_the_next_start() {
+    let keys = keys::Shared::new();
+    let shared = profile::Shared::new();
+    let mut settings = storage();
+    {
+        let model = Mutex::new(open(&keys, &shared, Some(&mut settings)));
+        let mut configurator = Configurator::new(&model, switch_capabilities());
+        assert_eq!(
+            block_on(configurator.set_layout(device::Layout::Iso)),
+            Ok(())
+        );
+        assert_eq!(block_on(configurator.layout()), Ok(device::Layout::Ansi));
+        block_on(configurator.revert()).unwrap();
+        block_on(configurator.save()).unwrap();
+    }
+    assert_eq!(
+        block_on(settings.load::<LayoutOverride>(Scope::Global)),
+        Ok(None)
+    );
+    {
+        let model = Mutex::new(open(&keys, &shared, Some(&mut settings)));
+        let mut configurator = Configurator::new(&model, switch_capabilities());
+        block_on(configurator.set_layout(device::Layout::Iso)).unwrap();
+        block_on(configurator.save()).unwrap();
+        assert_eq!(block_on(configurator.profile_revision(Slot::new(0))), Ok(0));
+    }
+    let variant = block_on(LayoutOverride::variant_or(&mut settings, 0));
+    assert_eq!(variant, 1);
+    let model: Mutex<Mutual, ProfileModel<'_>> = Mutex::new(Model::new(
+        &keys,
+        &shared,
+        Some(&mut settings),
+        &FACTORY,
+        variant,
+        4,
+    ));
+    let mut configurator = Configurator::new(&model, switch_capabilities());
+    assert_eq!(block_on(configurator.layout()), Ok(device::Layout::Iso));
+}
+
+#[test]
+fn a_layout_the_keyboard_cannot_have_is_refused() {
+    let keys = keys::Shared::new();
+    let shared = profile::Shared::new();
+    let model = Mutex::new(open(&keys, &shared, None));
+    let mut configurator = Configurator::new(&model, switch_capabilities());
+    assert_eq!(
+        block_on(configurator.set_layout(device::Layout::Jis)),
+        Err(Rejection::Invalid(Invalid::LayoutMissing(
+            device::Layout::Jis
+        )))
+    );
+    assert_eq!(block_on(configurator.save()), Ok(()));
+}
+
+#[test]
+fn a_stored_layout_outside_the_known_layouts_gives_way_to_the_factory_layout() {
+    let mut settings = storage();
+    assert_eq!(block_on(LayoutOverride::variant_or(&mut settings, 1)), 1);
+    block_on(settings.store(Scope::Global, &LayoutOverride(2))).unwrap();
+    assert_eq!(block_on(LayoutOverride::variant_or(&mut settings, 1)), 2);
+    block_on(settings.store(Scope::Global, &LayoutOverride(3))).unwrap();
+    assert_eq!(block_on(LayoutOverride::variant_or(&mut settings, 1)), 1);
+}
+
+#[test]
+fn a_factory_reset_returns_the_switches_and_the_layout_to_the_factory() {
+    let keys = keys::Shared::new();
+    let shared = profile::Shared::new();
+    let mut settings = storage();
+    {
+        let model = Mutex::new(open(&keys, &shared, Some(&mut settings)));
+        let mut configurator = Configurator::new(&model, switch_capabilities());
+        block_on(configurator.set_switches(mixed_switches())).unwrap();
+        block_on(configurator.set_layout(device::Layout::Iso)).unwrap();
+        block_on(configurator.save()).unwrap();
+        let _ = keys.take_switch_change();
+        block_on(configurator.factory_reset()).unwrap();
+        assert_eq!(block_on(configurator.switches()), Ok(factory_switches()));
+        assert!(keys.take_switch_change());
+    }
+    assert_eq!(block_on(LayoutOverride::variant_or(&mut settings, 0)), 0);
 }

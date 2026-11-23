@@ -1,18 +1,21 @@
+use core::future::{Future, ready};
+
 use embassy_futures::select::{Either, select};
 use embassy_sync::{blocking_mutex::raw::RawMutex, mutex::Mutex};
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use openwoot_protocol::{
     advanced,
-    configuration::{Capabilities, Rejection},
+    configuration::{Capabilities, Invalid, Rejection},
     device, gamepad, global,
     keys::{self, Keymap, Layer, Overrides},
     lightbar,
     lighting::{self, KeyColors},
     profile::{Info, Slot, Summary},
+    switches,
 };
 
 use super::Model;
-use crate::protocol::Configuration;
+use crate::{keys::switch_models, protocol::Configuration};
 
 pub struct Configurator<'a, M, F, const ROWS: usize, const COLUMNS: usize>
 where
@@ -103,6 +106,18 @@ where
             .or(layouts.first())
             .copied()
             .ok_or(Rejection::Unsupported)
+    }
+
+    async fn set_layout(&mut self, layout: device::Layout) -> Result<(), Rejection> {
+        let variant = self
+            .capabilities
+            .layouts
+            .iter()
+            .position(|known| *known == layout)
+            .and_then(|position| u8::try_from(position).ok())
+            .ok_or(Invalid::LayoutMissing(layout))?;
+        self.model.lock().await.set_layout_variant(variant);
+        Ok(())
     }
 
     async fn global_settings(&mut self) -> Result<global::Settings, Rejection> {
@@ -343,6 +358,20 @@ where
         let shared = self.model.lock().await.shared();
         shared.host_signals().set(&signals);
         Ok(())
+    }
+
+    async fn switches(&mut self) -> Result<switches::Settings, Rejection> {
+        Ok(self.model.lock().await.switches())
+    }
+
+    async fn set_switches(&mut self, settings: switches::Settings) -> Result<(), Rejection> {
+        self.model.lock().await.set_switches(&settings)
+    }
+
+    fn switch_models(&mut self) -> impl Future<Output = Result<switches::Models, Rejection>> {
+        let mut models = switch_models();
+        models.truncate(usize::from(self.capabilities.switch_models));
+        ready(Ok(models))
     }
 
     async fn save(&mut self) -> Result<(), Rejection> {

@@ -13,7 +13,7 @@ use openwoot_protocol::{
     },
     lighting::{Color, Effect, HueCycle, HueRange, Scanner, ScannerDirection},
     profile::{LayerChange, Slot},
-    switches::Switch,
+    switches::{self, MAX_TUNED, Switch},
 };
 
 use crate::support::{
@@ -271,8 +271,142 @@ fn switch_models_and_layouts_must_exist_on_the_keyboard() {
     );
 }
 
+fn models() -> switches::Models {
+    [
+        switches::Model {
+            travel: 80,
+            group: 0,
+        },
+        switches::Model {
+            travel: 40,
+            group: 3,
+        },
+    ]
+    .into_iter()
+    .collect()
+}
+
+fn set_on_key(model: u8, travel_offset: u8) -> switches::Settings {
+    let mut settings = switches();
+    settings.default = None;
+    if let Some(key) = settings.keys.get_mut(3) {
+        *key = Some(Switch {
+            model,
+            travel_offset,
+        });
+    }
+    settings
+}
+
+#[test]
+fn a_travel_offset_must_stay_below_the_travel_of_its_model() {
+    let models = models();
+    assert_eq!(set_on_key(0, 79).check_models(&models), Ok(()));
+    assert_eq!(set_on_key(1, 39).check_models(&models), Ok(()));
+    assert_eq!(
+        set_on_key(1, 40).check_models(&models),
+        Err(Invalid::TravelOffsetReachesTravel {
+            model: 1,
+            offset: 40,
+            travel: 40
+        })
+    );
+    assert_eq!(
+        set_on_key(0, u8::MAX).check_models(&models),
+        Err(Invalid::TravelOffsetReachesTravel {
+            model: 0,
+            offset: u8::MAX,
+            travel: 80
+        })
+    );
+    let default_beyond = switches::Settings {
+        default: Some(Switch {
+            model: 1,
+            travel_offset: 41,
+        }),
+        ..set_on_key(0, 0)
+    };
+    assert_eq!(
+        default_beyond.check_models(&models),
+        Err(Invalid::TravelOffsetReachesTravel {
+            model: 1,
+            offset: 41,
+            travel: 40
+        })
+    );
+    assert_eq!(
+        set_on_key(2, 0).check_models(&models),
+        Err(Invalid::SwitchModelUnknown(2))
+    );
+}
+
+#[test]
+fn at_most_the_limit_of_distinct_switches_carry_a_travel_offset() {
+    let models = models();
+    let mut settings = set_on_key(0, 0);
+    let limit = u8::try_from(MAX_TUNED).unwrap();
+    for (offset, key) in (1..=limit).zip(settings.keys.iter_mut()) {
+        *key = Some(Switch {
+            model: 0,
+            travel_offset: offset,
+        });
+    }
+    settings.default = Some(Switch {
+        model: 0,
+        travel_offset: 1,
+    });
+    let repeated = settings.keys.len() - 1;
+    settings.keys[repeated] = Some(Switch {
+        model: 0,
+        travel_offset: 0,
+    });
+    assert_eq!(settings.check_models(&models), Ok(()));
+    settings.keys[repeated] = Some(Switch {
+        model: 1,
+        travel_offset: 1,
+    });
+    assert_eq!(
+        settings.check_models(&models),
+        Err(Invalid::TunedSwitchesExceedLimit)
+    );
+}
+
+#[test]
+fn a_key_without_its_own_switch_uses_the_default() {
+    let settings = switches();
+    assert_eq!(
+        settings.of_key(3),
+        Some(Switch {
+            model: 12,
+            travel_offset: 4
+        })
+    );
+    assert_eq!(settings.of_key(0), settings.default);
+    assert_eq!(settings.of_key(MAX_KEYS), settings.default);
+    let bare = switches::Settings {
+        default: None,
+        ..switches()
+    };
+    assert_eq!(bare.of_key(0), None);
+    assert_eq!(bare.switches().count(), 1);
+    assert_eq!(settings.switches().count(), 2);
+}
+
 #[test]
 fn rejections_read_as_one_lowercase_sentence() {
+    assert_eq!(
+        Invalid::TravelOffsetReachesTravel {
+            model: 2,
+            offset: 66,
+            travel: 66
+        }
+        .to_string(),
+        "travel offset 66 reaches the travel 66 of switch model 2"
+    );
+    assert_eq!(
+        Invalid::TunedSwitchesExceedLimit.to_string(),
+        "more than 16 distinct switches have a travel offset"
+    );
     assert_eq!(
         Rejection::from(Invalid::KeyboardUsageOutsideReport(0xE8)).to_string(),
         "keyboard usage `0xe8` has no place in the keyboard report"

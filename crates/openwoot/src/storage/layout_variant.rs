@@ -1,4 +1,12 @@
-use super::device_info::DeviceInfo;
+use embedded_storage_async::nor_flash::MultiwriteNorFlash;
+use openwoot_protocol::configuration::LAYOUTS;
+use serde::{Deserialize, Serialize};
+
+use super::{
+    device_info::DeviceInfo,
+    record::{Record, Scope},
+    settings::Settings,
+};
 
 const OPTION_LAYOUT_BIT: u8 = 1 << 0;
 
@@ -12,6 +20,27 @@ pub struct InDeviceInfo;
 #[derive(Clone, Copy, Debug)]
 pub struct OptionBit {
     pub user_option: fn() -> u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LayoutOverride(pub u8);
+
+impl LayoutOverride {
+    pub async fn variant_or<F: MultiwriteNorFlash>(settings: &mut Settings<F>, factory: u8) -> u8 {
+        settings
+            .load::<Self>(Scope::Global)
+            .await
+            .ok()
+            .flatten()
+            .map(|stored| stored.0)
+            .filter(|variant| usize::from(*variant) < LAYOUTS)
+            .unwrap_or(factory)
+    }
+}
+
+impl Record for LayoutOverride {
+    const ITEM: u8 = 0x16;
+    const VERSION: u8 = 1;
 }
 
 impl LayoutVariantSource for InDeviceInfo {

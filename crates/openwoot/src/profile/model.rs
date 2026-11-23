@@ -13,6 +13,7 @@ use openwoot_protocol::{
     lightbar,
     lighting::{self, KeyColors},
     profile::{Info, Slot, Summary},
+    switches,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -21,7 +22,7 @@ use crate::{
     keys::{ActiveProfile, Keymaps, Parts, Profile, default_gamepad_settings},
     layout::LAYERS,
     lighting::ProfileState,
-    storage::{Record, RecordKey, Scope, Settings, Stored},
+    storage::{LayoutOverride, Record, RecordKey, Scope, Settings, Stored},
 };
 
 pub struct Model<'a, M: RawMutex, F: MultiwriteNorFlash, const ROWS: usize, const COLUMNS: usize> {
@@ -37,6 +38,7 @@ pub struct Model<'a, M: RawMutex, F: MultiwriteNorFlash, const ROWS: usize, cons
     global: global::Settings,
     global_lightbar: lightbar::Entries,
     device: device::Settings,
+    layout: Option<u8>,
     unsaved_keys: Parts,
     unsaved: Changes,
 }
@@ -75,6 +77,7 @@ where
             global: factory.global,
             global_lightbar: lightbar::Entries::new(),
             device: device::Settings::from(factory.face),
+            layout: None,
             unsaved_keys: Parts::NONE,
             unsaved: Changes::NONE,
         }
@@ -234,6 +237,18 @@ where
         if unsaved.contains(Changes::GLOBAL_LIGHTBAR) {
             store(&mut self.storage, Scope::Global, &self.global_lightbar).await?;
         }
+        if unsaved.contains(Changes::SWITCHES) {
+            let keys = self.keys;
+            store_with::<_, switches::Settings>(&mut self.storage, Scope::Global, |body| {
+                encode_switches(keys, body)
+            })
+            .await?;
+        }
+        if unsaved.contains(Changes::LAYOUT)
+            && let Some(variant) = self.layout
+        {
+            store(&mut self.storage, Scope::Global, &LayoutOverride(variant)).await?;
+        }
         Ok(())
     }
 
@@ -299,6 +314,22 @@ where
     pub fn set_device_settings(&mut self, settings: device::Settings) {
         self.device = settings;
         self.unsaved = self.unsaved.union(Changes::DEVICE);
+    }
+
+    pub fn set_layout_variant(&mut self, variant: u8) {
+        self.layout = Some(variant);
+        self.unsaved = self.unsaved.union(Changes::LAYOUT);
+    }
+
+    #[must_use]
+    pub fn switches(&self) -> switches::Settings {
+        self.keys.switches(Clone::clone)
+    }
+
+    pub fn set_switches(&mut self, settings: &switches::Settings) -> Result<(), Rejection> {
+        self.keys.set_switches(settings)?;
+        self.unsaved = self.unsaved.union(Changes::SWITCHES);
+        Ok(())
     }
 
     pub async fn info(&mut self, profile: Slot) -> Result<Info, Rejection> {
@@ -982,9 +1013,30 @@ where
             },
         )
         .await;
+        self.load_switches(&limits).await;
+        self.layout = None;
         self.unsaved = Changes::NONE;
         self.apply_global();
         self.shared.set_global_lightbar(&self.global_lightbar);
+    }
+
+    async fn load_switches(&mut self, limits: &Capabilities) {
+        let keys = self.keys;
+        let fitted = load_valid(
+            &mut self.storage,
+            Scope::Global,
+            limits,
+            |stored: switches::Settings| keys.set_switches(&stored).is_ok(),
+        )
+        .await;
+        if fitted != Some(true) {
+            let mut factory = switches::Settings {
+                default: None,
+                keys: heapless::Vec::new(),
+            };
+            let _ = factory.keys.resize(ROWS * COLUMNS, None);
+            let _ = keys.set_switches(&factory);
+        }
     }
 
     fn apply_global(&self) {
@@ -1242,6 +1294,17 @@ fn encode_colors<M: RawMutex>(shared: &Shared<M>, buffer: &mut [u8]) -> Option<u
     Some(length)
 }
 
+fn encode_switches<M: RawMutex>(keys: &crate::keys::Shared<M>, buffer: &mut [u8]) -> Option<usize> {
+    let mut length = push_encoded(buffer, 0, &keys.switches(|settings| settings.default))?;
+    let count = keys.switches(|settings| settings.keys.len());
+    length = push_encoded(buffer, length, &count)?;
+    for index in 0..count {
+        let switch = keys.switches(|settings| settings.keys.get(index).copied())?;
+        length = push_encoded(buffer, length, &switch)?;
+    }
+    Some(length)
+}
+
 fn push_encoded(buffer: &mut [u8], length: usize, value: &impl Serialize) -> Option<usize> {
     let written = postcard::to_slice(value, buffer.get_mut(length..)?)
         .ok()?
@@ -1388,5 +1451,29 @@ mod tests {
             encode_colors(&Shared::<NoopRawMutex>::new(), &mut entries),
             None
         );
+    }
+
+    #[test]
+    fn switches_encoded_entry_by_entry_equal_the_whole_record() {
+        let chosen = |model, travel_offset| {
+            Some(switches::Switch {
+                model,
+                travel_offset,
+            })
+        };
+        let mut settings = switches::Settings {
+            default: chosen(3, 0),
+            keys: Vec::from_array([None; MAX_KEYS]),
+        };
+        settings.keys[0] = chosen(1, 20);
+        settings.keys[MAX_KEYS - 1] = chosen(48, 1);
+        let keys = crate::keys::Shared::<NoopRawMutex>::new();
+        keys.set_switches(&settings).unwrap();
+        let mut whole = [0; 2048];
+        let whole_len = encode(&settings, &mut whole).unwrap();
+        let mut entries = [0; 2048];
+        let entries_len = encode_switches(&keys, &mut entries).unwrap();
+        assert_eq!(entries[..entries_len], whole[..whole_len]);
+        assert_eq!(encode_switches(&keys, &mut entries[..whole_len - 1]), None);
     }
 }

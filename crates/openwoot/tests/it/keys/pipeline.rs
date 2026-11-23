@@ -1,8 +1,9 @@
 use embassy_futures::block_on;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
 use openwoot::{
+    analog::{self, SwitchModel},
     diagnostics::{Diagnostics, Hardware},
-    keys::{Key, Keyboard, Keys, Shared, default_settings},
+    keys::{Key, Keyboard, Keys, Shared, Switch, default_settings},
     layout::{DefaultKeymap, Standard},
     lighting::KeyEvents,
     profile::{self, Configurator, Factory, Model, Preset},
@@ -23,6 +24,7 @@ use openwoot_protocol::{
     keys::{self, Action, Distance, Index, Layer},
     lighting::{Color, Indicators, Rgb},
     profile::Slot,
+    switches,
 };
 
 use super::support::{COLUMNS, ROWS, nkro_usages};
@@ -523,5 +525,70 @@ fn unsaved_changes_are_dropped_by_revert_and_kept_by_save() {
     assert_eq!(
         block_on(configurator.key_settings(Slot::new(2))),
         Ok(changed)
+    );
+}
+
+fn is_pressed(bench: &Bench80<'_>, key: Key) -> bool {
+    bench
+        .keys
+        .actuation(key)
+        .is_some_and(|actuation| actuation.is_pressed())
+}
+
+fn press_from_rest(bench: &mut Bench80<'_>, key: Key, magnitude: u16) -> (u16, bool) {
+    bench.press(key, 0);
+    for _ in 0..5 {
+        bench.cycle();
+    }
+    bench.press(key, magnitude);
+    bench.cycle();
+    (bench.travel(key), is_pressed(bench, key))
+}
+
+#[test]
+fn a_switch_model_from_the_configuration_channel_moves_travel_and_actuation_at_once() {
+    const SHALLOW: u16 = 90;
+    let world = World::new();
+    let mut settings = storage();
+    let model = world.model(&mut settings);
+    let mut configurator = Configurator::new(&model, capabilities());
+    let mut bench = Bench80::new(world.task(Mode::NoGamepad));
+    let factory = Switch::from_switch(&analog::Switch::new(SwitchModel::DEFAULT, None));
+    assert_eq!(bench.keys.minimum(KEY_A), Some(factory.minimum));
+    let (factory_travel, factory_pressed) = press_from_rest(&mut bench, KEY_A, SHALLOW);
+    assert!(!factory_pressed, "travel {factory_travel}");
+    let shorter = analog::Switch::new(SwitchModel::new(2).unwrap(), Some(30));
+    let mut chosen: switches::Settings = switches::Settings {
+        default: None,
+        keys: core::iter::repeat_n(None, ROWS * COLUMNS).collect(),
+    };
+    chosen.keys[KEY_A.index(COLUMNS)] = Some(switches::Switch {
+        model: 2,
+        travel_offset: 30,
+    });
+    block_on(configurator.set_switches(chosen.clone())).unwrap();
+    bench.cycle();
+    assert_eq!(
+        bench.keys.minimum(KEY_A),
+        Some(Switch::from_switch(&shorter).minimum)
+    );
+    assert_eq!(bench.keys.minimum(KEY_S), Some(factory.minimum));
+    bench.scan.with(|scanner| {
+        let position = MAP.position(KEY_A).unwrap();
+        assert_eq!(scanner.sensor(position).unwrap().switch(), &shorter);
+    });
+    let (travel, pressed) = press_from_rest(&mut bench, KEY_A, SHALLOW);
+    assert!(pressed, "travel {travel}");
+    assert!(travel > factory_travel, "{travel} <= {factory_travel}");
+    block_on(configurator.revert()).unwrap();
+    bench.cycle();
+    assert_eq!(bench.keys.minimum(KEY_A), Some(factory.minimum));
+    assert_eq!(
+        press_from_rest(&mut bench, KEY_A, SHALLOW),
+        (factory_travel, false)
+    );
+    assert_eq!(
+        block_on(configurator.switches()).map(|stored| stored == chosen),
+        Ok(false)
     );
 }

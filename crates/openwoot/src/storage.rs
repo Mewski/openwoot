@@ -14,7 +14,7 @@ pub use device_info::{
     NorSector, SerialMessage, SerialNumber, SerialText,
 };
 pub use format::{FormatReason, Opened};
-pub use layout_variant::{InDeviceInfo, LayoutVariantSource, OptionBit};
+pub use layout_variant::{InDeviceInfo, LayoutOverride, LayoutVariantSource, OptionBit};
 pub use nor_identity::NorIdentity;
 pub use nor_layout::{NorLayout, SECTOR_SIZE, SettingsRegion};
 pub use partition::{Partition, PartitionError};

@@ -5,14 +5,22 @@ impl Changes {
     pub const ACTIVATED: Self = Self(1 << 4);
     pub const COLORS: Self = Self(1 << 1);
     pub const DEVICE: Self = Self(1 << 6);
-    pub const DEVICE_WIDE: Self = Self(Self::GLOBAL.0 | Self::DEVICE.0 | Self::GLOBAL_LIGHTBAR.0);
+    pub const DEVICE_WIDE: Self = Self(
+        Self::GLOBAL.0
+            | Self::DEVICE.0
+            | Self::GLOBAL_LIGHTBAR.0
+            | Self::SWITCHES.0
+            | Self::LAYOUT.0,
+    );
     pub const GLOBAL: Self = Self(1 << 2);
     pub const GLOBAL_LIGHTBAR: Self = Self(1 << 8);
     pub const INFO: Self = Self(1 << 5);
+    pub const LAYOUT: Self = Self(1 << 10);
     pub const LIGHTBAR: Self = Self(1 << 7);
     pub const LIGHTING: Self = Self(1 << 0);
     pub const NONE: Self = Self(0);
     pub const SCAN: Self = Self(1 << 3);
+    pub const SWITCHES: Self = Self(1 << 9);
 
     #[must_use]
     pub const fn from_bits(bits: u16) -> Self {
@@ -69,10 +77,15 @@ mod tests {
         let changes = Changes::LIGHTING
             .union(Changes::GLOBAL)
             .union(Changes::GLOBAL_LIGHTBAR)
+            .union(Changes::SWITCHES)
+            .union(Changes::LAYOUT)
             .union(Changes::LIGHTBAR);
         assert_eq!(
             changes.intersection(Changes::DEVICE_WIDE),
-            Changes::GLOBAL.union(Changes::GLOBAL_LIGHTBAR)
+            Changes::GLOBAL
+                .union(Changes::GLOBAL_LIGHTBAR)
+                .union(Changes::SWITCHES)
+                .union(Changes::LAYOUT)
         );
         assert_eq!(
             changes.without(Changes::DEVICE_WIDE),

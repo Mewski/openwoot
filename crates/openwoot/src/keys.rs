@@ -4,6 +4,7 @@ mod configure;
 mod controller;
 mod distance;
 mod engine;
+mod fitting;
 mod functions;
 mod key;
 mod notice;
@@ -29,6 +30,7 @@ pub use controller::{
 };
 pub use distance::travel_of;
 pub use engine::{Keys, Switch};
+pub use fitting::{FittedSwitches, switch_models};
 pub use functions::{Effects, Functions};
 pub use key::Key;
 pub use notice::Notice;

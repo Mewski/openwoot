@@ -615,6 +615,20 @@ fn keyboard_wide_reads_runtime_switches_and_rejections_survive_a_round_trip() {
             switches::MAX_MODELS,
         )),
     );
+    round_trip!(
+        SetSwitches,
+        switches(),
+        Err(Rejection::Invalid(Invalid::TravelOffsetReachesTravel {
+            model: u8::MAX,
+            offset: u8::MAX,
+            travel: u8::MAX,
+        })),
+    );
+    round_trip!(
+        SetSwitches,
+        switches(),
+        Err(Rejection::Invalid(Invalid::TunedSwitchesExceedLimit)),
+    );
     round_trip!(SetKeyReports, false, DONE);
     round_trip!(SetGamepadDetection, true, DONE);
     round_trip!(SetRawScanning, true, Err(Rejection::Unsupported));
