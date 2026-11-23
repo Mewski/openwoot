@@ -54,3 +54,59 @@ fn a_frame_longer_than_its_report_is_malformed() {
     let report = [1, b'O', b'W', 0xFF, 0x00, 0x00];
     assert_eq!(report::parse(&report), Err(Error::MalformedReport));
 }
+
+#[test]
+fn a_frame_without_a_header_is_malformed() {
+    let report = [1, b'O', b'W', 0, 0];
+    assert_eq!(report::parse(&report), Ok(Contents::Frame(&[])));
+    assert_eq!(decode_message(&report), Err(Error::MalformedReport));
+    assert_eq!(report::parse(&[]), Err(Error::MalformedReport));
+}
+
+#[test]
+fn a_frame_length_beyond_every_report_is_refused_without_a_panic() {
+    let mut report = [0; MAX_LEN];
+    assert_eq!(
+        report::seal(&mut report, usize::MAX),
+        Err(Error::FrameTooLong)
+    );
+}
+
+#[test]
+fn a_frame_under_a_report_id_the_channel_does_not_have_is_malformed() {
+    for report_id in [0, 7, 9, u8::MAX] {
+        let report = [report_id, b'O', b'W', 2, 0, 0xAA, 0xBB];
+        assert_eq!(report::parse(&report), Err(Error::MalformedReport));
+    }
+    let report = [6, b'O', b'W', 2, 0, 0xAA, 0xBB];
+    assert_eq!(report::parse(&report), Ok(Contents::Frame(&[0xAA, 0xBB])));
+}
+
+#[test]
+fn a_frame_too_long_for_its_report_id_is_malformed() {
+    let frame_len = SIZES[0] - (FRAME_OFFSET - 1) + 1;
+    let mut report = vec![0; MAX_LEN];
+    report[..FRAME_OFFSET].copy_from_slice(&[1, b'O', b'W', 0, 0]);
+    report[3..5].copy_from_slice(&u16::try_from(frame_len).unwrap().to_le_bytes());
+    assert_eq!(report::parse(&report), Err(Error::MalformedReport));
+    report[0] = 2;
+    assert!(
+        matches!(report::parse(&report), Ok(Contents::Frame(frame)) if frame.len() == frame_len)
+    );
+}
+
+#[test]
+fn a_magic_with_a_cut_off_length_is_malformed_and_a_lone_byte_is_foreign() {
+    assert_eq!(
+        report::parse(&[1, b'O', b'W', 0]),
+        Err(Error::MalformedReport)
+    );
+    assert_eq!(report::parse(&[1, b'O', b'W']), Err(Error::MalformedReport));
+    assert_eq!(
+        report::parse(&[1, b'O']),
+        Ok(Contents::Foreign {
+            report_id: 1,
+            payload: b"O"
+        })
+    );
+}

@@ -13,6 +13,7 @@ pub const MAX_GROUPS: usize = 2;
 pub const MAX_TERMS: usize = 2;
 pub const MAX_LEDS: usize = 16;
 pub const MAX_HOST_SIGNALS: usize = 20;
+pub const MAX_HOLD_MS: u16 = 60_000;
 
 pub type Entries = Vec<Entry, MAX_ENTRIES>;
 pub type HostSignals = Vec<HostSignal, MAX_HOST_SIGNALS>;
@@ -216,7 +217,12 @@ impl Validate for Range {
 impl Validate for KeyRect {
     fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
         self.first.validate(capabilities)?;
-        self.last.validate(capabilities)
+        self.last.validate(capabilities)?;
+        if self.first.row <= self.last.row && self.first.column <= self.last.column {
+            Ok(())
+        } else {
+            Err(Invalid::KeyRectInverted)
+        }
     }
 }
 
@@ -241,8 +247,19 @@ impl Validate for Signal {
 impl Validate for Term {
     fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
         match self {
+            Self::Trigger { duration_ms: 0, .. } => Err(Invalid::ZeroDuration),
+            Self::Trigger { duration_ms, .. } if *duration_ms > MAX_HOLD_MS => {
+                Err(Invalid::HoldTimeTooLong(u32::from(*duration_ms)))
+            }
             Self::Trigger { signal, .. } => signal.validate(capabilities),
             Self::Compare(comparison) => {
+                match comparison.hold_ms {
+                    Some(0) => return Err(Invalid::ZeroHoldTime),
+                    Some(hold_ms) if hold_ms > u32::from(MAX_HOLD_MS) => {
+                        return Err(Invalid::HoldTimeTooLong(hold_ms));
+                    }
+                    Some(_) | None => {}
+                }
                 comparison.signal.validate(capabilities)?;
                 match comparison.operand {
                     Operand::Signal(signal) => signal.validate(capabilities),
@@ -296,6 +313,9 @@ impl Validate for Effect {
 
 impl Validate for Condition {
     fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        if !self.can_hold() {
+            return Err(Invalid::ConditionNeverHolds);
+        }
         self.groups
             .iter()
             .flat_map(|group| group.terms.iter())
@@ -316,7 +336,8 @@ impl Validate for Entries {
             return Err(Invalid::NoLightbar);
         }
         self.iter()
-            .try_for_each(|entry| entry.validate(capabilities))
+            .try_for_each(|entry| entry.validate(capabilities))?;
+        check_host_signals(self)
     }
 }
 
@@ -334,4 +355,77 @@ impl Validate for HostSignals {
             Err(Invalid::NoHostSignals)
         }
     }
+}
+
+impl Logic {
+    const fn holds_for(self, members: usize) -> bool {
+        match self {
+            Self::Single => members == 1,
+            Self::All => true,
+            Self::Any => members > 0,
+        }
+    }
+}
+
+impl Condition {
+    fn can_hold(&self) -> bool {
+        let mut groups = self
+            .groups
+            .iter()
+            .map(|group| group.logic.holds_for(group.terms.len()));
+        match self.logic {
+            Logic::Single => self.groups.len() == 1 && groups.all(|holds| holds),
+            Logic::All => groups.all(|holds| holds),
+            Logic::Any => groups.any(|holds| holds),
+        }
+    }
+}
+
+impl Term {
+    fn signals(self) -> impl Iterator<Item = Signal> {
+        let (signal, other) = match self {
+            Self::Trigger { signal, .. } => (signal, None),
+            Self::Compare(comparison) => (
+                comparison.signal,
+                match comparison.operand {
+                    Operand::Signal(other) => Some(other),
+                    Operand::Constant(_) => None,
+                },
+            ),
+        };
+        core::iter::once(signal).chain(other)
+    }
+}
+
+impl Entry {
+    fn signals(&self) -> impl Iterator<Item = Signal> {
+        let metered = match &self.effect {
+            Effect::Meter(meter) => Some(meter.signal),
+            Effect::ProfileIndicator(_)
+            | Effect::Mirror(_)
+            | Effect::Blink(_)
+            | Effect::Solid(_)
+            | Effect::Custom(_) => None,
+        };
+        let terms = self
+            .condition
+            .iter()
+            .flat_map(|condition| condition.groups.iter())
+            .flat_map(|group| group.terms.iter().copied())
+            .flat_map(Term::signals);
+        metered.into_iter().chain(terms)
+    }
+}
+
+fn check_host_signals(entries: &Entries) -> Result<(), Invalid> {
+    let mut host_signals = HostSignalIds::new();
+    for signal in entries.iter().flat_map(Entry::signals) {
+        if let Signal::Host(id) = signal
+            && !host_signals.contains(&id)
+            && host_signals.push(id).is_err()
+        {
+            return Err(Invalid::LightbarHostSignalsExceedLimit);
+        }
+    }
+    Ok(())
 }

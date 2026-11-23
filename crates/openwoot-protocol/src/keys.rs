@@ -149,7 +149,13 @@ impl Layer {
 
 impl Action {
     pub const CONSUMER_USAGES: core::ops::RangeInclusive<u16> = 0x0001..=0x02A2;
-    pub const KEYBOARD_USAGES: [core::ops::RangeInclusive<u8>; 2] = [0x04..=0xDD, 0xE0..=0xE7];
+    pub const KEYBOARD_USAGES: [core::ops::RangeInclusive<u8>; 5] = [
+        0x04..=0x31,
+        0x33..=0x9B,
+        0x9D..=0xA4,
+        0xB0..=0xDD,
+        0xE0..=0xE7,
+    ];
 }
 
 impl Distance {
@@ -277,7 +283,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn modifiers_and_report_usages_are_keyboard_actions_and_the_gap_is_not() {
+    fn modifiers_and_report_usages_are_keyboard_actions_and_the_gaps_are_not() {
         let capabilities = Capabilities {
             key_rows: 1,
             key_columns: 1,
@@ -288,10 +294,10 @@ mod tests {
             switch_models: 0,
             edition: None,
         };
-        for usage in [0x04, 0xDD, 0xE0, 0xE7] {
+        for usage in [0x04, 0x31, 0x33, 0x9B, 0x9D, 0xA4, 0xB0, 0xDD, 0xE0, 0xE7] {
             assert_eq!(Action::Keyboard(usage).validate(&capabilities), Ok(()));
         }
-        for usage in [0x00, 0x03, 0xDE, 0xDF, 0xE8, 0xFF] {
+        for usage in [0x00, 0x03, 0x32, 0x9C, 0xA5, 0xAF, 0xDE, 0xDF, 0xE8, 0xFF] {
             assert_eq!(
                 Action::Keyboard(usage).validate(&capabilities),
                 Err(Invalid::KeyboardUsageOutsideReport(usage))

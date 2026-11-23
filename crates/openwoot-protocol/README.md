@@ -5,7 +5,9 @@ The configuration channel between the openwoot firmware and host software, `no_s
 - `endpoints`: every endpoint in one `postcard-rpc` 0.12 table (`endpoints::LIST`), for example
   `GetVersion` (request `()`, response `Version`), `EnterUpdateMode` (request `()`, response
   `()`, then the firmware resets into update mode) and `GetDiagnostics` (request `()`, response
-  `diagnostics::Report`).
+  `diagnostics::Report`). The table also lists the two standard endpoints of `postcard-rpc`
+  (`postcard-rpc/ping`, `postcard-rpc/schemas/get`); the firmware serves neither and answers
+  them with `UnknownKey`.
 - Messages: a `postcard-rpc` header (key, sequence number) and a `postcard` body. Host side:
   `encode_request` and `decode_response`; firmware side: `decode_message`, `Message::reply_header`
   and `encode_message`.
@@ -17,5 +19,7 @@ The configuration channel between the openwoot firmware and host software, `no_s
 - The configuration model, one namespace per part: `configuration` (capabilities, validation,
   rejections), `device`, `global`, `profile`, `keys`, `advanced`, `gamepad`, `lighting`,
   `lightbar`, `switches`; every part implements `configuration::Validate`.
+- Runtime requests outside the stored configuration: `host_lighting` (host LED control),
+  `sensors` (sensor readout) and `diagnostics` (the `GetDiagnostics` report).
 
 The full description is in `docs/protocol.md`.

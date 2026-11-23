@@ -20,20 +20,34 @@ pub enum Contents<'a> {
 
 pub fn parse(report: &[u8]) -> Result<Contents<'_>, Error> {
     let (&report_id, payload) = report.split_first().ok_or(Error::MalformedReport)?;
-    match payload {
-        [first, second, low, high, rest @ ..] if [*first, *second] == MAGIC => {
-            let frame_len = usize::from(u16::from_le_bytes([*low, *high]));
-            rest.get(..frame_len)
-                .map(Contents::Frame)
-                .ok_or(Error::MalformedReport)
-        }
-        _ => Ok(Contents::Foreign { report_id, payload }),
+    let Some((magic, rest)) = payload.split_first_chunk::<2>() else {
+        return Ok(Contents::Foreign { report_id, payload });
+    };
+    if *magic != MAGIC {
+        return Ok(Contents::Foreign { report_id, payload });
     }
+    let (length, frame) = rest
+        .split_first_chunk::<FRAME_LENGTH_LEN>()
+        .ok_or(Error::MalformedReport)?;
+    let frame_len = usize::from(u16::from_le_bytes(*length));
+    let size = usize::from(report_id)
+        .checked_sub(1)
+        .and_then(|index| SIZES.get(index))
+        .ok_or(Error::MalformedReport)?;
+    if FRAME_OFFSET - ID_LEN + frame_len > *size {
+        return Err(Error::MalformedReport);
+    }
+    frame
+        .get(..frame_len)
+        .map(Contents::Frame)
+        .ok_or(Error::MalformedReport)
 }
 
 pub fn seal(report: &mut [u8], frame_len: usize) -> Result<&[u8], Error> {
-    let (report_id, size) =
-        smallest_holding(FRAME_OFFSET - ID_LEN + frame_len).ok_or(Error::FrameTooLong)?;
+    let (report_id, size) = frame_len
+        .checked_add(FRAME_OFFSET - ID_LEN)
+        .and_then(smallest_holding)
+        .ok_or(Error::FrameTooLong)?;
     let length = u16::try_from(frame_len).map_err(|_| Error::FrameTooLong)?;
     let report = report.get_mut(..ID_LEN + size).ok_or(Error::FrameTooLong)?;
     let (head, tail) = report

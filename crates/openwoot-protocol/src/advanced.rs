@@ -129,6 +129,32 @@ impl Validate for Key {
 
 impl Validate for Keys {
     fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
-        self.iter().try_for_each(|key| key.validate(capabilities))
+        self.iter().try_for_each(|key| key.validate(capabilities))?;
+        self.iter()
+            .flat_map(Key::bindings)
+            .enumerate()
+            .find(|&(position, binding)| {
+                self.iter()
+                    .flat_map(Key::bindings)
+                    .skip(position + 1)
+                    .any(|other| other == binding)
+            })
+            .map_or(Ok(()), |(_, (key, _))| {
+                Err(Invalid::KeyBoundTwice(key.get()))
+            })
+    }
+}
+
+impl Key {
+    fn bindings(&self) -> impl Iterator<Item = (Index, Layer)> {
+        let other = match self.behaviour {
+            Behaviour::DepthPriority(DepthPriority { other, .. })
+            | Behaviour::Socd(Socd { other, .. }) => Some(other),
+            Behaviour::DynamicKeystroke(_) | Behaviour::ModTap(_) | Behaviour::Toggle(_) => None,
+        };
+        let layer = self.layer;
+        core::iter::once(self.key)
+            .chain(other)
+            .map(move |key| (key, layer))
     }
 }

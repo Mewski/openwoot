@@ -1,7 +1,7 @@
 use openwoot_protocol::{
-    ERROR_KEY, Endpoint, Error, FirmwareVersion, PROTOCOL_VERSION, VarKey, VarSeq, Version,
-    WireError, decode_message, decode_response, encode_message, encode_request,
-    endpoints::GetVersion,
+    ERROR_KEY, Endpoint, Error, FirmwareVersion, PROTOCOL_VERSION, VarHeader, VarKey, VarSeq,
+    Version, WireError, decode_message, decode_response, encode_message, encode_request,
+    endpoints::{EnterUpdateMode, GetVersion},
     report::{MAGIC, MAX_LEN, SIZES},
 };
 
@@ -62,4 +62,62 @@ fn reply_keeps_the_key_size_and_sequence_number_of_the_request() {
     let header = message.reply_header(GetVersion::RESP_KEY);
     assert!(matches!(header.key, VarKey::Key8(_)));
     assert_eq!(header.seq_no, VarSeq::Seq2(0x1234));
+}
+
+#[test]
+fn a_reply_with_bytes_behind_its_body_is_not_decoded() {
+    let header = VarHeader {
+        key: VarKey::Key8(GetVersion::RESP_KEY),
+        seq_no: VarSeq::Seq2(7),
+    };
+    let mut response = [0; MAX_LEN];
+    let response = encode_message(&header, &(VERSION, 0xEE_u8), &mut response).unwrap();
+    assert_eq!(
+        decode_response::<GetVersion>(7, response),
+        Err(Error::Decode)
+    );
+}
+
+#[test]
+fn a_reply_that_does_not_hold_the_response_is_not_decoded() {
+    let header = VarHeader {
+        key: VarKey::Key8(GetVersion::RESP_KEY),
+        seq_no: VarSeq::Seq2(7),
+    };
+    let mut response = [0; MAX_LEN];
+    let response = encode_message(&header, &(), &mut response).unwrap();
+    assert_eq!(
+        decode_response::<GetVersion>(7, response),
+        Err(Error::Decode)
+    );
+}
+
+#[test]
+fn a_reply_of_another_endpoint_is_not_taken() {
+    let header = VarHeader {
+        key: VarKey::Key8(EnterUpdateMode::RESP_KEY),
+        seq_no: VarSeq::Seq2(7),
+    };
+    let mut response = [0; MAX_LEN];
+    let response = encode_message(&header, &(), &mut response).unwrap();
+    assert_eq!(decode_response::<GetVersion>(7, response), Ok(None));
+}
+
+#[test]
+fn a_reply_with_another_key_or_sequence_number_size_is_not_taken() {
+    let mut response = [0; MAX_LEN];
+    for seq_no in [VarSeq::Seq1(7), VarSeq::Seq4(7)] {
+        let header = VarHeader {
+            key: VarKey::Key8(GetVersion::RESP_KEY),
+            seq_no,
+        };
+        let response = encode_message(&header, &VERSION, &mut response).unwrap();
+        assert_eq!(decode_response::<GetVersion>(7, response), Ok(None));
+    }
+    let request = [1, b'O', b'W', 3, 0, 0x00, 0x55, 7];
+    let message = decode_message(&request).unwrap().unwrap();
+    let header = message.reply_header(GetVersion::RESP_KEY);
+    assert!(matches!(header.key, VarKey::Key1(_)));
+    let response = encode_message(&header, &VERSION, &mut response).unwrap();
+    assert_eq!(decode_response::<GetVersion>(7, response), Ok(None));
 }

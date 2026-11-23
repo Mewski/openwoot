@@ -20,3 +20,16 @@ fn requests_and_responses_of_different_endpoints_never_share_a_key() {
         assert_eq!(unique.len(), keys.len());
     }
 }
+
+#[test]
+fn the_table_holds_the_openwoot_endpoints_and_the_two_of_postcard_rpc() {
+    let mut standard: Vec<_> = endpoints::LIST
+        .endpoints
+        .iter()
+        .map(|(path, _, _)| *path)
+        .filter(|path| !path.starts_with("openwoot/"))
+        .collect();
+    standard.sort_unstable();
+    assert_eq!(standard, ["postcard-rpc/ping", "postcard-rpc/schemas/get"]);
+    assert_eq!(endpoints::LIST.endpoints.len(), 57);
+}

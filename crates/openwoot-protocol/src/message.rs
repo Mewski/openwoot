@@ -84,17 +84,25 @@ where
     let Some(message) = decode_message(report)? else {
         return Ok(None);
     };
-    if message.header.seq_no != VarSeq::Seq2(seq_no) {
+    let (VarSeq::Seq2(received), VarKey::Key8(key)) = (message.header.seq_no, message.header.key)
+    else {
+        return Ok(None);
+    };
+    if received != seq_no {
         return Ok(None);
     }
-    if message.header.key == VarKey::Key8(E::RESP_KEY) {
-        postcard::from_bytes(message.body)
-            .map(Some)
-            .map_err(|_| Error::Decode)
-    } else if message.header.key == VarKey::Key8(ERROR_KEY) {
-        let error = postcard::from_bytes::<WireError>(message.body).map_err(|_| Error::Decode)?;
-        Err(Error::Device(error))
+    if key == E::RESP_KEY {
+        decode_body(message.body).map(Some)
+    } else if key == ERROR_KEY {
+        Err(Error::Device(decode_body::<WireError>(message.body)?))
     } else {
         Ok(None)
+    }
+}
+
+fn decode_body<T: DeserializeOwned>(body: &[u8]) -> Result<T, Error> {
+    match postcard::take_from_bytes(body) {
+        Ok((value, [])) => Ok(value),
+        _ => Err(Error::Decode),
     }
 }

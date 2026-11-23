@@ -23,7 +23,7 @@ use openwoot_protocol::{
 
 use crate::support::{
     DONE, capabilities, filled, gamepad_settings, key_count, key_settings, lightbar_settings,
-    lighting_settings, round_trip, switches, white, widest_action, widest_advanced_key,
+    lighting_settings, opaque, round_trip, switches, white, widest_action, widest_advanced_key,
     widest_lightbar_entry, widest_override,
 };
 
@@ -421,4 +421,204 @@ fn the_largest_diagnostics_report_fits_one_frame() {
             },
         },
     );
+}
+
+#[test]
+fn profile_management_and_session_endpoints_survive_a_round_trip() {
+    use openwoot_protocol::endpoints::{
+        ActivateProfile, CreateProfile, DeleteProfile, EnterUpdateMode, FactoryReset,
+        GetProfileInfo, GetProfileRevision, GetProfiles, Restart, Revert, Save,
+    };
+
+    round_trip!(
+        GetProfiles,
+        (),
+        Ok(profile::Summary {
+            count: 3,
+            active: Slot::new(2),
+        }),
+    );
+    round_trip!(CreateProfile, (), Ok(Slot::new(3)));
+    round_trip!(CreateProfile, (), Err(Rejection::ProfileLimitReached));
+    round_trip!(
+        DeleteProfile,
+        Slot::new(0),
+        Err(Rejection::ProfileProtected(0))
+    );
+    round_trip!(ActivateProfile, Slot::new(1), DONE);
+    round_trip!(
+        GetProfileInfo,
+        Slot::new(1),
+        Ok(profile::Info {
+            name: String::try_from("Typing").unwrap(),
+            color: white(),
+        }),
+    );
+    round_trip!(GetProfileRevision, Slot::new(1), Ok(u32::MAX));
+    round_trip!(Save, (), Err(Rejection::StorageInaccessible));
+    round_trip!(Revert, (), DONE);
+    round_trip!(FactoryReset, (), DONE);
+    round_trip!(EnterUpdateMode, (), ());
+    round_trip!(Restart, (), ());
+}
+
+#[test]
+fn profile_reads_survive_a_round_trip() {
+    use openwoot_protocol::endpoints::{
+        GetGamepadMapping, GetGamepadSettings, GetKeyOverrides, GetKeySettings,
+    };
+
+    round_trip!(GetKeySettings, Slot::new(0), Ok(key_settings()));
+    round_trip!(
+        GetKeyOverrides,
+        Slot::new(1),
+        Ok::<_, Rejection>(filled(widest_override(), key_count())),
+    );
+    round_trip!(
+        GetGamepadMapping,
+        Slot::new(2),
+        Ok(gamepad::Mapping {
+            bindings: filled(Some(Control::LeftStickUp), key_count()),
+            exclusive: false,
+        }),
+    );
+    round_trip!(GetGamepadSettings, Slot::new(3), Ok(gamepad_settings()));
+}
+
+#[test]
+fn every_lighting_effect_survives_a_round_trip() {
+    use openwoot_protocol::{
+        endpoints::GetLighting,
+        lighting::{
+            AnalogLevel, AnalogRgbFill, Breathing, Effect, HueCycle, HueRange, KeyRipple, KeyTest,
+            LevelMeter, PolarGradient, RainbowWave, ReactiveColoring, ReactiveFade, Scanner,
+            ScannerDirection, SimplexNoise,
+        },
+    };
+
+    let level = AnalogLevel {
+        base_level: 30,
+        gamepad_curve: true,
+    };
+    for effect in [
+        Effect::RainbowWave(RainbowWave {
+            hues: HueRange::From214To254,
+            period: 9,
+            forward: false,
+        }),
+        Effect::Scanner(Scanner {
+            width: 4,
+            steps_per_second: 60,
+            outside_level: 1,
+            direction: ScannerDirection::Down,
+        }),
+        Effect::Breathing(Breathing {
+            step_ms: 20,
+            min_level: 5,
+        }),
+        Effect::HueCycle(HueCycle {
+            hues: HueRange::From113To204,
+            period: 255,
+        }),
+        Effect::KeyRipple(KeyRipple {
+            palette: true,
+            inverted: true,
+            steps_per_second: 30,
+            decay_step_ms: 6,
+            base_level: 2,
+        }),
+        Effect::ReactiveFade(ReactiveFade {
+            base_level: 0,
+            step_ms: 8,
+            coloring: ReactiveColoring::Palette,
+            inverted: true,
+        }),
+        Effect::LevelMeter(LevelMeter {
+            base_level: 7,
+            gamepad_curve: false,
+        }),
+        Effect::AnalogSpotlight(level),
+        Effect::AnalogGlow(level),
+        Effect::AnalogRgbFill(AnalogRgbFill {
+            gamepad_curve: true,
+        }),
+        Effect::KeyTest(KeyTest { base_level: 64 }),
+        Effect::SimplexNoise(SimplexNoise {
+            from: opaque(1, 2, 3),
+            to: opaque(250, 251, 252),
+            speed: 3,
+            scale: 200,
+        }),
+        Effect::PolarGradient(PolarGradient {
+            from: opaque(255, 0, 0),
+            to: opaque(0, 0, 255),
+            speed: -128,
+            twist: 127,
+        }),
+    ] {
+        let mut settings = lighting_settings();
+        settings.effects = [effect].into_iter().collect();
+        round_trip!(GetLighting, Slot::new(0), Ok(settings));
+    }
+}
+
+#[test]
+fn keyboard_wide_reads_runtime_switches_and_rejections_survive_a_round_trip() {
+    use openwoot_protocol::{
+        configuration::Invalid,
+        endpoints::{
+            GetDeviceSettings, GetGlobalLightbar, GetGlobalSettings, GetHostSignals, GetLayout,
+            GetSwitchModels, LeaveHostControl, ResetHostColors, ResetHostKeyColor,
+            SetGamepadDetection, SetKeyReports, SetRawScanning,
+        },
+    };
+
+    round_trip!(
+        GetDeviceSettings,
+        (),
+        Ok(device::Settings {
+            mode: device::Mode::Gamepad,
+            keyboard: device::KeyboardFormat::NKeyRollover,
+            speed: device::Speed::High,
+            gamepad_polling: device::PollingRate::Every4Milliseconds,
+        }),
+    );
+    round_trip!(GetLayout, (), Ok(Layout::Iso));
+    round_trip!(
+        SetLayout,
+        Layout::Jis,
+        Err(Rejection::Invalid(Invalid::LayoutMissing(Layout::Jis))),
+    );
+    round_trip!(
+        GetGlobalSettings,
+        (),
+        Ok(global::Settings {
+            idle: None,
+            num_lock_inverted: false,
+            release_rebound_filter: true,
+        }),
+    );
+    round_trip!(GetGlobalLightbar, (), Ok(lightbar_settings().entries));
+    round_trip!(
+        GetHostSignals,
+        (),
+        Ok::<_, Rejection>(filled(u32::MAX, lightbar::MAX_HOST_SIGNALS)),
+    );
+    round_trip!(
+        GetSwitchModels,
+        (),
+        Ok::<_, Rejection>(filled(
+            switches::Model {
+                travel: u8::MAX,
+                group: u8::MAX,
+            },
+            switches::MAX_MODELS,
+        )),
+    );
+    round_trip!(SetKeyReports, false, DONE);
+    round_trip!(SetGamepadDetection, true, DONE);
+    round_trip!(SetRawScanning, true, Err(Rejection::Unsupported));
+    round_trip!(ResetHostKeyColor, Position { row: 5, column: 16 }, DONE);
+    round_trip!(ResetHostColors, (), DONE);
+    round_trip!(LeaveHostControl, (), Err(Rejection::Locked));
 }
