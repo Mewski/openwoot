@@ -1,5 +1,6 @@
 pub mod bootloader;
 pub mod channel;
+pub mod escape;
 pub mod hid;
 pub mod image;
 pub mod keyboard;

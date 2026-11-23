@@ -2,7 +2,9 @@ use std::{fmt, time::Duration};
 
 use openwoot_image::Hex;
 
-use super::{Command, Port, REPLY_LEN, REQUEST_LEN, Upload};
+use super::{
+    BLOCK_LEN, Command, FIRST_BLOCK_ADDRESS, MAX_BLOCKS, Port, REPLY_LEN, REQUEST_LEN, Upload,
+};
 use crate::{report, transfer};
 
 const MAGIC: [u8; 2] = [0xDF, 0xDB];
@@ -26,10 +28,38 @@ pub enum Error {
     NoReply { command: Command, timeout: Duration },
     #[error("unexpected reply to {command}: `{reply}`")]
     UnexpectedReply { command: Command, reply: String },
+    #[error("the reply to {command} holds {len} bytes, expected at least {expected}")]
+    ShortReply {
+        command: Command,
+        len: usize,
+        expected: usize,
+    },
     #[error("{command} was refused with status {status:#04x}")]
     Refused { command: Command, status: u8 },
-    #[error("the image has {0} blocks; the bootloader takes 1 to 65535")]
+    #[error(
+        "the image names blocks of {0} bytes; the bootloader takes blocks of {expected} bytes",
+        expected = BLOCK_LEN
+    )]
+    BlockSizeUnsupported(u32),
+    #[error("the image has {0} blocks; the bootloader takes 1 to {max}", max = MAX_BLOCKS)]
     BlockCountOutOfRange(usize),
+    #[error(
+        "the image area starts at {}; the bootloader writes the first block to {}",
+        Hex(*.0),
+        Hex(FIRST_BLOCK_ADDRESS)
+    )]
+    MisplacedImageArea(u32),
+    #[error(
+        "the upload of {len} bytes does not fit the image area {}-{} of {capacity} bytes",
+        Hex(*start),
+        Hex(*end)
+    )]
+    BeyondImageArea {
+        len: usize,
+        start: u32,
+        end: u32,
+        capacity: u32,
+    },
     #[error("the bootloader reports block {reported} as the last one written, expected {expected}")]
     LastBlockMismatch { reported: u32, expected: u32 },
     #[error(
@@ -38,6 +68,8 @@ pub enum Error {
         Hex(*expected)
     )]
     CrcMismatch { reported: u32, expected: u32 },
+    #[error("could not send the restart command")]
+    Restart(#[source] transfer::Error),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,9 +78,9 @@ pub struct Flags(u8);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct State {
     pub flags: Option<Flags>,
-    pub version: String,
-    pub serial: String,
-    pub session_crc: u32,
+    pub version: Option<String>,
+    pub serial: Option<String>,
+    pub session_crc: Option<u32>,
 }
 
 pub struct Session<P> {
@@ -87,20 +119,22 @@ impl<P: Port> Session<P> {
     pub async fn state(&mut self) -> Result<State, Error> {
         let ping = self.ping().await?;
         let flags = ping.get(1).copied().map(Flags);
-        let version = self.request(Command::Version, 0).await?;
-        let version = version
-            .iter()
-            .map(u8::to_string)
-            .collect::<Vec<_>>()
-            .join(".");
-        let serial = text(&self.request(Command::Serial, 0).await?);
-        let second = text(&self.request(Command::Serial, 1).await?);
-        let serial = if second == serial {
-            serial
-        } else {
-            format!("{serial} (with parameter 1: {second})")
+        let version = unless_refused(self.request(Command::Version, 0).await)?.map(|version| {
+            version
+                .iter()
+                .map(u8::to_string)
+                .collect::<Vec<_>>()
+                .join(".")
+        });
+        let serial = unless_refused(self.request(Command::Serial, 0).await)?;
+        let second = unless_refused(self.request(Command::Serial, 1).await)?;
+        let serial = match (serial.as_deref().map(text), second.as_deref().map(text)) {
+            (Some(serial), Some(second)) if second != serial => {
+                Some(format!("{serial} (with parameter 1: {second})"))
+            }
+            (serial, second) => serial.or(second),
         };
-        let session_crc = self.crc().await?;
+        let session_crc = unless_refused(self.crc().await)?;
         Ok(State {
             flags,
             version,
@@ -114,28 +148,42 @@ impl<P: Port> Session<P> {
         upload: &Upload,
         mut on_block: impl FnMut(usize),
     ) -> Result<(), Error> {
+        if let Some(odd) = upload
+            .blocks()
+            .map(<[u8]>::len)
+            .find(|&len| len != BLOCK_LEN)
+        {
+            return Err(Error::BlockSizeUnsupported(
+                u32::try_from(odd).unwrap_or(u32::MAX),
+            ));
+        }
         let count = upload.block_count();
         let blocks = u16::try_from(count)
             .ok()
-            .filter(|&blocks| blocks > 0)
+            .filter(|&blocks| (1..=MAX_BLOCKS).contains(&usize::from(blocks)))
             .ok_or(Error::BlockCountOutOfRange(count))?;
         self.request(Command::Unlock, UNLOCK_KEY).await?;
         self.request(Command::StartUpload, u32::from(blocks))
             .await?;
-        for (index, block) in (0_u16..).zip(upload.blocks()) {
+        for (index, block) in (0..blocks).zip(upload.blocks()) {
             self.port.send_block(block).await?;
             self.request(Command::WriteBlock, u32::from(index)).await?;
             on_block(usize::from(index) + 1);
         }
         self.verify(blocks, upload.crc).await?;
-        Ok(self.send(Command::Reboot, MARK_COMPLETE).await?)
+        self.send(Command::Reboot, MARK_COMPLETE)
+            .await
+            .map_err(Error::Restart)
     }
 
     async fn ping(&mut self) -> Result<Vec<u8>, Error> {
         let mut attempt = 1;
         loop {
             match self.request_within(Command::Ping, 0, PING_TIMEOUT).await {
-                Err(_) if attempt < PING_ATTEMPTS => {
+                Err(error)
+                    if attempt < PING_ATTEMPTS
+                        && error != Error::Transfer(transfer::Error::Disconnected) =>
+                {
                     attempt += 1;
                     self.port.pause(PING_RETRY).await;
                 }
@@ -147,7 +195,14 @@ impl<P: Port> Session<P> {
     async fn verify(&mut self, blocks: u16, expected_crc: u32) -> Result<(), Error> {
         let expected = u32::from(blocks) - 1;
         let last = self.request(Command::LastBlock, 0).await?;
-        let reported = little_endian(last.get(..BLOCK_INDEX_LEN).unwrap_or(&last));
+        let index = last
+            .first_chunk::<BLOCK_INDEX_LEN>()
+            .ok_or(Error::ShortReply {
+                command: Command::LastBlock,
+                len: last.len(),
+                expected: BLOCK_INDEX_LEN,
+            })?;
+        let reported = little_endian(index);
         if reported != expected {
             return Err(Error::LastBlockMismatch { reported, expected });
         }
@@ -163,7 +218,12 @@ impl<P: Port> Session<P> {
 
     async fn crc(&mut self) -> Result<u32, Error> {
         let body = self.request(Command::Crc, 0).await?;
-        Ok(little_endian(body.get(..CRC_LEN).unwrap_or(&body)))
+        let crc = body.first_chunk::<CRC_LEN>().ok_or(Error::ShortReply {
+            command: Command::Crc,
+            len: body.len(),
+            expected: CRC_LEN,
+        })?;
+        Ok(little_endian(crc))
     }
 
     async fn request(&mut self, command: Command, parameter: u32) -> Result<Vec<u8>, Error> {
@@ -191,7 +251,9 @@ impl<P: Port> Session<P> {
                     && (*echo == command.number() || *echo == ECHO_ANY) =>
             {
                 if *status == STATUS_EXECUTED {
-                    Ok(body.iter().take(usize::from(*length)).copied().collect())
+                    body.get(..usize::from(*length))
+                        .map(<[u8]>::to_vec)
+                        .ok_or_else(|| unexpected(command, reply))
                 } else {
                     Err(Error::Refused {
                         command,
@@ -199,10 +261,7 @@ impl<P: Port> Session<P> {
                     })
                 }
             }
-            _ => Err(Error::UnexpectedReply {
-                command,
-                reply: report::to_hex(reply.get(..SHOWN_REPLY_LEN).unwrap_or(reply)),
-            }),
+            _ => Err(unexpected(command, reply)),
         }
     }
 
@@ -213,6 +272,21 @@ impl<P: Port> Session<P> {
         head.copy_from_slice(&[MAGIC[0], MAGIC[1], command.number()]);
         tail.copy_from_slice(&parameter.to_le_bytes());
         self.port.send_request(&request).await
+    }
+}
+
+fn unless_refused<T>(reply: Result<T, Error>) -> Result<Option<T>, Error> {
+    match reply {
+        Ok(body) => Ok(Some(body)),
+        Err(Error::Refused { .. }) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn unexpected(command: Command, reply: &[u8]) -> Error {
+    Error::UnexpectedReply {
+        command,
+        reply: report::to_hex(reply.get(..SHOWN_REPLY_LEN).unwrap_or(reply)),
     }
 }
 

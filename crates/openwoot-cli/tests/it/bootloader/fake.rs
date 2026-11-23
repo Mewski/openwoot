@@ -1,7 +1,7 @@
 use std::{cell::RefCell, future::ready, rc::Rc, time::Duration};
 
 use openwoot_cli::{
-    bootloader::{Port, REPLY_LEN, Reply, Request, crc24},
+    bootloader::{Port, REPLY_LEN, Reply, Request},
     transfer,
 };
 
@@ -14,6 +14,7 @@ const REFUSED: u8 = 0xFF;
 const UNKNOWN: u8 = 0x66;
 const WRONG_MAGIC: u8 = 0x33;
 const MAGIC: [u8; 2] = [0xDF, 0xDB];
+const ECHO_ANY: u8 = 0xFF;
 
 #[derive(Debug, Default)]
 pub(super) struct Faults {
@@ -21,6 +22,14 @@ pub(super) struct Faults {
     pub flipped_block: Option<u32>,
     pub wrong_echo_to_block: Option<u32>,
     pub disconnect_after_requests: Option<usize>,
+    pub refused: Option<u8>,
+    pub echo_any_to: Option<u8>,
+    pub wrong_magic_to: Option<u8>,
+    pub empty_reply_to: Option<u8>,
+    pub short_crc: bool,
+    pub repeated_reply_to: Option<u8>,
+    pub last_block_off_by_one: bool,
+    pub failed_restart: bool,
 }
 
 #[derive(Debug)]
@@ -30,6 +39,8 @@ pub(super) struct State {
     pub flags: u8,
     pub serial: Option<String>,
     pub commands: Vec<u8>,
+    pub parameters: Vec<u32>,
+    pub timeouts: Vec<Duration>,
     pub rebooted_with: Option<u32>,
     pub pauses: usize,
     pub faults: Faults,
@@ -53,6 +64,8 @@ impl Bootloader {
             flags: 0x02,
             serial: Some("A1B2C3D4E5F6".to_owned()),
             commands: Vec::new(),
+            parameters: Vec::new(),
+            timeouts: Vec::new(),
             rebooted_with: None,
             pauses: 0,
             faults: Faults::default(),
@@ -65,6 +78,16 @@ impl Bootloader {
             disconnected: false,
         })))
     }
+}
+
+pub(super) fn crc24(bytes: &[u8]) -> u32 {
+    let mut crc = 0;
+    for &[low, high] in bytes.as_chunks::<2>().0 {
+        let word = u32::from(u16::from_le_bytes([low, high]));
+        let feedback = if crc & 0x80_0000 == 0 { 0 } else { 0x80_001B };
+        crc = (((crc << 1) & 0xFF_FFFE) ^ word ^ feedback) & 0xFF_FFFF;
+    }
+    crc
 }
 
 impl State {
@@ -83,8 +106,9 @@ impl State {
             return Some((command, WRONG_MAGIC, Vec::new()));
         }
         self.commands.push(command);
+        self.parameters.push(parameter);
         let needs_unlock = matches!(command, 2 | 3 | 8);
-        if needs_unlock && !self.unlocked {
+        if (needs_unlock && !self.unlocked) || self.faults.refused == Some(command) {
             return Some((command, REFUSED, Vec::new()));
         }
         let (status, body) = match command {
@@ -109,7 +133,11 @@ impl State {
             }
             4 => {
                 let crc = self.flash.get(..self.crc_end).map_or(0, crc24);
-                (EXECUTED, crc.to_le_bytes().to_vec())
+                let mut body = crc.to_le_bytes().to_vec();
+                if self.faults.short_crc {
+                    body.truncate(2);
+                }
+                (EXECUTED, body)
             }
             5 => {
                 if parameter & 1 != 0 {
@@ -125,7 +153,10 @@ impl State {
             }
             6 if self.unlocked => (EXECUTED, Vec::new()),
             7 => (EXECUTED, Vec::new()),
-            8 => (EXECUTED, self.last_block.to_le_bytes().to_vec()),
+            8 => {
+                let reported = self.last_block + u32::from(self.faults.last_block_off_by_one);
+                (EXECUTED, reported.to_le_bytes().to_vec())
+            }
             9 => match &self.serial {
                 Some(serial) => (EXECUTED, serial.as_bytes().to_vec()),
                 None => (REFUSED, Vec::new()),
@@ -167,7 +198,17 @@ impl State {
         if self.pending.is_some() {
             return;
         }
-        let header = [MAGIC[0], MAGIC[1], command, status, length];
+        let echo = if self.faults.echo_any_to == Some(command) {
+            ECHO_ANY
+        } else {
+            command
+        };
+        let second = if self.faults.wrong_magic_to == Some(command) {
+            MAGIC[1] ^ 0x01
+        } else {
+            MAGIC[1]
+        };
+        let header = [MAGIC[0], second, echo, status, length];
         let mut reply = [0; REPLY_LEN];
         for (cell, byte) in reply.iter_mut().zip(header.iter().chain(body)) {
             *cell = *byte;
@@ -184,8 +225,12 @@ impl State {
             }
             *limit -= 1;
         }
-        if let Some((command, status, body)) = self.execute(request) {
-            self.queue(command, status, &body);
+        let [_, _, command, ..] = request;
+        if let Some((echo, status, body)) = self.execute(request) {
+            self.queue(echo, status, &body);
+        }
+        if command == 5 && self.faults.failed_restart {
+            return Err(transfer::Error::Failed("broken pipe".to_owned()));
         }
         Ok(())
     }
@@ -201,12 +246,26 @@ impl State {
         Ok(())
     }
 
-    fn take_reply(&mut self, reply: &mut Reply) -> Result<Option<usize>, transfer::Error> {
+    fn take_reply(
+        &mut self,
+        reply: &mut Reply,
+        timeout: Duration,
+    ) -> Result<Option<usize>, transfer::Error> {
         self.connected()?;
-        Ok(self.pending.take().map(|pending| {
-            *reply = pending;
-            REPLY_LEN
-        }))
+        self.timeouts.push(timeout);
+        let Some(pending) = self.pending.take() else {
+            return Ok(None);
+        };
+        let [_, _, command, ..] = pending;
+        if self.faults.empty_reply_to == Some(command) {
+            return Ok(Some(0));
+        }
+        if self.faults.repeated_reply_to == Some(command) {
+            self.faults.repeated_reply_to = None;
+            self.pending = Some(pending);
+        }
+        *reply = pending;
+        Ok(Some(REPLY_LEN))
     }
 }
 
@@ -231,9 +290,9 @@ impl Port for Bootloader {
     fn receive_reply(
         &mut self,
         reply: &mut Reply,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> impl Future<Output = Result<Option<usize>, transfer::Error>> {
-        ready(self.0.borrow_mut().take_reply(reply))
+        ready(self.0.borrow_mut().take_reply(reply, timeout))
     }
 
     fn pause(&mut self, _duration: Duration) -> impl Future<Output = ()> {

@@ -4,6 +4,8 @@ mod session;
 mod upload;
 
 pub use command::Command;
-pub use port::{Port, REPLY_LEN, REQUEST_LEN, Reply, Request};
+pub use port::{
+    BLOCK_LEN, FIRST_BLOCK_ADDRESS, MAX_BLOCKS, Port, REPLY_LEN, REQUEST_LEN, Reply, Request,
+};
 pub use session::{Error, Flags, Session, State};
 pub use upload::{Upload, crc24};

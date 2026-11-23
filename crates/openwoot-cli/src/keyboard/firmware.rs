@@ -8,6 +8,7 @@ use crate::{channel, stock, transfer};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Firmware {
     Openwoot(Version),
+    OtherProtocol(String),
     Stock(String),
 }
 
@@ -20,6 +21,10 @@ impl fmt::Display for Firmware {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Openwoot(version) => write!(formatter, "openwoot firmware {}", version.firmware),
+            Self::OtherProtocol(version) => write!(
+                formatter,
+                "openwoot firmware of another protocol, stock version {version}"
+            ),
             Self::Stock(version) => write!(formatter, "stock firmware {version}"),
         }
     }
@@ -27,12 +32,13 @@ impl fmt::Display for Firmware {
 
 impl<R: transfer::Reports> Running<R> {
     pub async fn identify(mut reports: R) -> Result<Self, Error> {
-        let firmware = if let Some(version) = channel::firmware_version(&mut reports).await? {
-            Firmware::Openwoot(version)
-        } else if let Some(version) = stock::firmware_version(&mut reports).await? {
-            Firmware::Stock(version)
-        } else {
-            return Err(Error::NoVersionAnswer);
+        let firmware = match channel::firmware_version(&mut reports).await {
+            Ok(Some(version)) => Firmware::Openwoot(version),
+            Ok(None) => Firmware::Stock(stock_version(&mut reports).await?),
+            Err(channel::Error::Reply(_)) => {
+                Firmware::OtherProtocol(stock_version(&mut reports).await?)
+            }
+            Err(error) => return Err(error.into()),
         };
         Ok(Self { reports, firmware })
     }
@@ -48,15 +54,22 @@ impl<R: transfer::Reports> Running<R> {
     }
 
     pub async fn enter_update_mode(mut self) -> Result<(), Error> {
-        match self.firmware {
-            Firmware::Stock(_) => {
-                stock::enter_update_mode(&mut self.reports).await;
-                Ok(())
+        if let Firmware::Openwoot(_) = self.firmware {
+            match channel::enter_update_mode(&mut self.reports).await {
+                Ok(()) | Err(channel::Error::Transfer(transfer::Error::Disconnected)) => {
+                    return Ok(());
+                }
+                Err(channel::Error::Reply(_)) => {}
+                Err(error) => return Err(error.into()),
             }
-            Firmware::Openwoot(_) => match channel::enter_update_mode(&mut self.reports).await {
-                Ok(()) | Err(channel::Error::Transfer(transfer::Error::Disconnected)) => Ok(()),
-                Err(error) => Err(error.into()),
-            },
         }
+        stock::enter_update_mode(&mut self.reports).await;
+        Ok(())
     }
+}
+
+async fn stock_version(reports: &mut impl transfer::Reports) -> Result<String, Error> {
+    stock::firmware_version(reports)
+        .await?
+        .ok_or(Error::NoVersionAnswer)
 }

@@ -4,6 +4,8 @@ use std::time::Duration;
 pub enum Error {
     #[error("the keyboard was disconnected")]
     Disconnected,
+    #[error("access to the device was denied: {0}")]
+    NoAccess(String),
     #[error("could not communicate over USB: {0}")]
     Failed(String),
 }

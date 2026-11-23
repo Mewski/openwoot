@@ -9,9 +9,9 @@ use futures_lite::StreamExt;
 pub use interface::{Interface, OpenError};
 pub use update_mode::UpdateMode;
 
-use crate::transfer;
+use crate::{escape, transfer};
 
-const POLL_INTERVAL: Duration = Duration::from_millis(500);
+pub(crate) const POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Default)]
 pub struct Hid {
@@ -27,26 +27,50 @@ impl Hid {
         Ok(devices.find(|device| matches(device)).await)
     }
 
+    pub async fn find_all(
+        &self,
+        matches: impl Fn(&DeviceInfo) -> bool,
+    ) -> Result<Vec<Device>, transfer::Error> {
+        let found: Vec<Device> = self
+            .backend
+            .enumerate()
+            .await?
+            .filter(|device| matches(device))
+            .collect()
+            .await;
+        let mut distinct: Vec<Device> = Vec::new();
+        for device in found {
+            if !distinct.iter().any(|known| known.id == device.id) {
+                distinct.push(device);
+            }
+        }
+        Ok(distinct)
+    }
+
     pub async fn wait_for(
         &self,
         matches: impl Fn(&DeviceInfo) -> bool,
         timeout: Duration,
     ) -> Result<Option<Device>, transfer::Error> {
         let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
-            if let Some(device) = self.find(&matches).await? {
-                return Ok(Some(device));
+        loop {
+            match self.find(&matches).await {
+                Ok(Some(device)) => return Ok(Some(device)),
+                Ok(None) | Err(_) if Instant::now() < deadline => {
+                    Timer::after(POLL_INTERVAL).await;
+                }
+                last => return last,
             }
-            Timer::after(POLL_INTERVAL).await;
         }
-        Ok(None)
     }
 }
 
 #[must_use]
 pub fn describe(info: &DeviceInfo) -> String {
     format!(
-        "{:04x}:{:04x} \"{}\"",
-        info.vendor_id, info.product_id, info.name
+        "{:04x}:{:04x} `{}`",
+        info.vendor_id,
+        info.product_id,
+        escape::control_characters(&info.name)
     )
 }

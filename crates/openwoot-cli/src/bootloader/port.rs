@@ -4,6 +4,9 @@ use crate::transfer;
 
 pub const REQUEST_LEN: usize = 7;
 pub const REPLY_LEN: usize = 256;
+pub const BLOCK_LEN: usize = 256;
+pub const MAX_BLOCKS: usize = 0xF60;
+pub const FIRST_BLOCK_ADDRESS: u32 = 0x0800_8000;
 
 pub type Request = [u8; REQUEST_LEN];
 pub type Reply = [u8; REPLY_LEN];
