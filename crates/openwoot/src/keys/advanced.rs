@@ -198,6 +198,12 @@ impl Advanced {
         }
     }
 
+    pub(super) fn restart(&mut self) {
+        for (entry, state) in self.entries.iter().zip(self.states.iter_mut()) {
+            *state = entry.behaviour.initial_state();
+        }
+    }
+
     pub(super) fn latched_toggles(&self) -> impl Iterator<Item = Key> + '_ {
         self.entries
             .iter()

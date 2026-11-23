@@ -62,7 +62,7 @@ impl Record {
     }
 
     pub(super) fn holds_events(&self) -> bool {
-        self.ignore_until_release || self.any_active()
+        self.ignore_until_release || self.any_active() || self.actuation.is_pressed()
     }
 
     pub(super) fn set_active(&mut self, layer: u8, active: bool) {

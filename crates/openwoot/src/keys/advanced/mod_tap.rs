@@ -102,14 +102,14 @@ impl ModTapState {
                 slot = SlotChange::Take;
             }
             match self.decision {
-                Decision::Idle => {
+                Decision::Idle | Decision::Tap => {
                     if pressed {
                         self.decision = Decision::Undecided;
                         self.timer_ms = TIMER_IDLE;
                     }
                 }
                 Decision::Undecided => {
-                    if self.timer_ms >= mod_tap.hold_ms {
+                    if self.timer_ms != TIMER_IDLE && self.timer_ms >= mod_tap.hold_ms {
                         self.decision = Decision::Hold;
                         self.timer_ms = 0;
                     } else if !pressed {
@@ -123,7 +123,6 @@ impl ModTapState {
                         self.timer_ms = 0;
                     }
                 }
-                Decision::Tap => {}
             }
         }
         (slot, self.decision != Decision::Idle)
@@ -253,5 +252,64 @@ mod tests {
             }
             .waits_for_other_keys()
         );
+    }
+
+    #[test]
+    fn a_press_during_the_tap_starts_a_new_decision() {
+        let mut state = ModTapState::default();
+        state.input(&SHIFT_OR_A, true, true);
+        assert_eq!(sent(&mut state, 10), None);
+        state.input(&SHIFT_OR_A, false, true);
+        assert_eq!(sent(&mut state, 10), Some(Action::Keyboard(0x04)));
+        assert_eq!(
+            state.input(&SHIFT_OR_A, true, true),
+            (SlotChange::Take, true)
+        );
+        assert_eq!(state.decision(), Decision::Undecided);
+        assert_eq!(sent(&mut state, 10), None);
+        assert_eq!(sent(&mut state, 200), Some(Action::Keyboard(0xE1)));
+    }
+
+    #[test]
+    fn a_release_before_the_first_pass_is_a_tap() {
+        let mut state = ModTapState::default();
+        state.input(&SHIFT_OR_A, true, true);
+        state.input(&SHIFT_OR_A, false, true);
+        assert_eq!(state.decision(), Decision::Tap);
+    }
+
+    #[test]
+    fn the_interrupt_mode_picks_the_side_another_key_decides() {
+        for (interrupt, decided) in [
+            (Interrupt::Auto, Action::Keyboard(0xE1)),
+            (Interrupt::Hold, Action::Keyboard(0xE1)),
+            (Interrupt::Tap, Action::Keyboard(0x04)),
+        ] {
+            let mod_tap = ModTap {
+                interrupt,
+                ..SHIFT_OR_A
+            };
+            let mut state = ModTapState::default();
+            state.input(&mod_tap, true, true);
+            assert_eq!(state.interrupt(&mod_tap), Some(decided));
+            assert_eq!(state.interrupt(&mod_tap), None);
+        }
+    }
+
+    #[test]
+    fn a_caps_lock_tap_lasts_one_hundred_milliseconds() {
+        let caps = ModTap {
+            tap: Action::Keyboard(CAPS_LOCK),
+            ..SHIFT_OR_A
+        };
+        let mut state = ModTapState::default();
+        state.input(&caps, true, true);
+        state.input(&caps, false, true);
+        for _ in 0..10 {
+            state.run(&caps, 4095, 10, 1);
+        }
+        assert_eq!(state.decision(), Decision::Tap);
+        state.run(&caps, 4095, 10, 1);
+        assert_eq!(state.decision(), Decision::Idle);
     }
 }

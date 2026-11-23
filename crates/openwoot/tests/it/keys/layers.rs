@@ -99,3 +99,16 @@ fn brightness_keys_start_and_stop_the_lighting_repeat() {
         held: false
     }));
 }
+
+#[test]
+fn a_key_remapped_while_held_stays_silent_until_released() {
+    let mut keys = engine(&[(KEY_A, Action::Keyboard(0x04))]);
+    keys.set_profiles(4, 0);
+    assert_eq!(step(&mut keys, &[(KEY_A, 2000)], 1), [0x04]);
+    keys.set_action(KEY_A, Layer::Base, Action::Function(Function::NextProfile));
+    assert_eq!(step(&mut keys, &[(KEY_A, 2000)], 1), []);
+    assert_eq!(keys.take_profile_request(), None);
+    step(&mut keys, &[(KEY_A, 0)], 1);
+    step(&mut keys, &[(KEY_A, 2000)], 1);
+    assert_eq!(keys.take_profile_request(), Some(1));
+}

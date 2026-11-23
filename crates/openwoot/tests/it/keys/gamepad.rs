@@ -1,13 +1,14 @@
 use openwoot::{
-    hid::Hat,
+    hid::{GAMEPAD_STICK_CENTER, Hat},
     keys::{
-        AxisPriority, Gamepad, GamepadInput, GamepadReport, combine_axis, normalize_travel,
-        response_curve, shape_stick,
+        AxisPriority, Behaviour, Entry, Gamepad, GamepadInput, GamepadReport, combine_axis,
+        normalize_travel, response_curve, shape_stick,
     },
     usb::Mode,
     xinput::Stick,
 };
 use openwoot_protocol::{
+    advanced::{Resolution, STROKES, Stroke, StrokeEvent},
     gamepad::{
         Control::{
             self, Accelerator, Back, DpadDown, Guide, HatLeft, LeftStickDown, LeftStickLeft,
@@ -18,7 +19,7 @@ use openwoot_protocol::{
     keys::Action,
 };
 
-use super::support::{KEY_A, engine, step};
+use super::support::{Engine, KEY_A, KEY_D, engine, step};
 
 type Binding = (Control, u16, bool);
 type StickSample = (f32, f32, bool, f32, Option<&'static Settings>, (f32, f32));
@@ -909,4 +910,100 @@ fn gamepad_detection_replaces_the_report_with_the_pattern_of_the_player() {
         keys.output().gamepad(),
         Some(&GamepadReport::Hid(Gamepad::hid_detection()))
     );
+}
+
+#[expect(clippy::panic, reason = "a test without a gamepad report fails here")]
+fn hid_report(keys: &Engine) -> openwoot::hid::GamepadReport {
+    match keys.output().gamepad() {
+        Some(GamepadReport::Hid(report)) => *report,
+        _ => panic!("no hid gamepad report"),
+    }
+}
+
+#[test]
+fn a_hat_action_waits_for_the_actuation_point() {
+    let mut keys = engine(&[(KEY_A, Action::Gamepad(Control::HatUp))]);
+    keys.set_mode(Mode::Gamepad);
+    step(&mut keys, &[(KEY_A, 50)], 1);
+    assert_eq!(hid_report(&keys).hat, Hat::Centered);
+    step(&mut keys, &[(KEY_A, 2000)], 1);
+    assert_eq!(hid_report(&keys).hat, Hat::Up);
+    step(&mut keys, &[(KEY_A, 0)], 1);
+    assert_eq!(hid_report(&keys).hat, Hat::Centered);
+}
+
+#[test]
+fn a_dynamic_keystroke_lets_go_of_a_hat_direction() {
+    let mut strokes = [Stroke::default(); STROKES];
+    strokes[0] = Stroke {
+        action: Action::Gamepad(Control::HatUp),
+        on_press: StrokeEvent::Press,
+        on_release: StrokeEvent::Release,
+        ..Stroke::default()
+    };
+    let mut keys = engine(&[(KEY_A, Action::None)]);
+    keys.set_mode(Mode::Gamepad);
+    keys.set_advanced([Entry {
+        key: KEY_A,
+        layer: 0,
+        behaviour: Behaviour::DynamicKeystroke {
+            strokes,
+            bottom_out: None,
+        },
+    }]);
+    step(&mut keys, &[(KEY_A, 1200)], 1);
+    assert_eq!(hid_report(&keys).hat, Hat::Up);
+    for _ in 0..200 {
+        step(&mut keys, &[(KEY_A, 0)], 1);
+    }
+    assert_eq!(hid_report(&keys).hat, Hat::Centered);
+    assert!(!keys.holds_events(KEY_A));
+}
+
+#[test]
+fn a_gamepad_binding_works_on_a_key_with_an_advanced_binding() {
+    let mut keys = engine(&[
+        (KEY_A, Action::Keyboard(0x04)),
+        (KEY_D, Action::Keyboard(0x07)),
+    ]);
+    keys.set_mode(Mode::Gamepad);
+    keys.set_gamepad_binding(KEY_A, Some(LeftStickLeft));
+    keys.set_advanced([Entry {
+        key: KEY_A,
+        layer: 0,
+        behaviour: Behaviour::Socd {
+            other: KEY_D,
+            resolution: Resolution::LastPressed,
+            both_when_bottomed_out: false,
+        },
+    }]);
+    step(&mut keys, &[(KEY_A, 3000)], 1);
+    assert!(hid_report(&keys).x < GAMEPAD_STICK_CENTER);
+    step(&mut keys, &[(KEY_A, 0)], 1);
+    assert_eq!(hid_report(&keys).x, GAMEPAD_STICK_CENTER);
+}
+
+#[test]
+fn a_key_only_for_the_gamepad_sends_no_key_from_its_pair() {
+    let mut keys = engine(&[
+        (KEY_A, Action::Keyboard(0x04)),
+        (KEY_D, Action::Keyboard(0x07)),
+    ]);
+    keys.set_mode(Mode::Gamepad);
+    keys.set_tuning(openwoot::keys::Tuning {
+        keyboard_in_gamepad_mode: true,
+        ..super::support::TUNING
+    });
+    keys.set_gamepad_exclusive(true);
+    keys.set_gamepad_binding(KEY_A, Some(LeftStickLeft));
+    keys.set_advanced([Entry {
+        key: KEY_A,
+        layer: 0,
+        behaviour: Behaviour::Socd {
+            other: KEY_D,
+            resolution: Resolution::Both,
+            both_when_bottomed_out: false,
+        },
+    }]);
+    assert_eq!(step(&mut keys, &[(KEY_A, 3000), (KEY_D, 3000)], 1), [0x07]);
 }

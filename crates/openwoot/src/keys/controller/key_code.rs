@@ -61,6 +61,10 @@ pub const fn follows_travel(control: Control) -> bool {
             | Control::Guide
             | Control::LeftStickPress
             | Control::RightStickPress
+            | Control::HatUp
+            | Control::HatDown
+            | Control::HatLeft
+            | Control::HatRight
     )
 }
 
@@ -122,8 +126,8 @@ mod tests {
     }
 
     #[test]
-    fn sticks_triggers_axes_and_hat_follow_the_travel() {
+    fn sticks_triggers_and_axes_follow_the_travel_and_hat_directions_do_not() {
         let following = (120..=155).filter(|code| follows_travel(gamepad_control(*code).unwrap()));
-        assert!(following.eq((133..=140).chain(143..=155)));
+        assert!(following.eq((133..=140).chain(143..=151)));
     }
 }

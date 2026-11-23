@@ -123,6 +123,7 @@ mod tests {
         for code in 0..=15 {
             if let Some(special) = Special::from_code(code) {
                 assert_eq!(special.code(), code);
+                assert!(usize::from(special.code()) < SPECIALS);
             }
         }
         assert_eq!(

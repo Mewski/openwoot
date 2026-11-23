@@ -2,6 +2,7 @@ mod advanced;
 mod gamepad;
 mod latency;
 mod layers;
+mod limits;
 mod pipeline;
 mod press;
 mod profiles;

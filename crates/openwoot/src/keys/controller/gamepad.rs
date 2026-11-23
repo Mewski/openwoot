@@ -88,6 +88,7 @@ impl Gamepad {
         settings: Option<&Settings>,
     ) -> xinput::Report {
         if !input.has_input() {
+            *self = Self::new();
             return xinput::Report::default();
         }
         let [left, right] = &mut self.sticks;
@@ -107,6 +108,7 @@ impl Gamepad {
         settings: Option<&Settings>,
     ) -> GamepadReport {
         if !input.has_input() {
+            *self = Self::new();
             return GamepadReport::new();
         }
         let [first, second] = &mut self.sticks;
@@ -339,5 +341,20 @@ mod tests {
         let report = gamepad.xinput_report(&both_bottomed_out, Some(&SINGLE_DIRECTION));
         assert_eq!(report.left_stick.x, 32_767);
         assert_eq!(gamepad.priorities()[0], AxisPriority::PositiveTookOver);
+    }
+
+    #[test]
+    fn releasing_every_control_forgets_the_axis_priorities() {
+        let mut gamepad = Gamepad::new();
+        let right = applied(Mode::Xinput, &[(Control::LeftStickRight, 2000, true)]);
+        gamepad.xinput_report(&right, Some(&SINGLE_DIRECTION));
+        assert_eq!(gamepad.priorities()[0], AxisPriority::Positive);
+        gamepad.xinput_report(&GamepadInput::new(), Some(&SINGLE_DIRECTION));
+        assert_eq!(gamepad.priorities()[0], AxisPriority::None);
+        let mut left = applied(Mode::Gamepad, &[(Control::LeftStickLeft, 2000, true)]);
+        gamepad.hid_report(&mut left, Some(&SINGLE_DIRECTION));
+        assert_eq!(gamepad.priorities()[0], AxisPriority::Negative);
+        gamepad.hid_report(&mut GamepadInput::new(), Some(&SINGLE_DIRECTION));
+        assert_eq!(gamepad.priorities()[0], AxisPriority::None);
     }
 }

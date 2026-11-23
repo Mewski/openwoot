@@ -109,6 +109,16 @@ impl Output {
     }
 
     pub(super) fn notify(&mut self, notice: Notice) {
+        if self.notices.is_full() && !matches!(notice, Notice::Key { .. }) {
+            let mut carried = notice;
+            for queued in self.notices.iter_mut().rev() {
+                core::mem::swap(queued, &mut carried);
+                if matches!(carried, Notice::Key { .. }) {
+                    return;
+                }
+            }
+            return;
+        }
         let _ = self.notices.push(notice);
     }
 
@@ -258,5 +268,23 @@ mod tests {
         }
         assert_eq!(output.consumer_usages(), [0xB5, 0xB6, 0xCD]);
         assert_eq!(CONSUMER_SLOTS, 3);
+    }
+
+    #[test]
+    fn a_full_notice_queue_gives_up_a_key_event_for_a_state_notice() {
+        let mut output = Output::default();
+        for _ in 0..NOTICE_CAPACITY {
+            output.notify(Notice::Key {
+                key: Key::new(1, 2),
+                event: crate::lighting::KeyEvent::Pressed,
+            });
+        }
+        output.notify(Notice::ShowLayer(1));
+        output.notify(Notice::ShowLayer(2));
+        assert_eq!(output.notices().len(), NOTICE_CAPACITY);
+        assert_eq!(
+            output.notices()[NOTICE_CAPACITY - 2..],
+            [Notice::ShowLayer(1), Notice::ShowLayer(2)]
+        );
     }
 }

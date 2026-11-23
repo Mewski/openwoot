@@ -32,7 +32,7 @@ fn rapid_trigger_releases_after_an_upstroke_and_presses_again_on_the_way_down() 
         rapid_trigger_enabled: true,
         ..TUNING
     });
-    let pressed: Vec<bool> = [1000, 2500, 2301, 2299, 2400, 2599, 2601, 905, 903, 1000]
+    let pressed: Vec<bool> = [1000, 2500, 2301, 2299, 2400, 2499, 2500, 905, 903, 1000]
         .into_iter()
         .map(|travel| !step(&mut keys, &[(KEY_A, travel)], 1).is_empty())
         .collect();
@@ -80,8 +80,8 @@ fn a_key_override_gives_one_key_its_own_actuation_and_rapid_trigger() {
     );
     assert_eq!(step(&mut keys, &[(KEY_A, 500), (KEY_D, 500)], 1), [0x07]);
     assert_eq!(step(&mut keys, &[(KEY_A, 500), (KEY_D, 399)], 1), []);
-    assert_eq!(step(&mut keys, &[(KEY_A, 500), (KEY_D, 600)], 1), []);
-    assert_eq!(step(&mut keys, &[(KEY_A, 500), (KEY_D, 601)], 1), [0x07]);
+    assert_eq!(step(&mut keys, &[(KEY_A, 500), (KEY_D, 499)], 1), []);
+    assert_eq!(step(&mut keys, &[(KEY_A, 500), (KEY_D, 500)], 1), [0x07]);
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn the_nkro_report_places_usages_where_the_descriptor_declares_them() {
 }
 
 #[test]
-fn the_boot_report_takes_six_keys_and_drops_the_seventh() {
+fn the_boot_report_signals_roll_over_while_more_than_six_keys_are_held() {
     let keys_and_usages: Vec<_> = (0..7u8)
         .map(|column| {
             (
@@ -116,7 +116,25 @@ fn the_boot_report_takes_six_keys_and_drops_the_seventh() {
         .iter()
         .map(|(key, _)| (*key, 2000))
         .collect();
-    assert_eq!(step(&mut keys, &events, 1), [4, 5, 6, 7, 8, 9]);
+    assert_eq!(step(&mut keys, &events[1..], 1), [5, 6, 7, 8, 9, 10]);
+    step(&mut keys, &events, 1);
+    let openwoot::keys::Keyboard::Boot(report) = keys.output().keyboard() else {
+        panic!("n-key rollover format");
+    };
+    assert_eq!(report.to_bytes(), [0, 0, 1, 1, 1, 1, 1, 1]);
+    assert_eq!(step(&mut keys, &events[1..], 1), [5, 6, 7, 8, 9, 10]);
+}
+
+#[test]
+fn every_keyboard_usage_the_protocol_accepts_reaches_the_nkro_report() {
+    for usage in Action::KEYBOARD_USAGES.into_iter().flatten() {
+        let mut keys = engine(&[(KEY_A, Action::Keyboard(usage))]);
+        assert_eq!(
+            step(&mut keys, &[(KEY_A, 2000)], 1),
+            [usage],
+            "usage {usage:#04x}"
+        );
+    }
 }
 
 #[test]
@@ -138,4 +156,29 @@ fn with_key_reports_off_presses_reach_no_report_until_they_are_on_again() {
     assert_eq!(step(&mut keys, &[(KEY_A, 3000)], 1), []);
     keys.set_key_reports(true);
     assert_eq!(step(&mut keys, &[(KEY_A, 3001)], 1), [0x04]);
+}
+
+#[test]
+fn rapid_trigger_enabled_under_a_held_key_releases_it_on_the_upstroke() {
+    let mut keys = engine(&[(KEY_A, Action::Keyboard(0x04))]);
+    assert_eq!(step(&mut keys, &[(KEY_A, 3000)], 1), [0x04]);
+    keys.set_tuning(Tuning {
+        rapid_trigger_enabled: true,
+        rapid_trigger: RapidTrigger {
+            continuous: true,
+            ..TUNING.rapid_trigger
+        },
+        ..TUNING
+    });
+    assert_eq!(step(&mut keys, &[(KEY_A, 2000)], 1), [0x04]);
+    assert_eq!(step(&mut keys, &[(KEY_A, 500)], 1), []);
+}
+
+#[test]
+fn a_pressed_key_asks_for_its_events_until_it_is_released() {
+    let mut keys = engine(&[(KEY_A, Action::Keyboard(0x04))]);
+    step(&mut keys, &[(KEY_A, 2000)], 1);
+    assert!(keys.holds_events(KEY_A));
+    step(&mut keys, &[(KEY_A, 0)], 1);
+    assert!(!keys.holds_events(KEY_A));
 }

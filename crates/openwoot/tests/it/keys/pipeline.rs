@@ -27,7 +27,7 @@ use openwoot_protocol::{
 
 use super::support::{COLUMNS, ROWS, nkro_usages};
 use crate::{
-    scan::{Bench, Simulated},
+    scan::{Bench, Simulated, sensors},
     storage::{Nor, SECTOR},
 };
 
@@ -193,7 +193,12 @@ pub(super) struct Bench80<'a> {
 impl<'a> Bench80<'a> {
     pub(super) fn new(task: KeyTask<'a, Mutual>) -> Self {
         let scan = Scan::new();
-        assert!(scan.install(|| Scanner::new(Simulated::default(), MAP, [0, 1, 2, 3, 4, 5])));
+        assert!(scan.install(|| Scanner::new(
+            Simulated::default(),
+            MAP,
+            [0, 1, 2, 3, 4, 5],
+            sensors()
+        )));
         let mut keys = Keys::new(Standard);
         keys.set_mode(task.face.mode);
         let mut bench = Self {

@@ -23,6 +23,7 @@ pub struct PairState {
     last: Last,
     first_out: bool,
     second_out: bool,
+    both: bool,
 }
 
 impl PairState {
@@ -70,14 +71,15 @@ impl PairState {
         let [first, second] = self.sides;
         let (mut on_first, mut on_second) = (first.pressed, second.pressed);
         if on_first && on_second {
-            on_second = on_first;
             let difference = i32::from(first.travel.cast_signed()) - i32::from(second.travel);
             if (difference + SAME_DEPTH).cast_unsigned() <= (2 * SAME_DEPTH).cast_unsigned() {
                 if first.travel > FULL_TRAVEL && second.travel > FULL_TRAVEL {
                     (on_first, on_second) =
                         apply(both_bottomed_out, self.last, on_first, on_second);
-                } else {
+                } else if self.first_out || self.second_out || self.both {
                     (on_first, on_second) = (self.first_out, self.second_out);
+                } else {
+                    (on_first, on_second) = (self.last != Last::Second, self.last == Last::Second);
                 }
             } else if first.travel <= second.travel {
                 on_first = false;
@@ -85,6 +87,7 @@ impl PairState {
                 on_second = false;
             }
         }
+        self.both = first.pressed && second.pressed;
         self.first_out = on_first;
         self.second_out = on_second;
         (on_first, on_second)
@@ -98,6 +101,7 @@ impl PairState {
         let [first, second] = self.sides;
         let (on_first, on_second) = (first.pressed, second.pressed);
         if !(on_first && on_second) {
+            self.first_out = false;
             return (on_first, on_second);
         }
         if both_when_bottomed_out && first.travel > FULL_TRAVEL && second.travel > FULL_TRAVEL {
@@ -184,6 +188,43 @@ mod tests {
         assert_eq!(
             full.resolve_socd(Resolution::LastPressed, true),
             (true, false)
+        );
+    }
+
+    #[test]
+    fn keys_pressed_together_at_one_depth_give_the_one_pressed_last() {
+        let mut state = both(2000, 2050);
+        assert_eq!(state.resolve_depth(Resolution::Both), (false, true));
+        state.capture(false, true, 2100);
+        assert_eq!(state.resolve_depth(Resolution::Both), (false, true));
+    }
+
+    #[test]
+    fn neither_at_the_bottom_stays_neither_until_one_key_is_deeper() {
+        let mut state = both(4050, 4060);
+        assert_eq!(state.resolve_depth(Resolution::Neither), (false, false));
+        state.capture(false, true, 3950);
+        assert_eq!(state.resolve_depth(Resolution::Neither), (false, false));
+        state.capture(false, true, 3800);
+        assert_eq!(state.resolve_depth(Resolution::Neither), (false, true));
+    }
+
+    #[test]
+    fn socd_forgets_the_bottomed_out_pair_when_one_key_is_released() {
+        let mut state = both(4050, 4060);
+        assert_eq!(
+            state.resolve_socd(Resolution::LastPressed, true),
+            (true, true)
+        );
+        state.capture(true, false, 0);
+        assert_eq!(
+            state.resolve_socd(Resolution::LastPressed, true),
+            (true, false)
+        );
+        state.capture(true, true, 2000);
+        assert_eq!(
+            state.resolve_socd(Resolution::LastPressed, true),
+            (false, true)
         );
     }
 }

@@ -89,6 +89,7 @@ impl Actuation {
     pub fn update(&mut self, travel: u16, threshold: u16, trigger: Trigger) -> Option<Zone> {
         match trigger {
             Trigger::Fixed => {
+                self.engaged = false;
                 self.update_fixed(travel, threshold);
                 None
             }
@@ -148,7 +149,12 @@ impl Actuation {
             return zone;
         }
         if !self.engaged {
-            if !self.pressed && travel >= threshold {
+            if self.pressed {
+                self.reference = travel;
+                self.engaged = true;
+                return None;
+            }
+            if travel >= threshold {
                 self.reference = travel;
                 self.engaged = true;
                 self.set(true);
@@ -169,6 +175,7 @@ impl Actuation {
             return None;
         }
         if moved_up > i32::from(rapid_trigger.release) {
+            self.reference = travel;
             self.set(false);
             return None;
         }
@@ -267,7 +274,7 @@ mod tests {
                 &mut actuation,
                 1000,
                 trigger,
-                &[2000, 1701, 1699, 1800, 2000, 2001]
+                &[2000, 1701, 1699, 1800, 1899, 1900]
             ),
             [true, true, false, false, false, true]
         );
@@ -298,5 +305,45 @@ mod tests {
         run(&mut actuation, 1000, trigger, &[4000, 3600]);
         assert!(!actuation.is_pressed());
         assert_eq!(run(&mut actuation, 1000, trigger, &[4095]), [true]);
+    }
+
+    #[test]
+    fn rapid_trigger_measures_the_next_press_from_the_release_point() {
+        let mut actuation = Actuation::new();
+        let trigger = Trigger::Rapid(RAPID);
+        run(&mut actuation, 1000, trigger, &[1000, 2000]);
+        assert_eq!(
+            run(&mut actuation, 1000, trigger, &[1690, 1750, 1890, 1891]),
+            [false, false, false, true]
+        );
+    }
+
+    #[test]
+    fn a_key_held_into_rapid_trigger_releases_on_the_upstroke() {
+        let mut actuation = Actuation::new();
+        run(&mut actuation, 1000, Trigger::Fixed, &[3000]);
+        let trigger = Trigger::Rapid(RapidTrigger {
+            continuous: true,
+            ..RAPID
+        });
+        assert_eq!(
+            run(&mut actuation, 1000, trigger, &[2900, 2500, 2700, 2901]),
+            [true, false, false, true]
+        );
+    }
+
+    #[test]
+    fn a_fixed_interlude_forgets_the_rapid_trigger_zone() {
+        let trigger = Trigger::Rapid(RapidTrigger {
+            continuous: true,
+            ..RAPID
+        });
+        let mut actuation = Actuation::new();
+        run(&mut actuation, 1000, trigger, &[1000]);
+        run(&mut actuation, 1000, Trigger::Fixed, &[1000, 0]);
+        assert_eq!(
+            run(&mut actuation, 1000, trigger, &[50, 300, 999, 1000]),
+            [false, false, false, true]
+        );
     }
 }

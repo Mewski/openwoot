@@ -4,6 +4,7 @@ use crate::keys::Key;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Patch {
+    pub layer: Layer,
     pub key: Key,
     pub action: Action,
 }
@@ -17,11 +18,14 @@ pub struct DefaultKeymap<const ROWS: usize, const COLUMNS: usize> {
 impl<const ROWS: usize, const COLUMNS: usize> DefaultKeymap<ROWS, COLUMNS> {
     #[must_use]
     pub fn action(&self, layer: Layer, key: Key, variant: u8) -> Action {
-        if layer == Layer::Base
-            && let Some(patch) = self
-                .variant_patches
-                .get(usize::from(variant))
-                .and_then(|patches| patches.iter().find(|patch| patch.key == key))
+        if let Some(patch) = self
+            .variant_patches
+            .get(usize::from(variant))
+            .and_then(|patches| {
+                patches
+                    .iter()
+                    .find(|patch| patch.layer == layer && patch.key == key)
+            })
         {
             return patch.action;
         }
@@ -56,10 +60,18 @@ mod tests {
         [[Action::Keyboard(0x04), Action::Keyboard(0x05)]],
         [[Action::None, Action::Keyboard(0x06)]],
     ];
-    const VARIANT: [Patch; 1] = [Patch {
-        key: Key::new(0, 1),
-        action: Action::Keyboard(0x89),
-    }];
+    const VARIANT: [Patch; 2] = [
+        Patch {
+            layer: Layer::Base,
+            key: Key::new(0, 1),
+            action: Action::Keyboard(0x89),
+        },
+        Patch {
+            layer: Layer::One,
+            key: Key::new(0, 0),
+            action: Action::Keyboard(0xE6),
+        },
+    ];
     const KEYMAP: DefaultKeymap<1, 2> = DefaultKeymap {
         layers: &LAYERS,
         variant_patches: &[&[], &VARIANT],
@@ -70,7 +82,7 @@ mod tests {
     }
 
     #[test]
-    fn variants_patch_the_base_layer_only() {
+    fn a_variant_patch_replaces_the_action_of_its_own_layer_only() {
         assert_eq!(
             actions(Layer::Base, 0),
             [Action::Keyboard(0x04), Action::Keyboard(0x05)]
@@ -80,9 +92,14 @@ mod tests {
             [Action::Keyboard(0x04), Action::Keyboard(0x89)]
         );
         assert_eq!(
-            actions(Layer::One, 1),
+            actions(Layer::One, 0),
             [Action::None, Action::Keyboard(0x06)]
         );
+        assert_eq!(
+            actions(Layer::One, 1),
+            [Action::Keyboard(0xE6), Action::Keyboard(0x06)]
+        );
         assert_eq!(actions(Layer::Two, 0), [Action::None, Action::None]);
+        assert_eq!(actions(Layer::Two, 1), [Action::None, Action::None]);
     }
 }

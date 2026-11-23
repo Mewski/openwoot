@@ -50,6 +50,7 @@ pub struct Keys<F: Functions, const ROWS: usize, const COLUMNS: usize> {
     mode: Mode,
     boot_format: bool,
     key_reports: bool,
+    reporting: bool,
     gamepad_detection: bool,
     xinput_player: Option<u8>,
     elapsed_ms: u16,
@@ -58,6 +59,7 @@ pub struct Keys<F: Functions, const ROWS: usize, const COLUMNS: usize> {
 impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMNS> {
     #[must_use]
     pub fn new(functions: F) -> Self {
+        const { assert!(ROWS <= 8 && COLUMNS <= 32 && ROWS * COLUMNS < 256) };
         Self {
             records: [[Record::EMPTY; COLUMNS]; ROWS],
             tuning: Tuning::default(),
@@ -75,6 +77,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
             mode: Mode::NoGamepad,
             boot_format: false,
             key_reports: true,
+            reporting: true,
             gamepad_detection: false,
             xinput_player: None,
             elapsed_ms: 0,
@@ -218,11 +221,17 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
     }
 
     pub fn set_action(&mut self, key: Key, layer: Layer, action: Action) {
-        if let Some(slot) = self
-            .slot_mut(key)
-            .and_then(|record| record.actions.get_mut(usize::from(layer.number())))
-        {
-            *slot = action;
+        let Some(record) = self.slot_mut(key) else {
+            return;
+        };
+        let held_here = record.actuation.is_pressed() && record.latched_layer == layer.number();
+        let Some(slot) = record.actions.get_mut(usize::from(layer.number())) else {
+            return;
+        };
+        let replaced = *slot != action;
+        *slot = action;
+        if replaced && held_here {
+            record.ignore_until_release = true;
         }
     }
 
@@ -260,7 +269,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
     pub fn reset_keys(&mut self) {
         self.layers.reset();
         self.held.clear();
-        self.pending.clear();
+        self.restart_advanced();
         self.output.notify(Notice::ShowLayer(0));
         let mut lifted: Vec<Key, NOTICE_CAPACITY> = Vec::new();
         for (row, records) in (0..).zip(self.records.iter_mut()) {
@@ -343,6 +352,9 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         self.output.clear(self.boot_format);
         self.requests.clear();
         self.elapsed_ms = elapsed_ms;
+        if core::mem::replace(&mut self.reporting, self.key_reports) && !self.key_reports {
+            self.restart_advanced();
+        }
     }
 
     fn finish_pass(&mut self) -> &Output {
@@ -352,6 +364,21 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
             self.dispatch_specials();
         }
         &self.output
+    }
+
+    fn restart_advanced(&mut self) {
+        for key in self.advanced.latched_toggles() {
+            self.output.notify(Notice::Toggle {
+                key,
+                latched: false,
+                layer_key: false,
+            });
+        }
+        self.advanced.restart();
+        self.pending.clear();
+        for record in self.records.iter_mut().flatten() {
+            record.active = [false; LAYERS];
+        }
     }
 
     fn record(&self, key: Key) -> Option<&Record> {
@@ -414,22 +441,47 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
             return;
         };
         let mut layer = self.binding_layer(&record);
-        let index = record.advanced(layer);
-        match index {
-            None => self.update_press_state(key, travel),
-            Some(index) if usize::from(index) < self.advanced.entries().len() => {
-                self.advanced_input(key, travel, index);
+        let mut index = record.advanced(layer);
+        let state = index.and_then(|index| self.advanced.state(index).copied());
+        self.decide(key, travel, index);
+        if self.press_state(key) == (true, true) {
+            self.resolve_pending(key, index, travels);
+            let resolved = self.binding_layer(&record);
+            if resolved != layer && record.advanced(resolved) != index {
+                if let Some(slot) = self.record_mut(key) {
+                    slot.actuation = record.actuation;
+                    slot.active = record.active;
+                }
+                if let (Some(index), Some(state)) = (index, state)
+                    && let Some(slot) = self.advanced.state_mut(index)
+                {
+                    *slot = state;
+                }
+                layer = resolved;
+                index = record.advanced(resolved);
+                self.decide(key, travel, index);
             }
-            Some(_) => {}
         }
         if self
             .record(key)
             .is_some_and(|record| record.actuation.is_changed())
         {
-            layer = self.handle_edge(key, index, layer, travels);
+            layer = self.handle_edge(key, index, layer);
         }
         if !self.update_common(key, travel, index) {
             self.emit(key, travel, layer);
+        }
+    }
+
+    fn decide(&mut self, key: Key, travel: u16, index: Option<u8>) {
+        if let Some(index) = index
+            && self.key_reports
+        {
+            if usize::from(index) < self.advanced.entries().len() {
+                self.advanced_input(key, travel, index);
+            }
+        } else {
+            self.update_press_state(key, travel);
         }
     }
 
@@ -503,7 +555,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
                 self.update_press_state(key, travel);
                 let (pressed, changed) = self.press_state(key);
                 match toggle.input(pressed, changed) {
-                    Some(Latch::On) if key.code() != 0 => self.output.notify(Notice::Toggle {
+                    Some(Latch::On) => self.output.notify(Notice::Toggle {
                         key,
                         latched: true,
                         layer_key: matches!(action, Action::Layer(layer) if *layer != Layer::Base),
@@ -513,7 +565,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
                         latched: false,
                         layer_key: false,
                     }),
-                    Some(Latch::On) | None => {}
+                    None => {}
                 }
                 toggle.is_latched()
             }
@@ -535,17 +587,10 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         }
     }
 
-    fn handle_edge(
-        &mut self,
-        key: Key,
-        index: Option<u8>,
-        layer: u8,
-        travels: &impl Fn(Key) -> u16,
-    ) -> u8 {
+    fn handle_edge(&mut self, key: Key, index: Option<u8>, layer: u8) -> u8 {
         let mut layer = layer;
         let (pressed, _) = self.press_state(key);
         if pressed {
-            self.resolve_pending(key, travels);
             let active = self.layers.active();
             if let Some(record) = self.record_mut(key) {
                 record.latched_layer = active;
@@ -586,11 +631,18 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         layer
     }
 
-    fn resolve_pending(&mut self, presser: Key, travels: &impl Fn(Key) -> u16) {
+    fn resolve_pending(
+        &mut self,
+        presser: Key,
+        pressed_with: Option<u8>,
+        travels: &impl Fn(Key) -> u16,
+    ) {
         let mut deferred = false;
         let mut slot = 0;
         while self.pending.top().is_some_and(|top| slot <= top) {
-            if self.pending.key(slot).is_some() && self.resolve_slot(presser, slot, travels) {
+            if self.pending.key(slot).is_some()
+                && self.resolve_slot(presser, pressed_with, slot, travels)
+            {
                 deferred = true;
             }
             slot += 1;
@@ -600,14 +652,20 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         }
     }
 
-    fn resolve_slot(&mut self, presser: Key, slot: u8, travels: &impl Fn(Key) -> u16) -> bool {
+    fn resolve_slot(
+        &mut self,
+        presser: Key,
+        pressed_with: Option<u8>,
+        slot: u8,
+        travels: &impl Fn(Key) -> u16,
+    ) -> bool {
         let Some(waiting) = self.pending.key(slot) else {
             return false;
         };
         if waiting == presser {
             return false;
         }
-        let (Some(waiting_record), Some(presser_record)) =
+        let (Some(waiting_record), Some(_)) =
             (self.record(waiting).copied(), self.record(presser).copied())
         else {
             return false;
@@ -621,9 +679,9 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         let Behaviour::ModTap(mod_tap) = entry.behaviour else {
             return false;
         };
-        if self
-            .current_entry(&presser_record)
-            .is_some_and(|(_, entry)| matches!(entry.behaviour, Behaviour::ModTap(_)))
+        if pressed_with
+            .and_then(|index| self.advanced.entry(index))
+            .is_some_and(|entry| matches!(entry.behaviour, Behaviour::ModTap(_)))
         {
             return false;
         }
@@ -673,6 +731,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         };
         if let Some(index) = record.advanced(self.binding_layer(&record)) {
             self.run_advanced(key, travel, Some(index));
+            self.apply_gamepad_binding(key, travel, layer);
             return;
         }
         if record.any_active() {
@@ -682,22 +741,35 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
             return;
         };
         let action = record.action(layer);
-        let held = record.actuation.is_pressed();
+        let pressed = record.actuation.is_pressed() && self.allows(&record, action, layer);
+        self.apply_action(action, key, layer, travel, false, pressed);
+        self.apply_gamepad_binding(key, travel, layer);
+    }
+
+    fn allows(&self, record: &Record, action: Action, layer: u8) -> bool {
         let enabled = !record.disabled || action == Action::Function(Function::ToggleKeyDisable);
         let not_gamepad_only = !self.gamepad_exclusive
             || record.gamepad.is_none()
             || self.mode == Mode::NoGamepad
             || layer != 0;
-        let pressed = held && enabled && not_gamepad_only && !record.ignore_until_release;
-        self.apply_action(action, key, layer, travel, false, pressed);
-        if self.mode != Mode::NoGamepad
-            && layer == 0
-            && let Some(control) = record.gamepad
-        {
+        enabled && not_gamepad_only && !record.ignore_until_release
+    }
+
+    fn apply_gamepad_binding(&mut self, key: Key, travel: u16, layer: u8) {
+        if self.mode == Mode::NoGamepad || layer != 0 {
+            return;
+        }
+        let Some(record) = self.record(key).copied() else {
+            return;
+        };
+        if let Some(control) = record.gamepad {
             let mode = self.mode;
-            self.output
-                .gamepad_input_mut()
-                .apply(mode, control, travel, held);
+            self.output.gamepad_input_mut().apply(
+                mode,
+                control,
+                travel,
+                record.actuation.is_pressed(),
+            );
         }
     }
 
@@ -754,13 +826,16 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
                 *slot = state;
             }
             for application in applications {
+                let allowed = self
+                    .record(key)
+                    .is_some_and(|record| self.allows(record, application.action, entry.layer));
                 self.apply_action(
                     application.action,
                     key,
                     entry.layer,
                     application.travel,
                     true,
-                    application.pressed,
+                    application.pressed && allowed,
                 );
             }
             let toggle = matches!(entry.behaviour, Behaviour::Toggle(_));
@@ -768,8 +843,10 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
                 || self
                     .record(key)
                     .is_some_and(|record| record.actuation.is_pressed());
-            self.output
-                .log_advanced(entry.behaviour.kind(), key, travel, pressed);
+            if self.key_reports {
+                self.output
+                    .log_advanced(entry.behaviour.kind(), key, travel, pressed);
+            }
             if let Some(record) = self.record_mut(key) {
                 record.set_active(layer, active);
             }
@@ -819,17 +896,13 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         let Some(record) = self.record(key).copied() else {
             return;
         };
-        self.output
-            .log_advanced(kind, key, travel, record.actuation.is_pressed());
+        if self.key_reports {
+            self.output
+                .log_advanced(kind, key, travel, record.actuation.is_pressed());
+        }
         let action = record.action(layer);
-        self.apply_action(
-            action,
-            key,
-            layer,
-            travel,
-            false,
-            on && !record.defer_output,
-        );
+        let pressed = on && !record.defer_output && self.allows(&record, action, layer);
+        self.apply_action(action, key, layer, travel, false, pressed);
         if let Some(record) = self.record_mut(key) {
             record.defer_output = false;
         }
@@ -896,7 +969,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
                 let mode = self.mode;
                 self.output
                     .gamepad_input_mut()
-                    .apply(mode, control, travel, true);
+                    .apply(mode, control, travel, pressed);
             }
         }
     }

@@ -15,6 +15,7 @@ pub(crate) enum Latch {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ToggleState {
     pressed: bool,
+    armed: bool,
     latched: bool,
     hold_ms: u16,
 }
@@ -32,6 +33,12 @@ impl ToggleState {
         }
         if pressed {
             self.hold_ms = 0;
+            self.armed = true;
+            return None;
+        }
+        let armed = self.armed;
+        self.armed = false;
+        if !armed {
             return None;
         }
         if self.hold_ms <= TAP_MAX_MS {
@@ -52,7 +59,7 @@ impl ToggleState {
         elapsed_ms: u16,
     ) -> Applications {
         if self.pressed {
-            self.hold_ms = self.hold_ms.wrapping_add(elapsed_ms);
+            self.hold_ms = self.hold_ms.saturating_add(elapsed_ms);
         }
         let mut applications = Vec::new();
         let _ = applications.push(Application {
@@ -86,5 +93,36 @@ mod tests {
         state.run(Action::Keyboard(4), 2000, 50);
         assert_eq!(state.input(false, true), Some(Latch::Off));
         assert!(!state.is_latched());
+    }
+
+    #[test]
+    fn a_hold_longer_than_the_counter_is_not_a_tap() {
+        let mut state = ToggleState::default();
+        state.input(true, true);
+        for _ in 0..66 {
+            state.run(Action::Keyboard(4), 2000, 1000);
+        }
+        assert_eq!(state.input(false, true), Some(Latch::Off));
+        assert!(!state.is_latched());
+    }
+
+    #[test]
+    fn a_release_without_its_press_does_not_latch() {
+        let mut state = ToggleState::default();
+        assert_eq!(state.input(false, true), None);
+        assert!(!state.is_latched());
+    }
+
+    #[test]
+    fn a_press_of_199_ms_is_a_tap_and_one_of_200_ms_is_a_hold() {
+        let mut tapped = ToggleState::default();
+        tapped.input(true, true);
+        tapped.run(Action::Keyboard(4), 2000, 199);
+        assert_eq!(tapped.input(false, true), Some(Latch::On));
+        let mut held = ToggleState::default();
+        held.input(true, true);
+        held.run(Action::Keyboard(4), 2000, 200);
+        assert_eq!(held.input(false, true), Some(Latch::Off));
+        assert!(!held.is_latched());
     }
 }

@@ -67,6 +67,9 @@ impl Queue {
     fn push(&mut self, event: u8) {
         let last = if self.pending != 0 {
             if self.pending == LAST_STEP {
+                if event == RELEASE {
+                    self.events |= RELEASE << (2 * LAST_STEP);
+                }
                 return;
             }
             self.pending
@@ -91,7 +94,7 @@ impl Queue {
 
     fn elapse(&mut self, elapsed_ms: u16, tap_ms: u8) -> bool {
         if self.timer == TIMER_NOT_STARTED {
-            self.timer = tap_ms & TIMER_MASK;
+            self.timer = (tap_ms & TIMER_MASK).min(TIMER_NOT_STARTED - 1);
             return false;
         }
         if elapsed_ms < u16::from(self.timer) {
@@ -135,7 +138,9 @@ impl Thresholds {
     #[must_use]
     pub(crate) fn new(actuation: u16, bottom_out: Option<u16>, travel_limit: u16) -> Self {
         let bottom = bottom_out.unwrap_or(DEFAULT_BOTTOM_OUT).min(travel_limit);
-        let gap = actuation.wrapping_add(BOTTOM_GAP);
+        let gap = actuation
+            .wrapping_add(BOTTOM_GAP)
+            .min(travel_limit.max(actuation));
         let bottom_out = if i32::from(actuation) + i32::from(BOTTOM_GAP) < i32::from(bottom) {
             bottom
         } else {
@@ -215,7 +220,8 @@ impl DynamicKeystrokeState {
             if stroke.action == openwoot_protocol::keys::Action::None {
                 continue;
             }
-            let pressed = follows_travel_action(stroke.action) || queue.play(elapsed_ms, tap_ms);
+            let played = queue.play(elapsed_ms, tap_ms);
+            let pressed = follows_travel_action(stroke.action) || played;
             if pressed {
                 let _ = applications.push(Application {
                     action: stroke.action,
@@ -232,6 +238,9 @@ impl DynamicKeystrokeState {
 
     fn queue(&mut self, strokes: &[Stroke; STROKES], point: Point) {
         for (queue, stroke) in self.queues.iter_mut().zip(strokes) {
+            if stroke.action == openwoot_protocol::keys::Action::None {
+                continue;
+            }
             let event = match point {
                 Point::Press => stroke.on_press,
                 Point::BottomOut => stroke.on_bottom_out,
@@ -319,5 +328,78 @@ mod tests {
         }
         assert!(presses > 0);
         assert_eq!(state.phase(), Phase::Idle);
+    }
+
+    fn press_and_release(action: Action) -> [Stroke; STROKES] {
+        let mut strokes = [Stroke::default(); STROKES];
+        if let Some(first) = strokes.first_mut() {
+            *first = Stroke {
+                action,
+                on_press: StrokeEvent::Press,
+                on_bottom_out: StrokeEvent::Nothing,
+                on_lift: StrokeEvent::Nothing,
+                on_release: StrokeEvent::Release,
+            };
+        }
+        strokes
+    }
+
+    fn played_out(state: &mut DynamicKeystrokeState, strokes: &[Stroke; STROKES]) -> bool {
+        for _ in 0..1000 {
+            if !state.is_playing() {
+                return true;
+            }
+            state.run(strokes, 0, 5, 20);
+        }
+        false
+    }
+
+    #[test]
+    fn a_release_for_a_full_queue_still_ends_the_last_press() {
+        let strokes = press_and_release(Action::Keyboard(0x04));
+        let mut state = DynamicKeystrokeState::default();
+        let thresholds = Thresholds::new(1000, None, 4000);
+        for _ in 0..6 {
+            state.input(&strokes, 1200, thresholds);
+            state.input(&strokes, 0, thresholds);
+        }
+        assert!(played_out(&mut state, &strokes));
+    }
+
+    #[test]
+    fn a_stroke_that_follows_the_travel_still_plays_its_queue() {
+        let strokes = press_and_release(Action::Gamepad(
+            openwoot_protocol::gamepad::Control::LeftStickRight,
+        ));
+        let mut state = DynamicKeystrokeState::default();
+        let thresholds = Thresholds::new(1000, None, 4000);
+        state.input(&strokes, 1200, thresholds);
+        state.input(&strokes, 0, thresholds);
+        assert!(played_out(&mut state, &strokes));
+    }
+
+    #[test]
+    fn a_stroke_without_action_queues_nothing() {
+        let strokes = press_and_release(Action::None);
+        let mut state = DynamicKeystrokeState::default();
+        state.input(&strokes, 1200, Thresholds::new(1000, None, 4000));
+        assert!(!state.is_playing());
+    }
+
+    #[test]
+    fn the_bottom_out_point_stays_within_the_travel_of_the_switch() {
+        assert_eq!(Thresholds::new(3990, None, 4000).bottom_out, 4000);
+        assert_eq!(Thresholds::new(4050, None, 4000).bottom_out, 4050);
+    }
+
+    #[test]
+    fn a_tap_length_equal_to_the_timer_mark_still_ends() {
+        let strokes = tap_and_press(Action::Keyboard(0x04));
+        let mut state = DynamicKeystrokeState::default();
+        state.input(&strokes, 1200, Thresholds::new(1000, None, 4000));
+        let held = (0..1000)
+            .take_while(|_| !state.run(&strokes, 1200, 5, 63).0.is_empty())
+            .count();
+        assert!(held < 1000);
     }
 }

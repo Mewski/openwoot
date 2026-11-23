@@ -55,10 +55,9 @@ impl Profiles {
     }
 
     pub const fn next(&mut self) -> bool {
-        let next = if self.active + 1 >= self.count {
-            0
-        } else {
-            self.active + 1
+        let next = match self.active.checked_add(1) {
+            Some(next) if next < self.count => next,
+            _ => 0,
         };
         self.select(next)
     }
@@ -119,5 +118,8 @@ mod tests {
         assert!(!profiles.select(4));
         let mut single = Profiles::new(1, 0);
         assert!(!single.next());
+        let mut full = Profiles::new(u8::MAX, u8::MAX);
+        assert!(full.next());
+        assert_eq!(full.take_request(), Some(0));
     }
 }

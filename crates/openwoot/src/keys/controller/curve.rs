@@ -14,6 +14,9 @@ pub fn normalize_travel(travel: u32, settings: Option<&Settings>) -> f32 {
     else {
         return level;
     };
+    if saturation.travel <= dead_zone.travel {
+        return level;
+    }
     let start = f32::from(dead_zone.travel) / POINT_SCALE;
     if level < start {
         return 0.0;
@@ -34,16 +37,19 @@ pub fn response_curve(level: f32, settings: Option<&Settings>) -> f32 {
     else {
         return level;
     };
+    if saturation.travel <= dead_zone.travel {
+        return level;
+    }
     let span =
         |point: CurvePoint| f32::from(point.travel.wrapping_sub(dead_zone.travel)) / POINT_SCALE;
     let range = span(saturation);
-    let low = span(knee_low) / range;
+    let low = (span(knee_low) / range).min(1.0);
     let low_output = output(knee_low);
     let shaped = if low > level {
         let start = output(dead_zone);
         fmaf(level, (low_output - start) / low, start)
     } else {
-        let high = span(knee_high) / range;
+        let high = (span(knee_high) / range).max(low).min(1.0);
         let high_output = output(knee_high);
         if level < high {
             fmaf(
@@ -114,11 +120,22 @@ mod tests {
     }
 
     #[test]
-    fn a_curve_without_input_range_divides_by_zero() {
+    fn a_curve_without_input_range_leaves_the_level_unshaped() {
         let flat = settings([(0, 0); 4]);
-        assert!(normalize_travel(0, Some(&flat)).is_nan());
-        assert_eq!(normalize_travel(1, Some(&flat)), 1.0);
-        assert_eq!(response_curve(0.5, Some(&flat)), 1.0);
-        assert_eq!(response_curve(f32::NAN, Some(&flat)), 0.0);
+        assert_eq!(normalize_travel(0, Some(&flat)), 0.0);
+        assert_eq!(normalize_travel(2048, Some(&flat)), 2048.0 / 4095.0);
+        assert_eq!(response_curve(0.5, Some(&flat)), 0.5);
+        let falling = settings([(200, 0), (100, 80), (50, 160), (10, 255)]);
+        assert_eq!(normalize_travel(2048, Some(&falling)), 2048.0 / 4095.0);
+        assert_eq!(response_curve(0.25, Some(&falling)), 0.25);
+    }
+
+    #[test]
+    fn knees_outside_the_input_range_keep_the_curve_between_its_outputs() {
+        let unsorted = settings([(100, 0), (250, 255), (20, 0), (200, 255)]);
+        for step in 0..=20u8 {
+            let shaped = response_curve(f32::from(step) / 20.0, Some(&unsorted));
+            assert!((0.0..=1.0).contains(&shaped), "{shaped}");
+        }
     }
 }
