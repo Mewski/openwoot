@@ -272,3 +272,23 @@ fn key_reports_and_gamepad_detection_are_unsupported_without_host_state() {
         Ok(Some(Err(Rejection::Unsupported)))
     );
 }
+
+#[test]
+fn a_getter_for_a_profile_beyond_the_capabilities_is_rejected_before_the_configuration_sees_it() {
+    let mut handler = configured();
+    for profile in [4, u8::MAX] {
+        assert_eq!(
+            ask!(
+                handler,
+                GetKeymap,
+                LayerRef {
+                    profile: Slot::new(profile),
+                    layer: Layer::Base,
+                }
+            ),
+            Ok(Some(Err(Rejection::Invalid(Invalid::ProfileOutsideRange(
+                profile
+            )))))
+        );
+    }
+}

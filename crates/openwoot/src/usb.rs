@@ -10,6 +10,7 @@ mod interfaces;
 mod negotiation;
 mod report;
 
+pub(crate) use device::CHANNEL_MAX_PACKET_SIZE;
 pub use device::{ChannelEndpoints, Device, Gamepad, Resources, build};
 pub use face::{Face, KeyboardFormat, Mode, PollingRate, Speed};
 pub(crate) use feature_requests::FeatureRequest;

@@ -46,6 +46,11 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Configuration, String> {
     let mut configuration = None;
     let mut interfaces: Vec<Interface> = Vec::new();
     while let [length, descriptor_type, ..] = rest {
+        if *length < 2 {
+            return Err(format!(
+                "descriptor of type 0x{descriptor_type:02x} has length {length}"
+            ));
+        }
         let (descriptor, tail) = rest
             .split_at_checked(usize::from(*length))
             .ok_or_else(|| format!("descriptor of type 0x{descriptor_type:02x} is cut off"))?;
@@ -118,4 +123,25 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Configuration, String> {
     }
     configuration.interfaces = interfaces;
     Ok(configuration)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_descriptor_shorter_than_its_header_ends_the_walk_with_an_error() {
+        let bytes = [
+            9, 2, 20, 0, 1, 1, 0, 0xA0, 200, 9, 4, 0, 0, 0, 3, 0, 0, 0, 0, 0x21,
+        ];
+        assert_eq!(
+            parse(&bytes),
+            Err("descriptor of type 0x21 has length 0".to_owned())
+        );
+        let truncated = [9, 2, 11, 0, 1, 1, 0, 0xA0, 200, 1, 4];
+        assert_eq!(
+            parse(&truncated),
+            Err("descriptor of type 0x04 has length 1".to_owned())
+        );
+    }
 }

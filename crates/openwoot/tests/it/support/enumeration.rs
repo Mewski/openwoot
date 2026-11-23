@@ -95,3 +95,45 @@ pub(crate) fn configuration(face: Face) -> Result<Configuration, String> {
     let enumeration = enumerate(face).map_err(|outcome| format!("{outcome:?}"))?;
     configuration::parse(&enumeration.configuration)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_descriptor_request_gets_at_most_the_length_the_host_asks_for() {
+        let host = Host::default();
+        let state = HostState::new();
+        let mut resources = Resources::new();
+        let mut device = build(
+            host.driver(),
+            Face::default(),
+            IDENTITY,
+            &mut resources,
+            &state,
+        );
+        let mut run = pin!(device.usb.run());
+        host.attach(run.as_mut());
+        let mut get = |value: u16, length: u16| {
+            host.control_in(
+                run.as_mut(),
+                setup(DEVICE_TO_HOST, GET_DESCRIPTOR, value, 0, length),
+            )
+        };
+        let device_descriptor = get(0x0100, 0xFFFF).unwrap();
+        assert_eq!(device_descriptor.len(), 18);
+        for length in [1, 8, 17] {
+            assert_eq!(
+                get(0x0100, length),
+                Ok(device_descriptor[..usize::from(length)].to_vec())
+            );
+        }
+        let configuration = get(0x0200, 0xFFFF).unwrap();
+        let header = get(0x0200, 9).unwrap();
+        assert_eq!(header, configuration[..9]);
+        assert_eq!(
+            usize::from(u16::from_le_bytes([header[2], header[3]])),
+            configuration.len()
+        );
+    }
+}

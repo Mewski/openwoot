@@ -1,11 +1,12 @@
 use openwoot_protocol::{
+    lighting::KeyColors,
     report::{self, Contents},
     stock::{Command, MAGIC, Request, Status},
 };
 
 use crate::{
     keys::Key,
-    lighting::{HostControl, from_rgb565, rgb},
+    lighting::{BLACK, HostControl, from_rgb565, rgb},
     usb::HostState,
 };
 
@@ -94,20 +95,7 @@ impl StockControl<'_> {
         if [*first, *second] != MAGIC {
             return;
         }
-        lighting
-            .set_colors(|keys| {
-                keys.clear();
-                let (rows, _) = colors.as_chunks::<{ COLOR_MAP_COLUMNS * COLOR_LEN }>();
-                for row in rows.iter().take(usize::from(matrix.rows)) {
-                    let (columns, _) = row.as_chunks::<COLOR_LEN>();
-                    for &color in columns.iter().take(usize::from(matrix.columns)) {
-                        if keys.push(from_rgb565(u16::from_le_bytes(color))).is_err() {
-                            return;
-                        }
-                    }
-                }
-            })
-            .await;
+        lighting.set_colors(|keys| fill(keys, colors, matrix)).await;
     }
 
     fn with_host(&self, change: impl FnOnce(&HostState)) -> Option<Status> {
@@ -121,5 +109,94 @@ impl StockControl<'_> {
         let key = Key::from_code(code)?;
         let matrix = self.key_matrix?;
         (key.row < matrix.rows && key.column < matrix.columns).then_some(key)
+    }
+}
+
+fn fill(keys: &mut KeyColors, colors: &[u8], matrix: KeyMatrix) {
+    keys.clear();
+    let (rows, _) = colors.as_chunks::<{ COLOR_MAP_COLUMNS * COLOR_LEN }>();
+    for row in 0..usize::from(matrix.rows) {
+        let columns = rows
+            .get(row)
+            .map_or_default(|cells| cells.as_chunks::<COLOR_LEN>().0);
+        for column in 0..usize::from(matrix.columns) {
+            let color = columns
+                .get(column)
+                .map_or(BLACK, |&color| from_rgb565(u16::from_le_bytes(color)));
+            if keys.push(color).is_err() {
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn numbered() -> [u8; COLOR_MAP_LEN] {
+        let mut colors = [0; COLOR_MAP_LEN];
+        let (cells, _) = colors.as_chunks_mut::<COLOR_LEN>();
+        for (number, cell) in (1_u16..).zip(cells) {
+            *cell = number.to_le_bytes();
+        }
+        colors
+    }
+
+    fn numbered_color(row: usize, column: usize) -> u16 {
+        u16::try_from(row * COLOR_MAP_COLUMNS + column + 1).unwrap()
+    }
+
+    #[test]
+    fn a_matrix_inside_the_stock_map_takes_its_columns_of_every_row() {
+        let mut keys = KeyColors::new();
+        let matrix = KeyMatrix {
+            rows: 6,
+            columns: 17,
+        };
+        fill(&mut keys, &numbered(), matrix);
+        assert_eq!(keys.len(), 6 * 17);
+        for row in 0..6 {
+            for column in 0..17 {
+                assert_eq!(
+                    keys[row * 17 + column],
+                    from_rgb565(numbered_color(row, column)),
+                    "row {row} column {column}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_matrix_beyond_the_stock_map_keeps_its_rows_aligned_and_the_rest_unlit() {
+        let mut keys = KeyColors::new();
+        let wide = KeyMatrix {
+            rows: 5,
+            columns: 23,
+        };
+        fill(&mut keys, &numbered(), wide);
+        assert_eq!(keys.len(), 5 * 23);
+        for row in 0..5 {
+            for column in 0..23 {
+                let expected = if column < COLOR_MAP_COLUMNS {
+                    from_rgb565(numbered_color(row, column))
+                } else {
+                    BLACK
+                };
+                assert_eq!(
+                    keys[row * 23 + column],
+                    expected,
+                    "row {row} column {column}"
+                );
+            }
+        }
+        let tall = KeyMatrix {
+            rows: 7,
+            columns: 17,
+        };
+        fill(&mut keys, &numbered(), tall);
+        assert_eq!(keys.len(), 7 * 17);
+        assert_eq!(keys[5 * 17], from_rgb565(numbered_color(5, 0)));
+        assert!(keys[6 * 17..].iter().all(|&color| color == BLACK));
     }
 }

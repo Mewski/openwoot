@@ -1,5 +1,6 @@
 use std::pin::pin;
 
+use embassy_usb_driver::Event;
 use openwoot::usb::{Face, HidProtocol, HostState, Resources, build};
 
 use crate::support::{Host, IDENTITY, Outcome, setup};
@@ -109,4 +110,71 @@ fn a_bus_reset_after_an_early_suspend_leaves_the_host_active_once_configured() {
         Some(Outcome::Accepted)
     );
     assert!(state.is_active());
+}
+
+#[test]
+fn the_lock_lights_go_dark_on_a_bus_reset_and_when_power_is_removed() {
+    let host = Host::default();
+    let state = HostState::new();
+    let mut resources = Resources::new();
+    let mut device = build(
+        host.driver(),
+        Face::default(),
+        IDENTITY,
+        &mut resources,
+        &state,
+    );
+    let mut run = pin!(device.usb.run());
+    host.attach(run.as_mut());
+    let caps_lock = setup(CLASS_INTERFACE_OUT, SET_REPORT, 0x0200, 1, 1);
+    for event in [Event::Reset, Event::PowerRemoved] {
+        assert_eq!(
+            host.control_out(run.as_mut(), caps_lock, &[0x02]),
+            Some(Outcome::Accepted)
+        );
+        assert!(state.keyboard_leds().caps_lock());
+        host.bus_events(run.as_mut(), &[event]);
+        assert!(!state.keyboard_leds().caps_lock(), "{event:?}");
+    }
+}
+
+#[test]
+fn class_requests_for_a_missing_interface_or_another_recipient_are_stalled() {
+    let host = Host::default();
+    let state = HostState::new();
+    let mut resources = Resources::new();
+    let mut device = build(
+        host.driver(),
+        Face::default(),
+        IDENTITY,
+        &mut resources,
+        &state,
+    );
+    let mut run = pin!(device.usb.run());
+    host.attach(run.as_mut());
+    let ping = [1, 0xD1, 0xDA, 0, 0, 0, 0, 0];
+    for (request_type, interface) in [
+        (CLASS_INTERFACE_OUT, 5),
+        (CLASS_INTERFACE_OUT, 0x0102),
+        (CLASS_INTERFACE_OUT, u16::MAX),
+        (0x22, 2),
+        (0x23, 2),
+    ] {
+        assert_eq!(
+            host.control_out(
+                run.as_mut(),
+                setup(request_type, SET_REPORT, 0x0301, interface, 8),
+                &ping
+            ),
+            Some(Outcome::Rejected),
+            "request type {request_type:#04x} index {interface:#06x}"
+        );
+    }
+    assert_eq!(
+        host.control_in(
+            run.as_mut(),
+            setup(CLASS_INTERFACE_IN, GET_IDLE, 0, u16::MAX, 1)
+        ),
+        Err(Outcome::Rejected)
+    );
 }

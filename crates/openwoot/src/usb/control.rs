@@ -3,6 +3,7 @@ use embassy_usb::{
     control::{InResponse, OutResponse, Recipient, Request, RequestType},
     types::StringIndex,
 };
+use openwoot_protocol::stock::{FEATURE_REPORT_ID, REQUEST_LEN};
 
 use super::{
     HidProtocol, HostState, hid_class,
@@ -71,16 +72,12 @@ impl<'d> Control<'d> {
                 self.host.set_keyboard_leds(*leds);
                 OutResponse::Accepted
             }
-            (CHANNEL_INTERFACE, FEATURE_REPORT_TYPE, [first, rest @ ..])
-                if report_id != 0 && *first == report_id =>
-            {
-                self.host.feature_requests().submit(rest);
-                OutResponse::Accepted
-            }
-            (CHANNEL_INTERFACE, FEATURE_REPORT_TYPE, _) => {
-                self.host.feature_requests().submit(data);
-                OutResponse::Accepted
-            }
+            (CHANNEL_INTERFACE, FEATURE_REPORT_TYPE, _) => match stock_command(report_id, data) {
+                Some(command) if self.host.feature_requests().submit(command) => {
+                    OutResponse::Accepted
+                }
+                _ => OutResponse::Rejected,
+            },
             (CHANNEL_INTERFACE, ..) => OutResponse::Accepted,
             _ => OutResponse::Rejected,
         }
@@ -95,12 +92,14 @@ impl Handler for Control<'_> {
             interface.protocol = HidProtocol::Report;
         }
         self.host.set_keyboard_protocol(HidProtocol::Report);
+        self.host.set_keyboard_leds(0);
         self.host.set_suspended(false);
         self.host.set_configured(false);
     }
 
     fn enabled(&mut self, enabled: bool) {
         if !enabled {
+            self.host.set_keyboard_leds(0);
             self.host.set_configured(false);
         }
     }
@@ -183,6 +182,17 @@ impl Handler for Control<'_> {
         (self.xinput && u8::from(index) == xinput::MS_OS_STRING_INDEX)
             .then_some(xinput::MS_OS_STRING)
     }
+}
+
+fn stock_command(report_id: u8, data: &[u8]) -> Option<&[u8]> {
+    if report_id != FEATURE_REPORT_ID {
+        return None;
+    }
+    let command = match data {
+        [first, command @ ..] if *first == report_id && command.len() >= REQUEST_LEN => command,
+        command => command,
+    };
+    command.get(..REQUEST_LEN)
 }
 
 fn copy_into<'a>(buffer: &'a mut [u8], bytes: &[u8]) -> InResponse<'a> {

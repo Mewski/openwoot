@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     future::{Future, poll_fn, ready},
     pin::Pin,
     rc::Rc,
@@ -12,9 +12,11 @@ use embassy_usb_driver::{
     Direction, EndpointAddress, EndpointAllocError, EndpointError, EndpointInfo, EndpointType,
     Event, Unsupported,
 };
+use embedded_hal_async::delay::DelayNs;
 
 const CONTROL_PACKET_SIZE: usize = 64;
 const POLLS: usize = 64;
+const NANOSECONDS_PER_MILLISECOND: u64 = 1_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Outcome {
@@ -32,6 +34,10 @@ struct State {
     outcome: Option<Outcome>,
     sent: HashMap<u8, Vec<Vec<u8>>>,
     received: HashMap<u8, VecDeque<Vec<u8>>>,
+    unread: HashSet<u8>,
+    disabled: HashSet<u8>,
+    keep_oversized: bool,
+    now_ms: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -49,6 +55,11 @@ pub(crate) struct Endpoint {
 }
 
 pub(crate) struct Bus {
+    host: Host,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Delay {
     host: Host,
 }
 
@@ -75,6 +86,10 @@ impl Host {
             device,
             &[Event::PowerDetected, Event::Suspend, Event::Reset],
         );
+    }
+
+    pub(crate) fn bus_events<F: Future>(&self, device: Pin<&mut F>, events: &[Event]) {
+        self.attach_with(device, events);
     }
 
     fn attach_with<F: Future>(&self, device: Pin<&mut F>, events: &[Event]) {
@@ -115,6 +130,58 @@ impl Host {
         if transfer.len().is_multiple_of(packet_size) {
             queue.push_back(Vec::new());
         }
+    }
+
+    pub(crate) fn send_raw_packets(&self, endpoint: u8, packets: &[Vec<u8>]) {
+        self.0
+            .borrow_mut()
+            .received
+            .entry(endpoint)
+            .or_default()
+            .extend(packets.iter().cloned());
+    }
+
+    pub(crate) fn stop_reading(&self, endpoint: u8) {
+        self.0.borrow_mut().unread.insert(endpoint);
+    }
+
+    pub(crate) fn resume_reading(&self, endpoint: u8) {
+        self.0.borrow_mut().unread.remove(&endpoint);
+    }
+
+    pub(crate) fn disable(&self, endpoint: u8) {
+        self.0.borrow_mut().disabled.insert(endpoint);
+    }
+
+    pub(crate) fn keep_oversized_packets(&self) {
+        self.0.borrow_mut().keep_oversized = true;
+    }
+
+    #[must_use]
+    pub(crate) fn pending_packets(&self, endpoint: u8) -> usize {
+        self.0
+            .borrow()
+            .received
+            .get(&endpoint)
+            .map_or(0, VecDeque::len)
+    }
+
+    #[must_use]
+    pub(crate) fn delay(&self) -> Delay {
+        Delay { host: self.clone() }
+    }
+
+    pub(crate) fn elapse_ms(&self, milliseconds: u64) {
+        self.0.borrow_mut().now_ms += milliseconds;
+    }
+
+    #[must_use]
+    pub(crate) fn sent_len(&self, endpoint: u8) -> usize {
+        self.0
+            .borrow()
+            .sent
+            .get(&endpoint)
+            .map_or(0, |packets| packets.iter().map(Vec::len).sum())
     }
 
     #[must_use]
@@ -293,18 +360,23 @@ impl driver::Endpoint for Endpoint {
 }
 
 impl driver::EndpointIn for Endpoint {
-    fn write(&mut self, buf: &[u8]) -> impl Future<Output = Result<(), EndpointError>> {
+    async fn write(&mut self, buf: &[u8]) -> Result<(), EndpointError> {
         if buf.len() > usize::from(self.info.max_packet_size) {
-            return ready(Err(EndpointError::BufferOverflow));
+            return Err(EndpointError::BufferOverflow);
         }
-        self.host
-            .0
-            .borrow_mut()
-            .sent
-            .entry(self.info.addr.into())
-            .or_default()
-            .push(buf.to_vec());
-        ready(Ok(()))
+        let address = u8::from(self.info.addr);
+        poll_fn(|_| {
+            let mut state = self.host.0.borrow_mut();
+            if state.disabled.contains(&address) {
+                return Poll::Ready(Err(EndpointError::Disabled));
+            }
+            if state.unread.contains(&address) {
+                return Poll::Pending;
+            }
+            state.sent.entry(address).or_default().push(buf.to_vec());
+            Poll::Ready(Ok(()))
+        })
+        .await
     }
 }
 
@@ -313,11 +385,17 @@ impl driver::EndpointOut for Endpoint {
         let address = u8::from(self.info.addr);
         poll_fn(|_| {
             let mut state = self.host.0.borrow_mut();
-            let Some(packet) = state
-                .received
-                .get_mut(&address)
-                .and_then(VecDeque::pop_front)
-            else {
+            if state.disabled.contains(&address) {
+                return Poll::Ready(Err(EndpointError::Disabled));
+            }
+            let keep_oversized = state.keep_oversized;
+            let Some(queue) = state.received.get_mut(&address) else {
+                return Poll::Pending;
+            };
+            if keep_oversized && queue.front().is_some_and(|packet| packet.len() > buf.len()) {
+                return Poll::Ready(Err(EndpointError::BufferOverflow));
+            }
+            let Some(packet) = queue.pop_front() else {
                 return Poll::Pending;
             };
             Poll::Ready(
@@ -330,6 +408,31 @@ impl driver::EndpointOut for Endpoint {
             )
         })
         .await
+    }
+}
+
+impl Delay {
+    async fn wait_ms(&self, duration_ms: u64) {
+        let deadline = self.host.0.borrow().now_ms + duration_ms;
+        poll_fn(|_| {
+            if self.host.0.borrow().now_ms >= deadline {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await;
+    }
+}
+
+impl DelayNs for Delay {
+    async fn delay_ns(&mut self, ns: u32) {
+        self.wait_ms(u64::from(ns).div_ceil(NANOSECONDS_PER_MILLISECOND))
+            .await;
+    }
+
+    async fn delay_ms(&mut self, ms: u32) {
+        self.wait_ms(u64::from(ms)).await;
     }
 }
 

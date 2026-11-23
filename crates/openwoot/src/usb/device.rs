@@ -18,12 +18,13 @@ use crate::{hid, xinput};
 const CONFIGURATION_DESCRIPTOR_LEN: usize = 256;
 const BOS_DESCRIPTOR_LEN: usize = 16;
 const CONTROL_BUFFER_LEN: usize = 128;
+const STRING_UNITS: usize = (CONTROL_BUFFER_LEN - 3) / 2;
 const MAX_POWER_MILLIAMPERES: u16 = 400;
 const GAMEPAD_MAX_PACKET_SIZE: u16 = 32;
 const PLACEHOLDER_INTERVAL: u8 = 10;
 const NKRO_INTERVAL: u8 = 1;
 const BOOT_KEYBOARD_INTERVAL: u8 = 10;
-const CHANNEL_MAX_PACKET_SIZE: u16 = 64;
+pub(crate) const CHANNEL_MAX_PACKET_SIZE: u16 = 64;
 const CHANNEL_INTERVAL: u8 = 1;
 const CONTROLS_MAX_PACKET_SIZE: u16 = 8;
 const CONTROLS_INTERVAL: u8 = 4;
@@ -144,9 +145,9 @@ fn device_configuration(face: Face, identity: Identity<'_>) -> Config<'_> {
     configuration.device_protocol = 0;
     configuration.composite_with_iads = false;
     configuration.device_release = face.keyboard.device_release();
-    configuration.manufacturer = Some(identity.manufacturer);
-    configuration.product = Some(identity.product);
-    configuration.serial_number = identity.serial_number;
+    configuration.manufacturer = Some(fitting(identity.manufacturer));
+    configuration.product = Some(fitting(identity.product));
+    configuration.serial_number = identity.serial_number.map(fitting);
     configuration.supports_remote_wakeup = true;
     configuration.max_power = MAX_POWER_MILLIAMPERES;
     configuration
@@ -301,4 +302,38 @@ fn hid_input_interface<'d, D: Driver<'d>>(
 
 fn max_packet_size(report_len: usize) -> u16 {
     u16::try_from(report_len).unwrap_or(u16::MAX)
+}
+
+fn fitting(text: &str) -> &str {
+    let mut units = 0;
+    let end = text
+        .char_indices()
+        .find(|(_, character)| {
+            units += character.len_utf16();
+            units > STRING_UNITS
+        })
+        .map_or(text.len(), |(index, _)| index);
+    text.get(..end).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_string_is_cut_to_the_units_the_control_buffer_holds_and_never_inside_a_character() {
+        let short = "Keyboard TenZ edition";
+        assert_eq!(fitting(short), short);
+        let full = [b'W'; STRING_UNITS];
+        let full = core::str::from_utf8(&full).unwrap();
+        assert_eq!(fitting(full), full);
+        let long = [b'W'; STRING_UNITS + 1];
+        assert_eq!(fitting(core::str::from_utf8(&long).unwrap()), full);
+        let mut split = [b'W'; STRING_UNITS + 3];
+        split[STRING_UNITS - 1..].copy_from_slice("\u{1F600}".as_bytes());
+        assert_eq!(
+            fitting(core::str::from_utf8(&split).unwrap()),
+            &full[..STRING_UNITS - 1]
+        );
+    }
 }

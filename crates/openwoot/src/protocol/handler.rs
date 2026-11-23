@@ -3,6 +3,7 @@ use core::{
     pin::{Pin, pin},
 };
 
+use embedded_hal_async::delay::DelayNs;
 use openwoot_protocol::{
     ERROR_KEY, Endpoint, Key, Message, VarKey, Version, WireError,
     configuration::{Rejection, Validate},
@@ -21,13 +22,15 @@ use openwoot_protocol::{
     },
     gamepad, keys, lightbar,
     profile::{LayerRef, Slot},
+    stock::Status,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
 use super::{
-    Configuration, StockIdentity,
+    Configuration, StockIdentity, Untimed,
     stock::{self, Responder},
     stock_control::{KeyMatrix, StockControl},
+    timing::bounded,
 };
 use crate::{
     diagnostics::Readout,
@@ -111,10 +114,20 @@ impl<C: Configuration> Handler<C> {
     }
 
     pub async fn respond<'a>(&mut self, request: &[u8], response: &'a mut [u8]) -> Answer<'a> {
+        self.respond_within(request, response, None::<&mut Untimed>)
+            .await
+    }
+
+    pub(super) async fn respond_within<'a>(
+        &mut self,
+        request: &[u8],
+        response: &'a mut [u8],
+        mut delay: Option<&mut impl DelayNs>,
+    ) -> Answer<'a> {
         let message = match decode_message(request) {
             Ok(Some(message)) => message,
             Ok(None) => {
-                self.stock_control().apply_output(request).await;
+                bounded(delay, self.stock_control().apply_output(request)).await;
                 return Answer::NONE;
             }
             Err(_) => return Answer::NONE,
@@ -127,8 +140,16 @@ impl<C: Configuration> Handler<C> {
             };
         };
         let configuration = &mut self.configuration;
-        let mut length =
-            keyboard_endpoints(key, self.version, configuration, &message, response).await;
+        let mut handover = None;
+        let mut length = keyboard_endpoints(
+            key,
+            self.version,
+            configuration,
+            &message,
+            response,
+            &mut handover,
+        )
+        .await;
         if length.is_none() {
             length = profile_endpoints(key, configuration, &message, response).await;
         }
@@ -136,12 +157,22 @@ impl<C: Configuration> Handler<C> {
             length = host_endpoints(key, self.host, configuration, &message, response).await;
         }
         if length.is_none() {
+            let served = bounded(
+                delay.as_deref_mut(),
+                host_control_endpoints(key, self.host_control, configuration, &message, response),
+            )
+            .await;
             length =
-                host_control_endpoints(key, self.host_control, configuration, &message, response)
-                    .await;
+                served.unwrap_or_else(|| Some(fail(&message, &WireError::FailedToSpawn, response)));
         }
         if length.is_none() {
-            length = sensor_endpoints(key, self.sensors, configuration, &message, response).await;
+            let served = bounded(
+                delay,
+                sensor_endpoints(key, self.sensors, configuration, &message, response),
+            )
+            .await;
+            length =
+                served.unwrap_or_else(|| Some(fail(&message, &WireError::FailedToSpawn, response)));
         }
         if length.is_none()
             && let Some(readout) = self.diagnostics
@@ -149,16 +180,19 @@ impl<C: Configuration> Handler<C> {
             length = diagnostics_endpoint(key, readout, configuration, &message, response).await;
         }
         let length = length.unwrap_or_else(|| fail(&message, &WireError::UnknownKey, response));
-        let handover = if key == EnterUpdateMode::REQ_KEY {
-            Some(Handover::UpdateMode(HANDOVER_OPTION))
-        } else if key == Restart::REQ_KEY {
-            Some(Handover::Restart(HANDOVER_OPTION))
-        } else {
-            None
-        };
+        let reply = reply(response, length);
         Answer {
-            reply: reply(response, length),
-            handover,
+            reply,
+            handover: handover.filter(|_| reply.is_some()),
+        }
+    }
+
+    pub(super) async fn end_session(&self, delay: Option<&mut impl DelayNs>) {
+        if let Some(sensors) = self.sensors {
+            sensors.set_raw_scanning(false);
+        }
+        if let Some(host_control) = self.host_control {
+            bounded(delay, host_control.leave()).await;
         }
     }
 
@@ -166,11 +200,14 @@ impl<C: Configuration> Handler<C> {
         &self,
         request: FeatureRequest,
         response: &'a mut [u8],
+        delay: Option<&mut impl DelayNs>,
     ) -> Answer<'a> {
-        if let FeatureRequest::Command(command) = request
-            && let Some(status) = self.stock_control().answer(command).await
-        {
-            return stock::reply(command.command, status, &[], response);
+        if let FeatureRequest::Command(command) = request {
+            match bounded(delay, self.stock_control().answer(command)).await {
+                Some(Some(status)) => return stock::reply(command.command, status, &[], response),
+                Some(None) => {}
+                None => return stock::reply(command.command, Status::Busy, &[], response),
+            }
         }
         self.stock.answer(request, response)
     }
@@ -232,11 +269,16 @@ async fn keyboard_endpoints<C: Configuration>(
     configuration: &mut C,
     message: &Message<'_>,
     response: &mut [u8],
+    handover: &mut Option<Handover>,
 ) -> Option<Option<usize>> {
     dispatch!(key, configuration, message, response;
         plain GetVersion => async |_, ()| version,
-        plain EnterUpdateMode => async |_, ()| (),
-        plain Restart => async |_, ()| (),
+        plain EnterUpdateMode => async |_, ()| {
+            *handover = Some(Handover::UpdateMode(HANDOVER_OPTION));
+        },
+        plain Restart => async |_, ()| {
+            *handover = Some(Handover::Restart(HANDOVER_OPTION));
+        },
         plain GetCapabilities => async |configuration, ()| configuration.capabilities(),
         plain GetDeviceSettings => async |configuration, ()| configuration.device_settings().await,
         checked SetDeviceSettings => async |configuration, settings| {
@@ -451,7 +493,7 @@ where
     E::Request: DeserializeOwned,
     E::Response: Serialize,
 {
-    let Ok(request) = postcard::from_bytes::<E::Request>(message.body) else {
+    let Some(request) = decode::<E::Request>(message.body) else {
         return fail(message, &WireError::DeserFailed, response);
     };
     let answer = handle(configuration, request).await;
@@ -497,7 +539,7 @@ where
     E::Request: DeserializeOwned,
     T: Empty + Serialize,
 {
-    let Ok(request) = postcard::from_bytes::<E::Request>(message.body) else {
+    let Some(request) = decode::<E::Request>(message.body) else {
         return fail(message, &WireError::DeserFailed, response);
     };
     let mut value = T::empty();
@@ -506,6 +548,13 @@ where
     match encode_message(&message.reply_header(E::RESP_KEY), &answer, response) {
         Ok(encoded) => Some(encoded.len()),
         Err(_) => fail(message, &WireError::SerFailed, response),
+    }
+}
+
+fn decode<T: DeserializeOwned>(body: &[u8]) -> Option<T> {
+    match postcard::take_from_bytes(body) {
+        Ok((request, [])) => Some(request),
+        _ => None,
     }
 }
 

@@ -12,7 +12,7 @@ use openwoot_drivers::spi_nor::Identification;
 use openwoot_protocol::{FirmwareVersion, PROTOCOL_VERSION, Version, lighting::Effects, report};
 
 use crate::{
-    lighting::{COLUMNS, ROWS, base_color, lighting},
+    lighting::{COLUMNS, MAP, ROWS, VARIANT, base_color, lighting},
     support::{
         EXAMPLE_SERIAL, Host, IDENTITY, KeyMatrix, Outcome, Recorder, poll, setup, stock_identity,
     },
@@ -96,11 +96,14 @@ fn exchange<C: Configuration>(
             ),
             report,
         ));
-        let _ = poll(pin!(channel.serve(
-            handler,
-            state.feature_requests(),
-            &mut keyboard
-        )));
+        assert_eq!(
+            poll(pin!(channel.serve(
+                handler,
+                state.feature_requests(),
+                &mut keyboard
+            ))),
+            None
+        );
         replies.push(host.take_sent(CHANNEL_IN).concat());
     }
     Exchange {
@@ -487,6 +490,7 @@ fn sdk_set_all_colors_output_report_paints_every_key_from_the_21_column_map() {
     HOST_CONTROL.apply(&mut lighting, 0);
     assert!(lighting.host_control());
     let mut painted = 0;
+    let mut with_led = 0;
     for row in 0..ROWS {
         for column in 0..COLUMNS {
             let key = Key::new(u8::try_from(row).unwrap(), u8::try_from(column).unwrap());
@@ -495,9 +499,17 @@ fn sdk_set_all_colors_output_report_paints_every_key_from_the_21_column_map() {
                 assert_eq!(color, expected, "row {row} column {column}");
                 painted += 1;
             }
+            if VARIANT
+                .led(row, column)
+                .and_then(|led| MAP.position(led))
+                .is_some()
+            {
+                with_led += 1;
+            }
         }
     }
-    assert!(painted > 80, "{painted} keys");
+    assert!(with_led > 0);
+    assert_eq!(painted, with_led);
 }
 
 #[test]
@@ -511,4 +523,80 @@ fn a_short_sdk_set_all_colors_report_is_ignored() {
     let mut lighting = lighting(255, Effects::new());
     HOST_CONTROL.apply(&mut lighting, 0);
     assert!(!lighting.host_control());
+}
+
+#[test]
+fn reset_to_update_mode_needs_feature_report_1_with_at_least_its_seven_bytes() {
+    let exchange = set_reports(
+        stock_identity(None),
+        &[
+            (0x0300, feature(2, 0)),
+            (0x0300, feature(2, 0)[1..].to_vec()),
+            (0x0307, feature(2, 0)),
+            (0x03FF, feature(2, 0)),
+            (FEATURE_REPORT_1, vec![1, 0xD1, 0xDA, 2]),
+            (FEATURE_REPORT_1, vec![0xD1, 0xDA, 2]),
+            (FEATURE_REPORT_1, Vec::new()),
+            (FEATURE_REPORT_1, vec![1, 0xDA, 0xD1, 2, 0, 0, 0, 0]),
+            (OUTPUT_REPORT_1, feature(2, 0)),
+        ],
+    );
+    let mut expected = vec![Some(Outcome::Rejected); 7];
+    expected.extend([Some(Outcome::Accepted); 2]);
+    assert_eq!(exchange.outcomes, expected);
+    assert_eq!(
+        exchange.replies.concat(),
+        input_report(&[0xD1, 0xDA, 0x02, 0xFF, 0x00, 0x00])
+    );
+    assert_eq!(exchange.keyboard.update_mode_options, []);
+}
+
+#[test]
+fn a_padded_reset_to_update_mode_uses_its_first_seven_bytes_as_stock_does() {
+    for length in [9, 64, 128] {
+        let mut padded = feature(2, 0);
+        padded.resize(length, 0);
+        let exchange = set_reports(stock_identity(None), &[(FEATURE_REPORT_1, padded)]);
+        assert_eq!(
+            exchange.outcomes,
+            [Some(Outcome::Accepted)],
+            "{length} bytes"
+        );
+        assert_eq!(exchange.keyboard.update_mode_options, [0], "{length} bytes");
+    }
+    let mut without_id = feature(2, 0).split_off(1);
+    without_id.resize(32, 0xA5);
+    let exchange = set_reports(stock_identity(None), &[(FEATURE_REPORT_1, without_id)]);
+    assert_eq!(exchange.outcomes, [Some(Outcome::Accepted)]);
+    assert_eq!(exchange.keyboard.update_mode_options, [0]);
+}
+
+#[test]
+fn a_stock_command_arriving_at_a_full_queue_is_stalled_instead_of_dropped() {
+    let host = Host::default();
+    let state = HostState::new();
+    let mut resources = Resources::new();
+    let mut device = build(
+        host.driver(),
+        Face::default(),
+        IDENTITY,
+        &mut resources,
+        &state,
+    );
+    let mut run = pin!(device.usb.run());
+    host.attach(run.as_mut());
+    let ping = feature(0, 0);
+    let request = setup(
+        CLASS_INTERFACE_OUT,
+        SET_REPORT,
+        FEATURE_REPORT_1,
+        CHANNEL_INTERFACE,
+        8,
+    );
+    let outcomes: Vec<_> = (0..5)
+        .map(|_| host.control_out(run.as_mut(), request, &ping))
+        .collect();
+    let mut expected = vec![Some(Outcome::Accepted); 4];
+    expected.push(Some(Outcome::Rejected));
+    assert_eq!(outcomes, expected);
 }

@@ -119,7 +119,9 @@ impl HostState {
         self.xinput_player.store(NO_PLAYER, Ordering::Relaxed);
         if configured {
             self.key_reports.store(true, Ordering::Relaxed);
+            self.gamepad_detection.store(false, Ordering::Relaxed);
         }
+        self.feature_requests.end_session();
         self.configuration_changes.signal(configured);
     }
 
@@ -152,14 +154,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn configuring_turns_key_reports_back_on_and_forgets_the_player() {
+    fn configuring_turns_key_reports_back_on_ends_detection_and_forgets_the_player() {
         let host = HostState::new();
         host.set_key_reports(false);
+        host.set_gamepad_detection(true);
         host.set_xinput_player(2);
         assert!(!host.key_reports());
+        assert!(host.gamepad_detection());
         assert_eq!(host.xinput_player(), Some(2));
         host.set_configured(true);
         assert!(host.key_reports());
+        assert!(!host.gamepad_detection());
         assert_eq!(host.xinput_player(), None);
     }
 
