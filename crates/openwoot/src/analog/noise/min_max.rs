@@ -15,16 +15,18 @@ pub struct MinMax {
 
 impl Default for MinMax {
     fn default() -> Self {
-        Self {
-            max: 0,
-            min: MIN_RESET,
-            welford: Welford::new(),
-            state: NoiseState::Idle,
-        }
+        Self::IDLE
     }
 }
 
 impl NoiseStatistics for MinMax {
+    const IDLE: Self = Self {
+        max: 0,
+        min: MIN_RESET,
+        welford: Welford::new(),
+        state: NoiseState::Idle,
+    };
+
     fn restart(&mut self) {
         *self = Self {
             state: NoiseState::Sampling,
@@ -38,7 +40,8 @@ impl NoiseStatistics for MinMax {
         }
         if magnitude > self.max {
             self.max = magnitude;
-        } else if magnitude < self.min {
+        }
+        if magnitude < self.min {
             self.min = magnitude;
         }
         self.welford.add(f32::from(magnitude));
@@ -46,17 +49,15 @@ impl NoiseStatistics for MinMax {
         if count <= Welford::WARMUP_SAMPLES {
             return NoiseState::Sampling;
         }
-        if !self.welford.check_due() {
-            if count >= SAMPLES_DONE {
-                self.state = NoiseState::Done;
-            }
+        let complete = count >= SAMPLES_DONE;
+        if !complete && !self.welford.check_due() {
             return self.state;
         }
         if self.welford.check_drifts() {
             self.state = NoiseState::Unstable;
             return self.state;
         }
-        if count >= SAMPLES_DONE {
+        if complete {
             self.state = NoiseState::Done;
         }
         self.state
@@ -131,6 +132,28 @@ mod tests {
             }
         }));
         assert_eq!(state, NoiseState::Unstable);
+    }
+
+    #[test]
+    fn a_level_change_in_the_last_tenth_of_the_window_is_unstable() {
+        for change_at in [905, 950, 999] {
+            let (statistics, state) = window((0..1000_u16).map(|index| {
+                if index < change_at {
+                    1100 + index % 3
+                } else {
+                    300 + index % 3
+                }
+            }));
+            assert_eq!(state, NoiseState::Unstable, "change at {change_at}");
+            assert_eq!(statistics.welford.count(), 1000);
+        }
+    }
+
+    #[test]
+    fn the_first_sample_counts_for_the_minimum_too() {
+        let (statistics, state) = window((0..1000_u16).map(|index| 4 + u16::from(index != 0)));
+        assert_eq!(state, NoiseState::Done);
+        assert_eq!((statistics.min, statistics.max), (4, 5));
     }
 
     #[test]

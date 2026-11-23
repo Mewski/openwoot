@@ -19,6 +19,7 @@ mod scanner;
 mod sensing;
 mod sensor;
 mod sensor_readout;
+mod sensors;
 mod shared;
 mod travel;
 
@@ -37,5 +38,6 @@ pub use sensing::Sensing;
 pub use sensor::Sensor;
 use sensor::{Context, Update};
 pub use sensor_readout::SensorReadout;
+pub use sensors::Sensors;
 pub use shared::Shared;
 pub use travel::Travel;

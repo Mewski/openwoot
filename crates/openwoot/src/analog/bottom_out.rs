@@ -18,6 +18,7 @@ const HEADROOM: u16 = 240;
 const PLATEAU_LIMIT_NUMERATOR: u32 = 229;
 const PLATEAU_LIMIT_DENOMINATOR: u32 = 255;
 const CONFIDENCE_ADOPT: u16 = 149;
+const RECOVERY_HITS: u8 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct BottomOut {
@@ -55,6 +56,8 @@ struct Tracker {
     plateau_min: u16,
     plateau_mean: f32,
     plateau_samples: u16,
+    recovery_hits: u8,
+    recovery_floor: u16,
 }
 
 impl Tracker {
@@ -86,6 +89,8 @@ impl Tracker {
             plateau_min: 0,
             plateau_mean: 0.0,
             plateau_samples: 0,
+            recovery_hits: 0,
+            recovery_floor: 0,
         }
     }
 }
@@ -233,14 +238,14 @@ impl BottomOut {
             if u32::from(tracker.max_plateau) < plateau {
                 tracker.max_plateau = plateau as u16;
             }
-            reference
+            let recovered = tracker.recovered_reference(reference, plateau);
+            self.reference = recovered as u16;
+            recovered
         } else {
+            tracker.recovery_hits = 0;
             let strength_effective = u32::from(tracker.strength_effective);
             let penalty = (90 * strength_effective / 255 + 60) as u16;
             tracker.score = tracker.score.saturating_sub(penalty);
-            if u32::from(tracker.max_plateau) < plateau {
-                tracker.max_plateau = plateau as u16;
-            }
             if self.reference == VALUE_NONE {
                 if plateau < u32::from(rest_level).midpoint(u32::from(bottom_level)) {
                     self.tracker.stroke_active = false;
@@ -268,6 +273,9 @@ impl BottomOut {
             drop = u32::from(reference.wrapping_sub(plateau) as u16);
             self.reference = plateau as u16;
             let tracker = &mut self.tracker;
+            if u32::from(tracker.max_plateau) < plateau {
+                tracker.max_plateau = plateau as u16;
+            }
             let bonus = (-60 * strength_effective.cast_signed() / 255 + 100) as u16;
             tracker.score = add_capped(tracker.score, bonus, SCORE_MAX);
             plateau
@@ -356,6 +364,25 @@ impl BottomOut {
 }
 
 impl Tracker {
+    fn recovered_reference(&mut self, reference: u32, plateau: u32) -> u32 {
+        if plateau <= reference + u32::from(HEADROOM) {
+            self.recovery_hits = 0;
+            return reference;
+        }
+        let floor = if self.recovery_hits == 0 {
+            plateau
+        } else {
+            plateau.min(u32::from(self.recovery_floor))
+        };
+        self.recovery_floor = floor as u16;
+        self.recovery_hits = self.recovery_hits.wrapping_add(1);
+        if self.recovery_hits < RECOVERY_HITS {
+            return reference;
+        }
+        self.recovery_hits = 0;
+        floor
+    }
+
     fn follow_stroke(&mut self, value: u16, now_us: u16) {
         let velocity = self.velocity;
         let peak = self.stroke_peak_velocity;
@@ -571,6 +598,74 @@ mod tests {
         assert_eq!(tracker.estimate, 973);
         assert_eq!(tracker.tracker.confidence, 91);
         assert_eq!(bottom, 973);
+    }
+
+    fn presses<const COUNT: usize>(depths: [u16; COUNT]) -> impl Iterator<Item = (u16, u16)> {
+        depths.into_iter().zip(0_u16..).flat_map(|(depth, index)| {
+            let start_us = index.wrapping_mul(41_100);
+            core::iter::once((REST, start_us)).chain(press(depth, start_us.wrapping_add(1100)))
+        })
+    }
+
+    fn walk_down(tracker: &mut BottomOut, bottom: &mut u16, holds: usize) {
+        stroke(tracker, bottom, presses([1100]));
+        let mut depth = 1100_u16;
+        for _ in 0..holds {
+            depth -= depth * 3 / 200;
+            stroke(tracker, bottom, presses([depth]));
+        }
+    }
+
+    #[test]
+    fn shallow_holds_before_the_first_bottom_out_leave_the_bottom_level_alone() {
+        let mut tracker = BottomOut::new();
+        let mut bottom = 1200;
+        stroke(&mut tracker, &mut bottom, presses([520, 520]));
+        assert_eq!(bottom, 1200);
+        assert_eq!(tracker.reference, VALUE_NONE);
+        assert_eq!(tracker.tracker.max_plateau, 0);
+        stroke(&mut tracker, &mut bottom, presses([1100]));
+        assert_eq!((tracker.reference, bottom), (1100, 973));
+    }
+
+    #[test]
+    fn three_bottom_outs_far_above_a_walked_down_reference_raise_it_again() {
+        let mut tracker = BottomOut::new();
+        let mut bottom = 1200;
+        walk_down(&mut tracker, &mut bottom, 24);
+        assert_eq!((tracker.reference, bottom), (775, 773));
+        stroke(&mut tracker, &mut bottom, presses([1100, 1100]));
+        assert_eq!((tracker.reference, bottom), (775, 773));
+        stroke(&mut tracker, &mut bottom, presses([1100]));
+        assert_eq!((tracker.reference, bottom), (1100, 973));
+    }
+
+    #[test]
+    fn a_plateau_within_the_headroom_between_deep_ones_restarts_the_recovery() {
+        let mut tracker = BottomOut::new();
+        let mut bottom = 1200;
+        walk_down(&mut tracker, &mut bottom, 24);
+        stroke(
+            &mut tracker,
+            &mut bottom,
+            presses([1100, 1100, 775, 1100, 1100]),
+        );
+        assert_eq!((tracker.reference, bottom), (775, 773));
+        stroke(&mut tracker, &mut bottom, presses([1100]));
+        assert_eq!((tracker.reference, bottom), (1100, 973));
+    }
+
+    #[test]
+    fn bottom_outs_within_the_headroom_keep_the_reference() {
+        let mut tracker = BottomOut::new();
+        let mut bottom = 1200;
+        stroke(
+            &mut tracker,
+            &mut bottom,
+            presses([1100, 1050, 1100, 1100, 1100, 1100]),
+        );
+        assert_eq!(tracker.reference, 1050);
+        assert_eq!(tracker.estimate, 973);
     }
 
     #[test]

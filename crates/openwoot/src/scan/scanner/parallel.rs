@@ -70,6 +70,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
 
         if cycle_end {
             self.converter.end_cycle(CYCLE_PERIOD_US);
+            self.cycle_finished = true;
             return Outcome::Finished;
         }
         Outcome::Running

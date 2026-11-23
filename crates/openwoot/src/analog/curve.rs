@@ -12,10 +12,10 @@ impl Curve {
     pub(super) const VALUE_MAX: u32 = 0x3FFF;
 
     #[must_use]
-    pub(super) fn number(number: u8) -> Self {
-        match CURVES.get(usize::from(number)) {
-            Some(points) => Self(points),
-            None => Self(&CURVES[0]),
+    pub(super) const fn number(number: u8) -> Self {
+        match CURVES.split_at_checked(number as usize) {
+            Some((_, [points, ..])) => Self(points),
+            _ => Self(&CURVES[0]),
         }
     }
 

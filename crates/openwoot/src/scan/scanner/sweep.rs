@@ -20,9 +20,11 @@ impl Sweep {
 
 impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS, ADDRESSES> {
     pub fn start_sweep(&mut self) {
-        if self.mode_is_parallel() && self.sweep.is_none() {
+        if self.mode_is_parallel() || self.sweep.is_some_and(Sweep::is_parallel) {
             self.set_mode(Mode::Single);
         }
+        self.applied = None;
+        self.cycle_finished = true;
         for sensor in self.sensors.iter_mut() {
             sensor.reset_for_sweep();
         }
@@ -40,12 +42,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
 
     #[inline(never)]
     pub(super) fn sweep_step(&mut self, sweep: Sweep) -> Outcome {
-        let samples_left = if sweep.is_parallel() && !self.parallel_ready {
-            sweep.samples_left
-        } else {
-            self.track_sweep_samples(sweep)
-        };
-        let samples_left = samples_left.wrapping_sub(1);
+        let samples_left = self.track_sweep_samples(sweep).wrapping_sub(1);
         if samples_left != 0 {
             self.sweep = Some(Sweep {
                 samples_left,
@@ -91,12 +88,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
         self.input = input;
         if input == 0 {
             next.mode = Mode::Parallel;
-            if self.parallel_ready {
-                self.converter.sweep_enter_parallel(None);
-            } else {
-                self.converter.sweep_enter_parallel(Some(&self.order));
-                self.parallel_ready = true;
-            }
+            self.converter.sweep_enter_parallel(Some(&self.order));
         }
         self.sweep = Some(next);
         self.converter.trigger_after(DELAY_INPUT_US);

@@ -1,6 +1,7 @@
 use openwoot::{
+    analog::NoiseStatistics,
     keys::Key,
-    scan::{Map, Outcome, Position, Scanner, Sensing, Travel},
+    scan::{Map, Outcome, Position, Scanner, Sensing, Sensors, Travel},
 };
 
 use super::simulated::{Bench, Simulated};
@@ -43,8 +44,21 @@ pub(crate) fn wobble(conversion: u32) -> i16 {
     (conversion % 3) as i16
 }
 
+pub(crate) fn sensors<Noise: NoiseStatistics, const INPUTS: usize>()
+-> &'static mut Sensors<Noise, INPUTS> {
+    Box::leak(Box::default())
+}
+
 pub(crate) fn scanner() -> Bench80 {
-    Scanner::new(Simulated::default(), MAP, ORDER)
+    Scanner::new(Simulated::default(), MAP, ORDER, sensors())
+}
+
+pub(crate) fn rest_everywhere(scanner: &mut Bench80, magnitude: u16) {
+    for input in 0..6 {
+        for address in 0..15 {
+            scanner.converter_mut().press(input, address, magnitude);
+        }
+    }
 }
 
 pub(crate) fn calibrate<S: Sensing, const INPUTS: usize, const ADDRESSES: usize>(

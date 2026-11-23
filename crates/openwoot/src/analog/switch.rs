@@ -19,23 +19,29 @@ impl Switch {
 
     #[must_use]
     pub fn new(kind: SwitchModel, travel_offset: Option<u8>) -> Self {
-        let curve = kind.curve();
-        let strength = u32::from(kind.learn_strength());
-        let (curve_end, learn_strength) = match travel_offset {
-            None => (Curve::END_MAX, strength),
-            Some(offset) => {
-                let travel = u32::from(kind.travel());
-                let remaining = u32::from(kind.travel().wrapping_sub(offset));
-                let target = (Curve::VALUE_MAX * remaining / travel) & 0xFFFF;
-                (curve.end_of_travel(target), strength * remaining / travel)
-            }
+        let Some(offset) = travel_offset else {
+            return Self::untuned(kind);
         };
+        let strength = u32::from(kind.learn_strength());
+        let travel = u32::from(kind.travel());
+        let remaining = u32::from(kind.travel().saturating_sub(offset));
+        let target = (Curve::VALUE_MAX * remaining / travel) & 0xFFFF;
+        Self {
+            travel_offset,
+            curve_end: kind.curve().end_of_travel(target),
+            learn_strength: (strength * remaining / travel) as u8,
+            ..Self::untuned(kind)
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn untuned(kind: SwitchModel) -> Self {
         Self {
             kind,
-            travel_offset,
-            curve,
-            curve_end,
-            learn_strength: learn_strength as u8,
+            travel_offset: None,
+            curve: kind.curve(),
+            curve_end: Curve::END_MAX,
+            learn_strength: kind.learn_strength(),
             nominal_bottom: kind.nominal_bottom(),
         }
     }
@@ -77,12 +83,17 @@ impl Switch {
     }
 
     #[must_use]
+    pub(crate) const fn lowest_bottom_level(rest_level: u16) -> u16 {
+        rest_level.saturating_add(MIN_BOTTOM_DISTANCE as u16)
+    }
+
+    #[must_use]
     pub fn travel(&self, value: u16, rest_level: u16, bottom_level: u16) -> u16 {
         if value <= rest_level.wrapping_add(Self::REST_MARGIN) {
             return 0;
         }
         let rest = u32::from(rest_level);
-        let range = u32::from(bottom_level.wrapping_sub(rest_level));
+        let range = u32::from(bottom_level.saturating_sub(rest_level));
         let index_q8 = ((range >> 1).wrapping_add(
             self.curve_end
                 .wrapping_mul(u32::from(value).wrapping_sub(rest)),
@@ -109,5 +120,18 @@ impl Switch {
         TRAVEL_PER_TENTH_MILLIMETRE_UNITS
             .checked_div(u32::from(remaining))
             .unwrap_or(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_untuned_switch_is_the_switch_without_a_travel_offset() {
+        for id in 0..SwitchModel::COUNT {
+            let kind = SwitchModel::new(id).unwrap();
+            assert_eq!(Switch::untuned(kind), Switch::new(kind, None), "{id}");
+        }
     }
 }

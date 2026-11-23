@@ -22,34 +22,34 @@ impl SwitchModel {
     }
 
     #[must_use]
-    pub fn travel(self) -> u8 {
+    pub const fn travel(self) -> u8 {
         self.specification().travel
     }
 
     #[must_use]
-    pub fn group(self) -> u8 {
+    pub const fn group(self) -> u8 {
         self.specification().group
     }
 
     #[must_use]
-    pub fn learn_strength(self) -> u8 {
+    pub const fn learn_strength(self) -> u8 {
         self.specification().learn_strength
     }
 
     #[must_use]
-    pub fn nominal_bottom(self) -> u16 {
+    pub const fn nominal_bottom(self) -> u16 {
         self.specification().nominal_bottom
     }
 
     #[must_use]
-    pub(super) fn curve(self) -> Curve {
+    pub(super) const fn curve(self) -> Curve {
         Curve::number(self.specification().curve)
     }
 
-    fn specification(self) -> &'static Specification {
-        match SPECIFICATIONS.get(usize::from(self.0)) {
-            Some(specification) => specification,
-            None => &SPECIFICATIONS[0],
+    const fn specification(self) -> &'static Specification {
+        match SPECIFICATIONS.split_at_checked(self.0 as usize) {
+            Some((_, [specification, ..])) => specification,
+            _ => &SPECIFICATIONS[0],
         }
     }
 }

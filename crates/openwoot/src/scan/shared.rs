@@ -5,8 +5,6 @@ use core::{
 };
 
 use atomic_waker::AtomicWaker;
-use embassy_futures::yield_now;
-use embassy_time::Instant;
 use spin::mutex::SpinMutex;
 
 use super::{Converter, Outcome, Scanner, Sensing, Travel};
@@ -121,23 +119,12 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Shared<S, INPUTS, 
             .is_some()
     }
 
-    pub async fn run(
-        &self,
-        mut between_cycles: impl FnMut(&mut Scanner<S, INPUTS, ADDRESSES>),
-    ) -> ! {
-        while !self.calibrate().await {
-            yield_now().await;
-        }
-        loop {
-            if self.with(&mut between_cycles).is_none() || !self.cycle(now_ms()).await {
-                yield_now().await;
-            }
-        }
-    }
-
     #[inline(always)]
     pub fn on_conversion(&self) {
         S::Converter::acknowledge();
+        if !self.is_running() {
+            return;
+        }
         let outcome = match self.scanner.try_lock() {
             Some(mut slot) => match slot.as_mut() {
                 Some(scanner) => scanner.on_conversion(&self.travel),
@@ -161,8 +148,4 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> core::fmt::Debug
             .field("running", &self.is_running())
             .finish_non_exhaustive()
     }
-}
-
-fn now_ms() -> u32 {
-    Instant::now().as_millis() as u32
 }

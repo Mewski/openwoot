@@ -8,3 +8,4 @@ mod support;
 mod sweep;
 
 pub(crate) use simulated::{Bench, Operation, Simulated};
+pub(crate) use support::sensors;

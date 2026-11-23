@@ -8,14 +8,26 @@ const BAND_PER_DEVIATION: f64 = 2.8;
 const NEW_WEIGHT: f64 = 0.9;
 const REST_OFFSET: u32 = 2;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StandardDeviation {
     welford: Welford,
     average: f32,
     state: NoiseState,
 }
 
+impl Default for StandardDeviation {
+    fn default() -> Self {
+        Self::IDLE
+    }
+}
+
 impl NoiseStatistics for StandardDeviation {
+    const IDLE: Self = Self {
+        welford: Welford::new(),
+        average: 0.0,
+        state: NoiseState::Idle,
+    };
+
     fn restart(&mut self) {
         *self = Self {
             state: NoiseState::Sampling,

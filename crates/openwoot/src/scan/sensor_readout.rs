@@ -15,7 +15,7 @@ pub struct SensorReadout {
     raw_scanning: AtomicBool,
     request: Signal<CriticalSectionRawMutex, Reading>,
     values: Mutex<CriticalSectionRawMutex, RefCell<Values>>,
-    published: Signal<CriticalSectionRawMutex, ()>,
+    published: Signal<CriticalSectionRawMutex, Reading>,
 }
 
 impl SensorReadout {
@@ -68,7 +68,7 @@ impl SensorReadout {
                 }
             }
         });
-        self.published.signal(());
+        self.published.signal(reading);
     }
 
     pub(crate) fn set_raw_scanning(&self, enabled: bool) {
@@ -78,7 +78,7 @@ impl SensorReadout {
     pub(crate) async fn read(&self, reading: Reading, values: &mut Values) {
         self.published.reset();
         self.request.signal(reading);
-        self.published.wait().await;
+        while self.published.wait().await != reading {}
         self.values.lock(|cell| {
             if let Ok(published) = cell.try_borrow() {
                 values.clone_from(&published);
@@ -99,5 +99,28 @@ impl core::fmt::Debug for SensorReadout {
             .debug_struct("SensorReadout")
             .field("raw_scanning", &self.raw_scanning())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::{
+        pin::pin,
+        task::{Context, Waker},
+    };
+
+    use super::*;
+
+    #[test]
+    fn a_publication_of_another_reading_does_not_answer_a_read() {
+        let readout = SensorReadout::new();
+        let mut values = Values::new();
+        let mut read = pin!(readout.read(Reading::Travel, &mut values));
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(read.as_mut().poll(&mut context).is_pending());
+        readout.published.signal(Reading::RestLevel);
+        assert!(read.as_mut().poll(&mut context).is_pending());
+        readout.published.signal(Reading::Travel);
+        assert!(read.as_mut().poll(&mut context).is_ready());
     }
 }

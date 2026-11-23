@@ -28,7 +28,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
             Advance::NextBatch => self.restart_batch(),
             Advance::PassComplete => {
                 for sensor in self.sensors.iter_mut() {
-                    sensor.stop_recalibrating();
+                    sensor.finish_pass();
                 }
             }
         }

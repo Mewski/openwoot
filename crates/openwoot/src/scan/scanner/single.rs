@@ -24,23 +24,24 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
             sensor.set_filtered(value);
         }
 
+        let current = Position::new(self.input, self.address);
         let next = self
             .successors
-            .get(Position::new(self.input, self.address))
+            .get(current)
             .copied()
             .unwrap_or(Position::new(0, 0));
+        let cycle_end = next.index() <= current.index();
         self.address = next.address();
         self.converter.select_address(next.address());
         let previous = self.input;
-        let mut cycle_end = false;
         if previous == next.input() {
-            self.converter.trigger_after(DELAY_SAME_INPUT_US);
+            if !cycle_end {
+                self.converter.trigger_after(DELAY_SAME_INPUT_US);
+            }
         } else {
             self.converter.select_input(previous, next.input());
             self.input = next.input();
-            if next.input() == 0 {
-                cycle_end = true;
-            } else {
+            if !cycle_end {
                 self.converter.trigger_after(DELAY_INPUT_US);
             }
         }
@@ -52,6 +53,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
         }
         if cycle_end {
             self.converter.end_cycle(CYCLE_PERIOD_US);
+            self.cycle_finished = true;
             return Outcome::Finished;
         }
         Outcome::Running

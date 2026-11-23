@@ -1,8 +1,12 @@
-use openwoot::{analog::ReboundState, keys::Key, scan::Travel};
+use openwoot::{
+    analog::ReboundState,
+    keys::Key,
+    scan::{Map, Mode, Scanner, Travel},
+};
 
 use super::{
-    simulated::Operation,
-    support::{Bench80, KEYS, PRESSED, cycle, event_travels, scanner, settled},
+    simulated::{Operation, Simulated},
+    support::{Bench80, KEYS, PRESSED, cycle, event_travels, scanner, sensors, settled},
 };
 
 #[test]
@@ -123,7 +127,7 @@ fn the_rebound_filter_reports_a_bounce_after_a_release_as_no_travel() {
 }
 
 #[test]
-fn a_single_input_cycle_of_the_80he_map_samples_every_key_in_513_microseconds() {
+fn a_single_input_cycle_of_85_conversions_samples_every_key_in_513_microseconds() {
     const CONVERSION_NS: u32 = 375;
     let mut scanner = scanner();
     let travel = Travel::new();
@@ -140,4 +144,86 @@ fn a_single_input_cycle_of_the_80he_map_samples_every_key_in_513_microseconds() 
         .sum();
     assert_eq!((conversions, delays_us), (85, 481));
     assert_eq!(delays_us * 1000 + conversions * CONVERSION_NS, 512_875);
+}
+
+#[test]
+fn a_release_during_the_settling_cycles_of_a_mode_switch_is_reported_when_they_end() {
+    let mut scanner = scanner();
+    let travel = Travel::new();
+    let mut now_ms = settled(&mut scanner, &travel);
+    let key = Key { row: 3, column: 4 };
+    scanner
+        .converter_mut()
+        .press(PRESSED.input(), PRESSED.address(), 700);
+    cycle(&mut scanner, &travel, now_ms);
+    assert_eq!(event_travels(&scanner), [(key, 3386)]);
+    scanner.request_mode(Mode::Parallel);
+    now_ms += 1;
+    cycle(&mut scanner, &travel, now_ms);
+    assert!(scanner.is_settling());
+    scanner
+        .converter_mut()
+        .press(PRESSED.input(), PRESSED.address(), 0);
+    let mut reported = Vec::new();
+    for _ in 0..10 {
+        now_ms += 1;
+        cycle(&mut scanner, &travel, now_ms);
+        reported.extend(event_travels(&scanner));
+    }
+    assert!(!scanner.is_settling());
+    assert_eq!(reported, [(key, 0)]);
+    assert_eq!(travel.get(PRESSED), 0);
+}
+
+#[test]
+fn a_key_that_is_down_when_raw_scanning_starts_is_reported_at_rest_once() {
+    let mut scanner = scanner();
+    let travel = Travel::new();
+    let mut now_ms = settled(&mut scanner, &travel);
+    let key = Key { row: 3, column: 4 };
+    scanner
+        .converter_mut()
+        .press(PRESSED.input(), PRESSED.address(), 700);
+    cycle(&mut scanner, &travel, now_ms);
+    assert_eq!(event_travels(&scanner), [(key, 3386)]);
+    scanner.set_raw_scanning(true);
+    now_ms += 1;
+    cycle(&mut scanner, &travel, now_ms);
+    assert_eq!(event_travels(&scanner), [(key, 0)]);
+    assert_eq!(travel.get(PRESSED), 0);
+    scanner
+        .converter_mut()
+        .press(PRESSED.input(), PRESSED.address(), 0);
+    now_ms += 1;
+    cycle(&mut scanner, &travel, now_ms);
+    assert!(scanner.events().is_empty());
+    scanner.set_raw_scanning(false);
+    for _ in 0..3 {
+        now_ms += 1;
+        cycle(&mut scanner, &travel, now_ms);
+        assert!(scanner.events().is_empty());
+    }
+    assert_eq!(travel.get(PRESSED), 0);
+}
+
+#[test]
+fn a_map_without_keys_on_the_first_multiplexer_ends_its_cycle_at_the_last_key() {
+    let mut codes = [[0xFF; 16]; 6];
+    for (row, keys) in (0..).zip(codes.iter_mut()).skip(1) {
+        for (column, code) in (0..15).zip(keys.iter_mut()) {
+            *code = Key { row, column }.code();
+        }
+    }
+    let mut scanner: Bench80 = Scanner::new(
+        Simulated::default(),
+        Map::from_codes(codes),
+        [0, 1, 2, 3, 4, 5],
+        sensors(),
+    );
+    let travel = Travel::new();
+    let now_ms = settled(&mut scanner, &travel);
+    assert_eq!(cycle(&mut scanner, &travel, now_ms), 1 + 5 * 15);
+    scanner.converter_mut().press(1, 0, 700);
+    assert_eq!(cycle(&mut scanner, &travel, now_ms + 1), 1 + 5 * 15);
+    assert_eq!(event_travels(&scanner), [(Key { row: 1, column: 0 }, 3386)]);
 }

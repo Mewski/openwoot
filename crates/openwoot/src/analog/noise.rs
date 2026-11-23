@@ -24,6 +24,8 @@ pub struct Calibration {
 }
 
 pub trait NoiseStatistics: Clone + Default {
+    const IDLE: Self;
+
     fn restart(&mut self);
 
     fn add(&mut self, magnitude: u16) -> NoiseState;

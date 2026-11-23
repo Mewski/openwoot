@@ -23,6 +23,8 @@ impl Default for Events {
 }
 
 impl Events {
+    pub(super) const CAPACITY: usize = CAPACITY;
+
     #[must_use]
     pub const fn new() -> Self {
         const EMPTY: Event = Event {

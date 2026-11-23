@@ -7,8 +7,11 @@ const NOISE_BAND_UNMEASURED: u16 = 0xFFFF;
 const ACTIVITY_MARGIN: u32 = 20;
 const SWEEP_BAND_FACTOR: f32 = 1.2;
 const SWEEP_SMALL_BAND: u16 = 4;
+const SWEEP_QUIET_BAND: u16 = 1;
 const SWEEP_PARALLEL_REST_MARGIN: u16 = 5;
 const SWEEP_MINIMUM_RESET: u16 = 0x0FFF;
+const UNSTABLE_WINDOWS_SKIPPED: u8 = 3;
+const STILL_ACTIVITY_SAMPLES: u16 = 10_000;
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Context {
@@ -39,6 +42,9 @@ pub struct Sensor<Noise> {
     recalibrating: bool,
     switch: Switch,
     holds_events: bool,
+    reported: bool,
+    unstable_windows: u8,
+    still_samples: u16,
 }
 
 impl<Noise: NoiseStatistics> Default for Sensor<Noise> {
@@ -49,7 +55,7 @@ impl<Noise: NoiseStatistics> Default for Sensor<Noise> {
 
 impl<Noise: NoiseStatistics> Sensor<Noise> {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         let unmeasured = Calibration {
             rest_level: 0,
             noise_band: 0,
@@ -64,10 +70,13 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
             parallel: unmeasured,
             bottom_out: BottomOut::new(),
             rebound: Rebound::new(),
-            noise: Noise::default(),
+            noise: Noise::IDLE,
             recalibrating: false,
-            switch: Switch::new(SwitchModel::DEFAULT, None),
+            switch: Switch::untuned(SwitchModel::DEFAULT),
             holds_events: false,
+            reported: false,
+            unstable_windows: 0,
+            still_samples: 0,
         }
     }
 
@@ -143,12 +152,14 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
         self.bottom_out.reset();
         self.rebound = Rebound::new();
         self.recalibrating = false;
+        self.unstable_windows = 0;
     }
 
     pub(super) const fn track_sweep(&mut self, magnitude: u16) {
         if self.rest_level < magnitude {
             self.rest_level = magnitude;
-        } else if self.noise_band > magnitude {
+        }
+        if self.noise_band > magnitude {
             self.noise_band = magnitude;
         }
     }
@@ -156,7 +167,12 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
     pub(super) fn finish_sweep(&mut self, mode: Mode) {
         let mut rest = self.rest_level;
         let spread = f32::from(rest) - f32::from(self.noise_band);
-        let band = (libm::ceilf(spread * 0.5) * SWEEP_BAND_FACTOR) as u32 as u16;
+        let measured = (libm::ceilf(spread * 0.5) * SWEEP_BAND_FACTOR) as u32 as u16;
+        let band = if measured == 0 && rest != 0 {
+            SWEEP_QUIET_BAND
+        } else {
+            measured
+        };
         self.rest_level = 0;
         self.noise_band = SWEEP_MINIMUM_RESET;
         match mode {
@@ -184,10 +200,16 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
         self.noise_band = calibration.noise_band;
         self.value = 0;
         self.filtered = 0;
+        self.unstable_windows = 0;
     }
 
     pub(super) const fn stop_recalibrating(&mut self) {
         self.recalibrating = false;
+    }
+
+    pub(super) const fn finish_pass(&mut self) {
+        self.recalibrating = false;
+        self.unstable_windows = 0;
     }
 
     pub(super) fn restart_noise(&mut self) {
@@ -195,6 +217,9 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
     }
 
     pub(super) fn poll_recalibration(&mut self) -> bool {
+        if self.unstable_windows >= UNSTABLE_WINDOWS_SKIPPED || self.is_active() {
+            return false;
+        }
         match self.noise.state() {
             NoiseState::Sampling => {
                 if !self.recalibrating {
@@ -249,17 +274,29 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
         };
         if context.raw_scanning {
             self.value = magnitude;
-            return quiet;
+            return if core::mem::take(&mut self.reported) {
+                Update {
+                    travel: Some(0),
+                    activity: false,
+                }
+            } else {
+                quiet
+            };
         }
         let previous = self.value;
         self.value = value;
+        self.still_samples = if value == previous {
+            self.still_samples.saturating_add(1)
+        } else {
+            0
+        };
         let mut activity = self.recalibrating && self.feed_noise(magnitude, context.mode);
         if context.settling {
             return Update { activity, ..quiet };
         }
 
         let threshold = self.rest_threshold();
-        if u32::from(value) > u32::from(threshold) + ACTIVITY_MARGIN && self.is_calibrated() {
+        if self.is_active() && self.still_samples < STILL_ACTIVITY_SAMPLES {
             activity = true;
         }
         let mut rebound = false;
@@ -271,12 +308,14 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
                     self.rebound
                         .detect(threshold, self.bottom_level, value, converter.micros());
             }
-            if previous <= threshold && !self.holds_events {
+            if previous <= threshold && !self.reported && !self.holds_events {
                 return Update { activity, ..quiet };
             }
         }
+        let travel = if rebound { 0 } else { self.travel() };
+        self.reported = travel != 0;
         Update {
-            travel: Some(if rebound { 0 } else { self.travel() }),
+            travel: Some(travel),
             activity,
         }
     }
@@ -286,13 +325,18 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
         match self.noise.add(magnitude) {
             NoiseState::Done => {
                 self.recalibrating = false;
+                self.unstable_windows = 0;
                 let calibration = self.noise.calibration(self.noise_band);
                 self.noise_band = calibration.noise_band;
                 self.rest_level = calibration.rest_level;
                 *self.calibration_mut(mode) = calibration;
                 false
             }
-            NoiseState::Unstable => self.is_calibrated(),
+            NoiseState::Unstable => {
+                self.recalibrating = false;
+                self.unstable_windows = self.unstable_windows.saturating_add(1);
+                self.is_calibrated()
+            }
             NoiseState::Idle | NoiseState::Sampling => false,
         }
     }
@@ -319,7 +363,8 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
         );
         self.bottom_level = self
             .bottom_out
-            .bottom_level(value, self.rest_level, self.bottom_level);
+            .bottom_level(value, self.rest_level, self.bottom_level)
+            .max(Switch::lowest_bottom_level(self.rest_level));
         rebound_filter
             && self
                 .rebound
@@ -344,7 +389,60 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
         self.noise_band != 0 && self.rest_level != 0
     }
 
+    fn is_active(&self) -> bool {
+        u32::from(self.value) > u32::from(self.rest_threshold()) + ACTIVITY_MARGIN
+            && self.is_calibrated()
+    }
+
     const fn rest_threshold(&self) -> u16 {
         self.rest_level.wrapping_add(Switch::REST_MARGIN)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analog::MinMax;
+
+    fn unstable_window(sensor: &mut Sensor<MinMax>) {
+        for index in 0..1000_u16 {
+            if !sensor.is_recalibrating() {
+                break;
+            }
+            let amplitude = index / 50;
+            let magnitude = if index % 2 == 0 {
+                100 + amplitude
+            } else {
+                100 - amplitude
+            };
+            sensor.feed_noise(magnitude, Mode::Single);
+        }
+    }
+
+    #[test]
+    fn a_sensor_whose_windows_stay_unstable_is_left_out_until_the_pass_ends() {
+        let mut sensor = Sensor::<MinMax>::new();
+        for _ in 0..UNSTABLE_WINDOWS_SKIPPED {
+            assert!(sensor.poll_recalibration());
+            unstable_window(&mut sensor);
+            assert_eq!(sensor.noise().state(), NoiseState::Unstable);
+            assert!(!sensor.is_recalibrating());
+        }
+        assert!(!sensor.poll_recalibration());
+        sensor.finish_pass();
+        assert!(sensor.poll_recalibration());
+    }
+
+    #[test]
+    fn a_complete_window_forgets_the_unstable_ones_before_it() {
+        let mut sensor = Sensor::<MinMax>::new();
+        assert!(sensor.poll_recalibration());
+        unstable_window(&mut sensor);
+        assert!(sensor.poll_recalibration());
+        for index in 0..1000_u16 {
+            sensor.feed_noise(100 + index % 3, Mode::Single);
+        }
+        assert_eq!(sensor.noise().state(), NoiseState::Done);
+        assert_eq!(sensor.unstable_windows, 0);
     }
 }

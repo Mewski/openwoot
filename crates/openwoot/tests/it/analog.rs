@@ -70,3 +70,20 @@ fn travel_per_tenth_millimetre_follows_the_remaining_travel() {
         0
     );
 }
+
+#[test]
+fn a_bottom_level_below_the_rest_level_reads_no_travel() {
+    let switch = Switch::new(SwitchModel::DEFAULT, None);
+    assert_eq!(switch.travel(1150, 1100, 1008), 0);
+}
+
+#[test]
+fn a_travel_offset_at_or_beyond_the_switch_travel_leaves_no_travel() {
+    for offset in [66, 67, 200] {
+        let switch = Switch::new(kind(2), Some(offset));
+        assert_eq!(switch.curve_end(), 0);
+        assert_eq!(switch.learn_strength(), 0);
+        assert_eq!(switch.travel(900, 300, 1000), 0);
+        assert_eq!(switch.travel_per_tenth_millimetre(), 0);
+    }
+}

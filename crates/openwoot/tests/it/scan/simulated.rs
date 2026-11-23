@@ -32,6 +32,7 @@ pub(crate) struct Simulated<const INPUTS: usize> {
     address: u8,
     input: u8,
     parallel: bool,
+    enabled: [bool; INPUTS],
     order: Vec<u8>,
 }
 
@@ -47,6 +48,7 @@ impl<const INPUTS: usize> Default for Simulated<INPUTS> {
             address: 0,
             input: 0,
             parallel: false,
+            enabled: [true; INPUTS],
             order: (0..INPUTS)
                 .map(|input| u8::try_from(input).unwrap_or(u8::MAX))
                 .collect(),
@@ -70,14 +72,26 @@ impl<const INPUTS: usize> Simulated<INPUTS> {
     }
 
     fn reading(&self, input: u8) -> u16 {
+        let enabled = self
+            .enabled
+            .get(usize::from(input))
+            .copied()
+            .unwrap_or(false);
         let reading = self
             .readings
             .get(usize::from(input))
             .and_then(|readings| readings.get(usize::from(self.address)))
             .copied()
+            .filter(|_| enabled)
             .unwrap_or(ZERO_LEVEL);
         let wobble = self.noise.map_or(0, |noise| noise(self.conversions));
         reading.saturating_add_signed(wobble)
+    }
+
+    fn enable(&mut self, input: u8, enabled: bool) {
+        if let Some(line) = self.enabled.get_mut(usize::from(input)) {
+            *line = enabled;
+        }
     }
 
     fn advance(&mut self, delay_us: u16) {
@@ -109,11 +123,15 @@ impl<const INPUTS: usize> Converter for Simulated<INPUTS> {
     }
 
     fn select_input(&mut self, previous: u8, next: u8) {
+        self.enable(previous, false);
+        self.enable(next, true);
         self.input = next;
         self.operations.push(Operation::SelectInput(previous, next));
     }
 
     fn enter_single(&mut self, previous: u8) {
+        self.enabled = [false; INPUTS];
+        self.enable(0, true);
         self.parallel = false;
         self.input = 0;
         self.address = 0;
@@ -121,6 +139,10 @@ impl<const INPUTS: usize> Converter for Simulated<INPUTS> {
     }
 
     fn enter_parallel(&mut self, order: &[u8], address: u8) {
+        self.enabled = [false; INPUTS];
+        for &input in order {
+            self.enable(input, true);
+        }
         self.parallel = true;
         self.order = order.to_vec();
         self.address = address;
@@ -130,6 +152,9 @@ impl<const INPUTS: usize> Converter for Simulated<INPUTS> {
     fn sweep_enter_parallel(&mut self, order: Option<&[u8]>) {
         self.parallel = true;
         if let Some(order) = order {
+            for &input in order {
+                self.enable(input, true);
+            }
             self.order = order.to_vec();
         }
         self.operations

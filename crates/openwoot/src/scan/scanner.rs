@@ -8,7 +8,7 @@ use sweep::Sweep;
 
 use super::{
     Context, Converter, Decision, Event, Events, Grid, Map, Mode, Position, Recalibration,
-    Reference, Sensing, Sensor, Travel, Update,
+    Reference, Sensing, Sensor, Sensors, Travel, Update,
 };
 use crate::{analog::Switch, keys::Key};
 
@@ -53,32 +53,45 @@ pub struct Scanner<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> {
     map: Map<INPUTS, ADDRESSES>,
     recalibration: Recalibration,
     sweep_done: bool,
-    parallel_ready: bool,
     applied: Option<Mode>,
     requested: Mode,
     mode_change_pending: bool,
     settle_cycles: u8,
     events: Events,
-    sensors: Grid<Sensor<S::Noise>, INPUTS>,
+    cycle_finished: bool,
+    sensors: &'static mut Sensors<S::Noise, INPUTS>,
 }
 
 impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS, ADDRESSES> {
     #[must_use]
-    pub fn new(converter: S::Converter, map: Map<INPUTS, ADDRESSES>, order: [u8; INPUTS]) -> Self {
-        const { assert!(INPUTS > 0 && INPUTS <= 16 && ADDRESSES > 0 && ADDRESSES <= 16) };
+    pub fn new(
+        converter: S::Converter,
+        map: Map<INPUTS, ADDRESSES>,
+        order: [u8; INPUTS],
+        sensors: &'static mut Sensors<S::Noise, INPUTS>,
+    ) -> Self {
+        const {
+            assert!(
+                INPUTS > 0
+                    && INPUTS <= 16
+                    && ADDRESSES > 0
+                    && ADDRESSES <= 16
+                    && INPUTS * ADDRESSES <= Events::CAPACITY
+            );
+        };
         Self {
             converter,
             map,
             successors: successors(&map),
             order,
-            sensors: Grid::from_fn(|_| Sensor::new()),
+            sensors,
             recheck: S::Recheck::default(),
             reference: S::Reference::default(),
             recalibration: Recalibration::new(),
             events: Events::new(),
+            cycle_finished: true,
             sweep: None,
             sweep_done: false,
-            parallel_ready: false,
             mode: Mode::Single,
             applied: None,
             requested: Mode::Single,
@@ -186,7 +199,9 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
 
     pub fn prepare(&mut self, now_ms: u32) {
         self.now_ms = now_ms;
-        self.events.clear();
+        if core::mem::take(&mut self.cycle_finished) {
+            self.events.clear();
+        }
         if self.sweep.is_some() {
             return;
         }
@@ -263,9 +278,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
         self.address = 0;
         match mode {
             Mode::Parallel => {
-                self.parallel_ready = false;
                 self.converter.enter_parallel(&self.order, self.address);
-                self.parallel_ready = true;
             }
             Mode::Single => {
                 self.converter.enter_single(self.input);
