@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::{collections::BTreeSet, fmt, fs, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::Package;
@@ -46,6 +46,22 @@ impl Kind {
     }
 }
 
+impl fmt::Display for Kind {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Firmware => "firmware",
+            Self::Protocol => "protocol",
+            Self::Drivers => "drivers",
+            Self::Image => "image",
+            Self::Pac => "PAC",
+            Self::ChipHal => "chip HAL",
+            Self::Board => "board",
+            Self::Cli => "CLI",
+            Self::Xtask => "xtask",
+        })
+    }
+}
+
 pub(super) struct Member<'a> {
     pub(super) package: &'a Package,
     pub(super) kind: Kind,
@@ -88,12 +104,63 @@ pub(super) fn dependency_direction(members: &[Member<'_>], problems: &mut Vec<St
             };
             if !member.kind.allowed_dependencies().contains(&target.kind) {
                 problems.push(format!(
-                    "`{}` ({:?}) must not depend on `{}` ({:?})",
+                    "`{}` ({}) must not depend on `{}` ({})",
                     member.package.name, member.kind, target.package.name, target.kind
                 ));
             }
         }
     }
+}
+
+pub(super) fn peripheral_access_crates(members: &[Member<'_>], problems: &mut Vec<String>) {
+    for member in members {
+        let pacs = dependencies_of_kind(member, members, Kind::Pac);
+        match member.kind {
+            Kind::ChipHal if pacs.len() != 1 => problems.push(format!(
+                "`{}` ({}) must depend on exactly one PAC, not {}",
+                member.package.name,
+                member.kind,
+                pacs.len()
+            )),
+            Kind::Board => {
+                let own: BTreeSet<&str> = dependencies_of_kind(member, members, Kind::ChipHal)
+                    .into_iter()
+                    .filter_map(|hal| {
+                        members
+                            .iter()
+                            .find(|candidate| candidate.package.name.as_str() == hal)
+                    })
+                    .flat_map(|hal| dependencies_of_kind(hal, members, Kind::Pac))
+                    .collect();
+                for pac in pacs.difference(&own) {
+                    problems.push(format!(
+                        "`{}` ({}) must not depend on `{pac}`, the PAC of another chip",
+                        member.package.name, member.kind
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn dependencies_of_kind<'m>(
+    member: &Member<'_>,
+    members: &'m [Member<'_>],
+    kind: Kind,
+) -> BTreeSet<&'m str> {
+    member
+        .package
+        .dependencies
+        .iter()
+        .filter_map(|dependency| {
+            members
+                .iter()
+                .find(|candidate| candidate.package.name.as_str() == dependency.name)
+        })
+        .filter(|target| target.kind == kind)
+        .map(|target| target.package.name.as_str())
+        .collect()
 }
 
 pub(super) fn lints_tables(members: &[Member<'_>], problems: &mut Vec<String>) -> Result<()> {
@@ -154,5 +221,32 @@ mod tests {
     #[test]
     fn malformed_manifest_is_an_error() {
         assert!(inherits_workspace_lints("[lints\nworkspace = true\n").is_err());
+    }
+
+    #[test]
+    fn only_the_documented_dependency_directions_are_allowed() {
+        assert!(Kind::Board.allowed_dependencies().contains(&Kind::ChipHal));
+        assert!(Kind::ChipHal.allowed_dependencies().contains(&Kind::Pac));
+        assert!(
+            Kind::Firmware
+                .allowed_dependencies()
+                .contains(&Kind::Drivers)
+        );
+        assert!(
+            !Kind::Firmware
+                .allowed_dependencies()
+                .contains(&Kind::ChipHal)
+        );
+        assert!(!Kind::Board.allowed_dependencies().contains(&Kind::Cli));
+        assert!(!Kind::Cli.allowed_dependencies().contains(&Kind::Firmware));
+        assert_eq!(Kind::Drivers.allowed_dependencies(), []);
+        assert_eq!(Kind::Xtask.allowed_dependencies(), [Kind::Image]);
+    }
+
+    #[test]
+    fn kinds_read_as_words_in_messages() {
+        assert_eq!(Kind::ChipHal.to_string(), "chip HAL");
+        assert_eq!(Kind::Board.to_string(), "board");
+        assert_eq!(Kind::Pac.to_string(), "PAC");
     }
 }

@@ -29,7 +29,7 @@ pub(super) fn file_sets(
     for (name, set) in others {
         for file in first_set.symmetric_difference(set) {
             problems.push(format!(
-                "{kind:?} crates differ: `{}` is in only one of `{first_name}` and `{name}`",
+                "{kind} crates differ: `{}` is in only one of `{first_name}` and `{name}`",
                 file.display()
             ));
         }

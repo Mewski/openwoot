@@ -1,16 +1,17 @@
 mod relocation;
 mod symbol;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use object::{
     LittleEndian,
     elf::{
-        FileHeader32, PT_LOAD, R_ARM_ABS32, R_ARM_THM_JUMP19, R_ARM_THM_JUMP24, R_ARM_THM_MOVT_ABS,
-        R_ARM_THM_MOVW_ABS_NC, R_ARM_THM_PC22, SHF_ALLOC, SHT_NOBITS, SHT_SYMTAB, STT_FUNC,
-        STT_NOTYPE, STT_OBJECT,
+        FileHeader32, PT_LOAD, R_ARM_ABS32, R_ARM_NONE, R_ARM_THM_JUMP19, R_ARM_THM_JUMP24,
+        R_ARM_THM_MOVT_ABS, R_ARM_THM_MOVW_ABS_NC, R_ARM_THM_PC22, SHF_ALLOC, SHT_NOBITS,
+        SHT_SYMTAB, STT_FUNC, STT_NOTYPE, STT_OBJECT,
     },
     read::elf::{FileHeader, ProgramHeader, SectionHeader, Sym},
 };
+use openwoot_image::Hex;
 pub(crate) use relocation::{Relocation, RelocationKind};
 use rustc_demangle::demangle;
 pub(crate) use symbol::{Symbol, SymbolKind};
@@ -136,11 +137,10 @@ impl<'a> Elf<'a> {
                 continue;
             }
             let name = String::from_utf8_lossy(name);
-            let kind = match (entry.st_type(), name.as_ref()) {
-                (STT_NOTYPE, "$t") => SymbolKind::CodeStart,
-                (STT_NOTYPE, "$d") => SymbolKind::LiteralsStart,
+            let kind = match (entry.st_type(), mapping(&name)) {
+                (STT_NOTYPE, Some(marker)) => marker,
                 (STT_FUNC, _) => SymbolKind::Function,
-                (STT_OBJECT | STT_NOTYPE, _) if !name.starts_with('$') => SymbolKind::Object,
+                (STT_OBJECT | STT_NOTYPE, None) if !name.starts_with('$') => SymbolKind::Object,
                 _ => continue,
             };
             let value = entry.st_value(self.endian);
@@ -176,17 +176,24 @@ impl<'a> Elf<'a> {
                 continue;
             }
             for entry in entries {
+                let offset = entry.r_offset.get(self.endian);
                 let kind = match entry.r_type(self.endian) {
+                    R_ARM_NONE => continue,
                     R_ARM_ABS32 => RelocationKind::Absolute,
                     R_ARM_THM_PC22 | R_ARM_THM_JUMP24 => RelocationKind::Branch,
                     R_ARM_THM_JUMP19 => RelocationKind::ConditionalBranch,
                     R_ARM_THM_MOVW_ABS_NC => RelocationKind::MoveLow,
                     R_ARM_THM_MOVT_ABS => RelocationKind::MoveHigh,
-                    _ => continue,
+                    other => bail!(
+                        "relocation type {} at {} is not understood",
+                        other.0,
+                        Hex(offset)
+                    ),
                 };
                 relocations.push(Relocation {
-                    offset: entry.r_offset.get(self.endian),
+                    offset,
                     kind,
+                    symbol: entry.r_sym(self.endian),
                 });
             }
         }
@@ -203,5 +210,36 @@ impl<'a> Elf<'a> {
 impl Allocated<'_> {
     fn contains(&self, address: u32) -> bool {
         address >= self.address && address - self.address < self.size
+    }
+}
+
+fn mapping(name: &str) -> Option<SymbolKind> {
+    let (kind, suffix) = name
+        .strip_prefix("$t")
+        .map(|suffix| (SymbolKind::CodeStart, suffix))
+        .or_else(|| {
+            name.strip_prefix("$d")
+                .map(|suffix| (SymbolKind::LiteralsStart, suffix))
+        })?;
+    (suffix.is_empty() || suffix.starts_with('.')).then_some(kind)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mapping_symbols_mark_code_and_literals_with_or_without_a_suffix() {
+        assert_eq!(mapping("$t"), Some(SymbolKind::CodeStart));
+        assert_eq!(mapping("$t.12"), Some(SymbolKind::CodeStart));
+        assert_eq!(mapping("$d"), Some(SymbolKind::LiteralsStart));
+        assert_eq!(mapping("$d.3"), Some(SymbolKind::LiteralsStart));
+    }
+
+    #[test]
+    fn other_symbols_are_no_mapping_symbols() {
+        for name in ["$a", "$tx", "$data", "t", "Reset", ""] {
+            assert_eq!(mapping(name), None, "{name}");
+        }
     }
 }

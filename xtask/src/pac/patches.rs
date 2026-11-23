@@ -2,8 +2,8 @@ use anyhow::Result;
 use svd_rs::{Access, Device};
 
 use super::svd::{
-    Bits, Register, Window, add_field, add_register, narrow, peripheral, register, resize,
-    window_peripheral,
+    Bits, Register, Window, add_field, add_register, add_window, narrow_registers, peripheral,
+    register, resize,
 };
 
 pub(super) fn gd32f425(device: &mut Device) -> Result<()> {
@@ -67,32 +67,24 @@ pub(super) fn gd32f425(device: &mut Device) -> Result<()> {
         },
     )?;
 
-    device.peripherals.push(window_peripheral(&Window {
-        peripheral: "HS_FIFO",
-        description: "USBHS data FIFO access windows",
-        base: 0x4004_1000,
-        register: "FIFO",
-        register_description: "Data FIFO access window of endpoint or channel",
-        count: 6,
-        stride: 0x1000,
-        size: 32,
-    })?);
-    Ok(())
+    add_window(
+        device,
+        &Window {
+            peripheral: "HS_FIFO",
+            description: "USBHS data FIFO access windows",
+            base: 0x4004_1000,
+            register: "FIFO",
+            register_description: "Data FIFO access window of endpoint or channel",
+            count: 6,
+            stride: 0x1000,
+            size: 32,
+        },
+    )
 }
 
 pub(super) fn gd32f303(device: &mut Device) -> Result<()> {
-    let bkp = peripheral(device, "BKP")?;
-    for register in bkp.registers_mut() {
-        narrow(register, 16)?;
-    }
-
-    let usbd = peripheral(device, "USBD")?;
-    for register in usbd
-        .registers_mut()
-        .filter(|register| register.name != "LPMCS")
-    {
-        narrow(register, 16)?;
-    }
+    narrow_registers(peripheral(device, "BKP")?, 16, &[])?;
+    narrow_registers(peripheral(device, "USBD")?, 16, &["LPMCS"])?;
 
     let fmc = peripheral(device, "FMC")?;
     let obstat = register(fmc, "OBCTL")?;
@@ -113,15 +105,17 @@ pub(super) fn gd32f303(device: &mut Device) -> Result<()> {
         )?;
     }
 
-    device.peripherals.push(window_peripheral(&Window {
-        peripheral: "USBD_RAM",
-        description: "USBD packet buffer",
-        base: 0x4000_6000,
-        register: "DATA",
-        register_description: "Packet buffer half word",
-        count: 256,
-        stride: 4,
-        size: 16,
-    })?);
-    Ok(())
+    add_window(
+        device,
+        &Window {
+            peripheral: "USBD_RAM",
+            description: "USBD packet buffer",
+            base: 0x4000_6000,
+            register: "DATA",
+            register_description: "Packet buffer half word",
+            count: 256,
+            stride: 4,
+            size: 16,
+        },
+    )
 }

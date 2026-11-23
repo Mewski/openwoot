@@ -4,8 +4,12 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
+  OPENWOOT_NIGHTLY: nightly-2026-11-22
 
 jobs:
   check:
@@ -13,10 +17,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install
-      - run: rustup toolchain install nightly --profile minimal --component rustfmt
+      - run: rustup toolchain install "$OPENWOOT_NIGHTLY" --profile minimal --component rustfmt
       - uses: taiki-e/install-action@v2
         with:
-          tool: taplo,cargo-sort
+          tool: taplo@0.10.0,cargo-sort@2.1.5
+      - run: cargo fetch --locked
       - run: cargo xtask check
 
   test:
@@ -24,7 +29,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install
-      - run: cargo test --workspace
+      - run: cargo test --workspace --locked
+
+  pac:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - run: rustup toolchain install "$OPENWOOT_NIGHTLY" --profile minimal --component rustfmt
+      - run: cargo install --locked svd2rust@0.37.1 form@0.13.0
+      - run: cargo xtask pac
+      - run: git diff --exit-code
 
   boards:
     runs-on: ubuntu-latest
@@ -34,10 +49,12 @@ jobs:
       - uses: actions/checkout@v4
       - run: rustup toolchain install
       - id: list
-        run: echo "boards=$(cargo xtask boards --json)" >> "$GITHUB_OUTPUT"
+        run: |
+          boards=$(cargo xtask boards --json)
+          echo "boards=$boards" >> "$GITHUB_OUTPUT"
 
   firmware:
-    needs: boards
+    needs: [boards, check, test]
     runs-on: ubuntu-latest
     strategy:
       matrix:

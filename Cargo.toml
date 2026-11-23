@@ -83,6 +83,7 @@ min_ident_chars = "warn"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 mod_module_files = "deny"
+module_name_repetitions = "warn"
 panic = "deny"
 pedantic = { level = "warn", priority = -1 }
 pub_underscore_fields = "warn"

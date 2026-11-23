@@ -10,6 +10,7 @@ mod process;
 mod workspace;
 
 use std::{
+    env,
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -63,7 +64,9 @@ fn run(cli: Cli) -> Result<()> {
 }
 
 fn workspace_root() -> Result<PathBuf> {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    let manifest_directory = env::var_os("CARGO_MANIFEST_DIR")
+        .context("`CARGO_MANIFEST_DIR` is not set; run xtask with `cargo xtask`")?;
+    Path::new(&manifest_directory)
         .parent()
         .map(Path::to_path_buf)
         .context("xtask lives outside the workspace")

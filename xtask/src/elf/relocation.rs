@@ -11,4 +11,5 @@ pub(crate) enum RelocationKind {
 pub(crate) struct Relocation {
     pub(crate) offset: u32,
     pub(crate) kind: RelocationKind,
+    pub(crate) symbol: u32,
 }

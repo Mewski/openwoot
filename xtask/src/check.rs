@@ -7,25 +7,31 @@ mod packages;
 mod panic_paths;
 mod rust_rules;
 mod rust_source;
+mod scan_interrupt;
 mod symmetry;
 mod tools;
 mod tree;
 
 use std::{collections::BTreeSet, path::Path};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use packages::Kind;
 
 use crate::{output::show, workspace::Workspace};
 
 pub(crate) fn run(root: &Path) -> Result<()> {
     let workspace = Workspace::load(root)?;
+    ensure!(
+        !workspace.boards().is_empty(),
+        "the workspace has no boards under `boards/`"
+    );
     let members = packages::classify(&workspace)?;
     let files = tree::files(root)?;
 
     let mut problems = Vec::new();
     tree::forbidden_files(root, &files, &mut problems);
     packages::dependency_direction(&members, &mut problems);
+    packages::peripheral_access_crates(&members, &mut problems);
     packages::lints_tables(&members, &mut problems)?;
     symmetry::file_sets(&members, Kind::ChipHal, &files, &mut problems);
     symmetry::file_sets(&members, Kind::Board, &files, &mut problems);
@@ -51,6 +57,9 @@ pub(crate) fn run(root: &Path) -> Result<()> {
         }
         for problem in analysis.panics.problems {
             problems.push(format!("`{}`: panic reachable: {problem}", board.name));
+        }
+        for problem in analysis.critical_sections {
+            problems.push(format!("`{}`: {problem}", board.name));
         }
         reviewed.extend(analysis.panics.reviewed);
     }

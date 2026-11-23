@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 
 use super::call_graph::CallGraph;
 use crate::elf::Elf;
@@ -7,10 +7,12 @@ const KEY_TASK: &str = "scanning";
 const TASK_POLL_PREFIX: &str = "<embassy_executor::raw::TaskStorage<";
 const TASK_POLL_SUFFIX: &str = ">>::poll";
 const RESET_VECTOR: usize = 1;
+const SCAN_VECTORS: [&str; 2] = ["ADC", "ADC0_1"];
 
 pub(super) struct EntryPoints {
     pub(super) reset: usize,
     pub(super) handlers: Vec<usize>,
+    pub(super) scan: usize,
     pub(super) key_tasks: Vec<usize>,
     pub(super) thread_tasks: Vec<usize>,
 }
@@ -38,6 +40,26 @@ impl EntryPoints {
                 handlers.push(node);
             }
         }
+        let reset = reset.context("the vector table has no reset vector")?;
+        ensure!(
+            graph
+                .references(reset)
+                .iter()
+                .any(|reference| reference.call),
+            "the reset handler `{}` calls nothing in the relocations; boards link with \
+             `--emit-relocs`",
+            graph.name(reset)
+        );
+        let scan = handlers
+            .iter()
+            .copied()
+            .find(|&node| SCAN_VECTORS.contains(&graph.name(node)))
+            .with_context(|| {
+                format!(
+                    "the vector table has no scan interrupt handler `{}`",
+                    SCAN_VECTORS.join("` or `")
+                )
+            })?;
         let key_marker = format!("::__{KEY_TASK}_task::");
         let tasks = graph.nodes_named(|name| {
             name.starts_with(TASK_POLL_PREFIX) && name.ends_with(TASK_POLL_SUFFIX)
@@ -49,8 +71,9 @@ impl EntryPoints {
             bail!("the image has no poll function of the key task `{KEY_TASK}`");
         }
         Ok(Self {
-            reset: reset.context("the vector table has no reset vector")?,
+            reset,
             handlers,
+            scan,
             key_tasks,
             thread_tasks,
         })

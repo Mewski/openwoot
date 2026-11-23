@@ -3,7 +3,8 @@ use std::fmt;
 use crate::elf::Elf;
 
 const MAX_FILE_LEN: u32 = 4096;
-const SOURCE_ROOTS: [&str; 2] = ["/registry/src/", "/rustc/"];
+const REGISTRY: &str = "/registry/src/";
+const SOURCE_ROOTS: [&str; 2] = [REGISTRY, "/rustc/"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Location {
@@ -35,6 +36,11 @@ impl Location {
             line,
             column,
         })
+    }
+
+    pub(super) fn dependency_file(&self) -> Option<&str> {
+        let (_, rest) = self.file.split_once(REGISTRY)?;
+        rest.split_once('/').map(|(_, path)| path)
     }
 
     pub(super) fn short_file(&self) -> &str {
@@ -86,6 +92,23 @@ mod tests {
         assert_eq!(
             location("/rustc/0ef1bc386/library/core/src/cell.rs").to_string(),
             "library/core/src/cell.rs:54:9"
+        );
+    }
+
+    #[test]
+    fn only_registry_paths_are_dependency_files() {
+        assert_eq!(
+            location("/home/owner/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/heapless-0.9.4/src/vec.rs")
+                .dependency_file(),
+            Some("heapless-0.9.4/src/vec.rs")
+        );
+        assert_eq!(
+            location("/rustc/0ef1bc386/library/core/src/cell.rs").dependency_file(),
+            None
+        );
+        assert_eq!(
+            location("/home/owner/openwoot/vendor/heapless-0.9.4/src/vec.rs").dependency_file(),
+            None
         );
     }
 

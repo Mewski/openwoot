@@ -9,7 +9,8 @@ pub(super) fn formatting(root: &Path) -> Result<()> {
     process::execute(
         process::cargo(root)
             .env_remove("RUSTUP_TOOLCHAIN")
-            .args(["+nightly", "fmt", "--all", "--", "--check"]),
+            .arg(process::nightly())
+            .args(["fmt", "--all", "--", "--check"]),
     )?;
     process::execute(
         Command::new("taplo")

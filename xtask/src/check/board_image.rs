@@ -8,6 +8,7 @@ use super::{
     call_graph::CallGraph,
     entry_points::EntryPoints,
     panic_paths::{self, Findings},
+    scan_interrupt,
 };
 use crate::{
     elf::Elf,
@@ -20,6 +21,7 @@ const VECTOR_SIZE: usize = 4;
 pub(super) struct Analysis {
     pub(super) budget: Budget,
     pub(super) panics: Findings,
+    pub(super) critical_sections: Vec<String>,
 }
 
 pub(super) fn check(workspace: &Workspace, board: &Board) -> Result<Analysis> {
@@ -57,7 +59,12 @@ pub(super) fn check(workspace: &Workspace, board: &Board) -> Result<Analysis> {
     let section = elf
         .section(".app_descriptor")
         .context("the ELF file has no `.app_descriptor` section")?;
-    descriptor_placement(layout.flash.start, vectors.bytes.len(), section.address)?;
+    descriptor_placement(
+        layout.flash.start,
+        vectors.bytes.len(),
+        section.address,
+        section.bytes.len(),
+    )?;
     let descriptor = Descriptor::from_bytes(section.bytes)?;
     if descriptor.image() != layout.flash {
         bail!(
@@ -66,6 +73,15 @@ pub(super) fn check(workspace: &Workspace, board: &Board) -> Result<Analysis> {
             Hex(descriptor.image().end),
             Hex(layout.flash.start),
             Hex(layout.flash.end)
+        );
+    }
+    if descriptor.ram() != layout.ram {
+        bail!(
+            "the descriptor names the RAM {}-{}, `memory.x` puts `RAM` at {}-{}",
+            Hex(descriptor.ram().start),
+            Hex(descriptor.ram().end),
+            Hex(layout.ram.start),
+            Hex(layout.ram.end)
         );
     }
 
@@ -91,6 +107,7 @@ pub(super) fn check(workspace: &Workspace, board: &Board) -> Result<Analysis> {
     Ok(Analysis {
         budget: Budget::measure(&elf, &layout, &graph, &entry_points)?,
         panics: panic_paths::find(&elf, &graph, &entry_points),
+        critical_sections: scan_interrupt::critical_sections(&graph, &entry_points)?,
     })
 }
 
@@ -98,7 +115,14 @@ fn descriptor_placement(
     flash_start: u32,
     vector_table_len: usize,
     descriptor_address: u32,
+    descriptor_len: usize,
 ) -> Result<()> {
+    if descriptor_len != Descriptor::ENCODED_LEN {
+        bail!(
+            "the `.app_descriptor` section holds {descriptor_len} bytes, a descriptor has {}",
+            Descriptor::ENCODED_LEN
+        );
+    }
     if !vector_table_len.is_multiple_of(VECTOR_SIZE) {
         bail!(
             "the vector table is {vector_table_len} bytes long, not a whole number of \
@@ -135,6 +159,7 @@ mod tests {
     use super::*;
 
     const FLASH_START: u32 = 0x0800_8000;
+    const LEN: usize = Descriptor::ENCODED_LEN;
 
     fn message(result: Result<()>) -> String {
         result.unwrap_err().to_string()
@@ -142,13 +167,13 @@ mod tests {
 
     #[test]
     fn descriptor_behind_the_vector_table_is_accepted() {
-        assert!(descriptor_placement(FLASH_START, 0x1B0, FLASH_START + 0x1C0).is_ok());
+        assert!(descriptor_placement(FLASH_START, 0x1B0, FLASH_START + 0x1C0, LEN).is_ok());
     }
 
     #[test]
     fn descriptor_below_flash_is_reported() {
         assert_eq!(
-            message(descriptor_placement(FLASH_START, 0x1B0, 0x0800_0000)),
+            message(descriptor_placement(FLASH_START, 0x1B0, 0x0800_0000, LEN)),
             "the descriptor lies at 0x0800_0000, below `FLASH` of `memory.x` at 0x0800_8000"
         );
     }
@@ -159,7 +184,8 @@ mod tests {
             message(descriptor_placement(
                 FLASH_START,
                 0x1B2,
-                FLASH_START + 0x1C0
+                FLASH_START + 0x1C0,
+                LEN
             )),
             "the vector table is 434 bytes long, not a whole number of 4-byte vectors"
         );
@@ -171,7 +197,8 @@ mod tests {
             message(descriptor_placement(
                 FLASH_START,
                 0x1B0,
-                FLASH_START + 0x200
+                FLASH_START + 0x200,
+                LEN
             )),
             "the descriptor lies 512 bytes into the image, expected 448 bytes, behind the vector \
              table"
@@ -184,10 +211,24 @@ mod tests {
             message(descriptor_placement(
                 FLASH_START,
                 0x410,
-                FLASH_START + 0x440
+                FLASH_START + 0x440,
+                LEN
             )),
             "the descriptor lies 1088 bytes into the image, beyond the first 1024 bytes where the \
              image checks look for it"
+        );
+    }
+
+    #[test]
+    fn section_of_another_length_than_a_descriptor_is_reported() {
+        assert_eq!(
+            message(descriptor_placement(
+                FLASH_START,
+                0x1B0,
+                FLASH_START + 0x1C0,
+                60
+            )),
+            format!("the `.app_descriptor` section holds 60 bytes, a descriptor has {LEN}")
         );
     }
 }

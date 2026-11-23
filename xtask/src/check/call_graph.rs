@@ -1,9 +1,12 @@
+mod halves;
 mod thumb;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashSet};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
+use halves::Half;
 use openwoot_image::Hex;
+use thumb::Instruction;
 
 use crate::elf::{Elf, RelocationKind, Symbol, SymbolKind};
 
@@ -12,6 +15,7 @@ pub(super) struct Reference {
     pub(super) at: u32,
     pub(super) target: u32,
     pub(super) node: usize,
+    pub(super) call: bool,
 }
 
 pub(super) struct CallGraph<'a> {
@@ -88,29 +92,9 @@ impl<'a> CallGraph<'a> {
         let Some(symbol) = self.symbol(node).filter(|_| self.is_function(node)) else {
             return Ok(0);
         };
-        let code = self
-            .elf
-            .bytes_at(symbol.address, usize::try_from(symbol.size)?)
-            .with_context(|| format!("the code of `{}` lies outside the image", symbol.name))?;
         let mut frame = 0_u32;
-        let mut offset = 0_usize;
-        while let Some(rest) = code.get(offset..) {
-            let address = symbol.address + u32::try_from(offset)?;
-            if let Some(code_start) = self.literals_end(address, symbol) {
-                offset = usize::try_from(code_start - symbol.address)?;
-                continue;
-            }
-            let Some(first) = rest.first_chunk().map(|bytes| u16::from_le_bytes(*bytes)) else {
-                break;
-            };
-            let change = if thumb::is_wide(first) {
-                offset += 4;
-                thumb::halves(rest).and_then(thumb::wide_stack_change)
-            } else {
-                offset += 2;
-                thumb::narrow_stack_change(first)
-            };
-            match change {
+        for (address, instruction) in self.instructions(symbol)? {
+            match instruction.stack_change() {
                 Some(thumb::StackChange::Grows(bytes)) => frame = frame.saturating_add(bytes),
                 Some(thumb::StackChange::Unknown) => bail!(
                     "`{}` moves the stack pointer by a register at {}",
@@ -121,6 +105,45 @@ impl<'a> CallGraph<'a> {
             }
         }
         Ok(frame)
+    }
+
+    pub(super) fn basepri_writes(&self, node: usize) -> Result<Vec<u32>> {
+        let Some(symbol) = self.symbol(node).filter(|_| self.is_function(node)) else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .instructions(symbol)?
+            .into_iter()
+            .filter(|(_, instruction)| instruction.writes_basepri())
+            .map(|(address, _)| address)
+            .collect())
+    }
+
+    fn instructions(&self, function: &Symbol) -> Result<Vec<(u32, Instruction)>> {
+        ensure!(
+            function.size > 0,
+            "`{}` has no size, so its code cannot be read",
+            function.name
+        );
+        let code = self
+            .elf
+            .bytes_at(function.address, usize::try_from(function.size)?)
+            .with_context(|| format!("the code of `{}` lies outside the image", function.name))?;
+        let mut instructions = Vec::new();
+        let mut offset = 0_usize;
+        while let Some(rest) = code.get(offset..) {
+            let address = function.address + u32::try_from(offset)?;
+            if let Some(code_start) = self.literals_end(address, function) {
+                offset = usize::try_from(code_start - function.address)?;
+                continue;
+            }
+            let Some(instruction) = Instruction::read(rest) else {
+                break;
+            };
+            offset += instruction.width();
+            instructions.push((address, instruction));
+        }
+        Ok(instructions)
     }
 
     fn literals_end(&self, address: u32, function: &Symbol) -> Option<u32> {
@@ -141,9 +164,14 @@ impl<'a> CallGraph<'a> {
     }
 
     fn link(&mut self) -> Result<()> {
-        let mut low_halves: HashMap<(usize, u8), u16> = HashMap::new();
+        let mut moves: BTreeMap<usize, (Vec<Half>, Vec<Half>)> = BTreeMap::new();
+        let mut calls = 0_usize;
+        let mut call_sites = HashSet::new();
         for relocation in self.elf.relocations()? {
             let at = relocation.offset;
+            if relocation.kind == RelocationKind::Branch {
+                call_sites.insert(at);
+            }
             let Some(source) = self.node_at(at) else {
                 continue;
             };
@@ -162,31 +190,107 @@ impl<'a> CallGraph<'a> {
                 RelocationKind::ConditionalBranch => {
                     thumb::conditional_branch_target(at, instruction()?)
                 }
-                RelocationKind::MoveLow => {
-                    let (register, low) = thumb::move_immediate(instruction()?);
-                    low_halves.insert((source, register), low);
+                RelocationKind::MoveLow | RelocationKind::MoveHigh => {
+                    let (register, value) = thumb::move_immediate(instruction()?);
+                    let half = Half {
+                        at,
+                        register,
+                        value,
+                        symbol: relocation.symbol,
+                    };
+                    let (lows, highs) = moves.entry(source).or_default();
+                    if relocation.kind == RelocationKind::MoveLow {
+                        lows.push(half);
+                    } else {
+                        highs.push(half);
+                    }
                     continue;
                 }
-                RelocationKind::MoveHigh => {
-                    let (register, high) = thumb::move_immediate(instruction()?);
-                    let Some(low) = low_halves.remove(&(source, register)) else {
-                        bail!(
-                            "the upper half of an address at {} has no lower half",
-                            Hex(at)
-                        );
-                    };
-                    u32::from(high) << 16 | u32::from(low)
-                }
             };
-            let code = target & !1;
-            let node = match self.node_at(code) {
-                Some(node) if self.is_function(node) => Some(node),
-                _ => self.node_at(target),
+            let call = matches!(
+                relocation.kind,
+                RelocationKind::Branch | RelocationKind::ConditionalBranch
+            );
+            let referred = self.refer(source, at, target, call);
+            calls += usize::from(call && referred);
+        }
+        for (source, (lows, highs)) in moves {
+            let Some(function) = self.symbol(source).filter(|_| self.is_function(source)) else {
+                bail!(
+                    "halves of addresses are built outside a function, in `{}`",
+                    self.name(source)
+                );
             };
-            if let (Some(node), Some(references)) = (node, self.references.get_mut(source)) {
-                references.push(Reference { at, target, node });
+            let function = function.clone();
+            let code = self.instructions(&function)?;
+            for (at, target) in halves::join(&code, &lows, &highs)
+                .with_context(|| format!("in `{}`", function.name))?
+            {
+                self.refer(source, at, target, false);
+            }
+        }
+        for references in &mut self.references {
+            references.sort_by_key(|reference| reference.at);
+        }
+        require_relocated_calls(calls)?;
+        self.require_relocated_branches_with_link(&call_sites)
+    }
+
+    fn refer(&mut self, source: usize, at: u32, target: u32, call: bool) -> bool {
+        let code = target & !1;
+        let node = match self.node_at(code) {
+            Some(node) if self.is_function(node) => Some(node),
+            _ => self.node_at(target),
+        };
+        let (Some(node), Some(references)) = (node, self.references.get_mut(source)) else {
+            return false;
+        };
+        references.push(Reference {
+            at,
+            target,
+            node,
+            call,
+        });
+        true
+    }
+
+    fn require_relocated_branches_with_link(&self, call_sites: &HashSet<u32>) -> Result<()> {
+        for function in self
+            .nodes
+            .iter()
+            .filter(|node| node.kind == SymbolKind::Function)
+        {
+            for (address, instruction) in self.instructions(function)? {
+                ensure!(
+                    !instruction.is_branch_with_link() || call_sites.contains(&address),
+                    "the call at {} in `{}` has no relocation; boards link with `--emit-relocs`",
+                    Hex(address),
+                    function.name
+                );
             }
         }
         Ok(())
+    }
+}
+
+fn require_relocated_calls(calls: usize) -> Result<()> {
+    ensure!(
+        calls > 0,
+        "the image has no relocations of its calls; boards link with `--emit-relocs`"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_image_without_relocated_calls_is_rejected() {
+        assert_eq!(
+            require_relocated_calls(0).unwrap_err().to_string(),
+            "the image has no relocations of its calls; boards link with `--emit-relocs`"
+        );
+        assert!(require_relocated_calls(1).is_ok());
     }
 }

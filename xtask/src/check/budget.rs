@@ -37,11 +37,13 @@ impl Budget {
             .try_fold(layout.flash.start, |end, segment_end| {
                 Ok::<_, anyhow::Error>(end.max(segment_end?))
             })?;
-        let static_ram = elf
-            .allocated_sections()
-            .iter()
-            .filter(|section| layout.ram.contains(section.address))
-            .fold(0_u32, |total, section| total.saturating_add(section.size));
+        let static_ram = statics_size(
+            layout.ram.start,
+            elf.allocated_sections()
+                .iter()
+                .filter(|section| layout.ram.contains(section.address))
+                .map(|section| (section.address, section.size)),
+        );
         Ok(Self {
             flash: flash_end - layout.flash.start,
             flash_size: layout.flash.size(),
@@ -78,6 +80,13 @@ impl Budget {
         }
         Ok(())
     }
+}
+
+fn statics_size(ram_start: u32, sections: impl Iterator<Item = (u32, u32)>) -> u32 {
+    sections
+        .map(|(address, size)| address.saturating_add(size).saturating_sub(ram_start))
+        .max()
+        .unwrap_or_default()
 }
 
 impl fmt::Display for Budget {
@@ -130,6 +139,13 @@ mod tests {
              thread mode, 10000 bytes interrupts) and a margin of 2048 bytes, more than the 98304 \
              bytes of RAM"
         );
+    }
+
+    #[test]
+    fn statics_take_the_ram_up_to_the_end_of_the_last_section_with_its_gaps() {
+        let sections = [(0x2000_0000, 0x95B8), (0x2000_95C0, 0x67F0)];
+        assert_eq!(statics_size(0x2000_0000, sections.into_iter()), 0xFDB0);
+        assert_eq!(statics_size(0x2000_0000, [].into_iter()), 0);
     }
 
     #[test]

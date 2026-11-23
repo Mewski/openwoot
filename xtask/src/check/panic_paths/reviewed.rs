@@ -1,12 +1,13 @@
 use std::fmt;
 
-use super::location::Location;
+use super::{Origin, location::Location};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::check) struct Reviewed {
     pub(super) file: &'static str,
     pub(super) line: u32,
     pub(super) function: &'static str,
+    pub(super) reached_from: Origin,
     pub(super) reason: &'static str,
 }
 
@@ -15,6 +16,7 @@ pub(in crate::check) const REVIEWED: [Reviewed; 11] = [
         file: "embassy-usb-synopsys-otg-0.4.0/src/lib.rs",
         line: 54,
         function: "on_interrupt",
+        reached_from: Origin::Interrupt,
         reason: "the controller reports packets only for the endpoints the driver enabled, all below \
                  its endpoint count",
     },
@@ -22,48 +24,56 @@ pub(in crate::check) const REVIEWED: [Reviewed; 11] = [
         file: "embassy-usb-synopsys-otg-0.4.0/src/lib.rs",
         line: 59,
         function: "on_interrupt",
+        reached_from: Origin::Interrupt,
         reason: "the controller reports a SETUP packet only after receiving its 8 bytes",
     },
     Reviewed {
         file: "embassy-usb-synopsys-otg-0.4.0/src/lib.rs",
         line: 60,
         function: "on_interrupt",
+        reached_from: Origin::Interrupt,
         reason: "SETUP packets arrive only on the control endpoint 0",
     },
     Reviewed {
         file: "embassy-usb-synopsys-otg-0.4.0/src/lib.rs",
         line: 140,
         function: "on_interrupt",
+        reached_from: Origin::Interrupt,
         reason: "`DAINT` raises IN interrupt bits only for the endpoints the driver enabled",
     },
     Reviewed {
         file: "embassy-usb-synopsys-otg-0.4.0/src/lib.rs",
         line: 165,
         function: "on_interrupt",
+        reached_from: Origin::Interrupt,
         reason: "`DAINT` raises OUT interrupt bits only for the endpoints the driver enabled",
     },
     Reviewed {
         file: "embassy-usb-synopsys-otg-0.4.0/src/otg_v1.rs",
         line: 393,
         function: "Otg::diepctl",
+        reached_from: Origin::Interrupt,
         reason: "the end-of-frame loop indexes endpoints below the endpoint count, which is below 16",
     },
     Reviewed {
         file: "embassy-usb-synopsys-otg-0.4.0/src/otg_v1.rs",
         line: 399,
         function: "Otg::diepint",
+        reached_from: Origin::Interrupt,
         reason: "endpoint numbers come from the 16 bits of `DAINT`",
     },
     Reviewed {
         file: "embassy-usb-synopsys-otg-0.4.0/src/otg_v1.rs",
         line: 423,
         function: "Otg::doepint",
+        reached_from: Origin::Interrupt,
         reason: "endpoint numbers come from the 16 bits of `DAINT`",
     },
     Reviewed {
         file: "atomic-waker-1.1.2/src/lib.rs",
         line: 332,
         function: "AtomicWaker::register",
+        reached_from: Origin::KeyTask,
         reason: "a concurrent `wake` leaves the state `REGISTERING | WAKING` with the waker stored, \
                  which the register path just wrote",
     },
@@ -71,6 +81,7 @@ pub(in crate::check) const REVIEWED: [Reviewed; 11] = [
         file: "embassy-sync-0.8.0/src/channel.rs",
         line: 845,
         function: "Channel::lock",
+        reached_from: Origin::KeyTask,
         reason: "the channel borrows its state only inside its own critical section and never \
                  re-enters it",
     },
@@ -78,6 +89,7 @@ pub(in crate::check) const REVIEWED: [Reviewed; 11] = [
         file: "embassy-executor-0.10.0/src/raw/waker.rs",
         line: 35,
         function: "task_from_waker",
+        reached_from: Origin::KeyTask,
         reason: "every task that waits on a timer is polled by an embassy executor, whose wakers \
                  these are",
     },
@@ -85,11 +97,7 @@ pub(in crate::check) const REVIEWED: [Reviewed; 11] = [
 
 impl Reviewed {
     pub(super) fn matches(&self, location: &Location) -> bool {
-        location.line == self.line
-            && location
-                .file
-                .strip_suffix(self.file)
-                .is_some_and(|directory| directory.ends_with('/'))
+        location.line == self.line && location.dependency_file() == Some(self.file)
     }
 }
 
@@ -136,5 +144,21 @@ mod tests {
         assert!(site.matches(&location(&format!("{registry}{}", site.file), 54)));
         assert!(!site.matches(&location(&format!("{registry}{}", site.file), 55)));
         assert!(!site.matches(&location(&format!("{registry}x{}", site.file), 54)));
+        assert!(!site.matches(&location(
+            &format!("/home/owner/openwoot/vendor/{}", site.file),
+            54
+        )));
+    }
+
+    #[test]
+    fn usb_sites_are_waived_from_interrupts_and_the_others_from_the_key_task() {
+        for (index, site) in REVIEWED.iter().enumerate() {
+            let expected = if index < 8 {
+                Origin::Interrupt
+            } else {
+                Origin::KeyTask
+            };
+            assert_eq!(site.reached_from, expected, "{site}");
+        }
     }
 }

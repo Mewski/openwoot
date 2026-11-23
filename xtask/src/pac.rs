@@ -6,17 +6,19 @@ use std::{fs, io, path::Path, process::Command};
 use anyhow::{Context, Result, ensure};
 use svd_rs::Device;
 
-use crate::process;
+use crate::{process, workspace::Workspace};
 
 const SVD2RUST: Tool = Tool {
     program: "svd2rust",
-    version: "svd2rust 0.37.1",
+    version: "0.37.1",
 };
 
 const FORM: Tool = Tool {
     program: "form",
-    version: "form 0.13.0",
+    version: "0.13.0",
 };
+
+const PACKAGE_SUFFIX: &str = "-pac";
 
 const CHIPS: [Chip; 2] = [
     Chip {
@@ -34,11 +36,18 @@ const CHIPS: [Chip; 2] = [
 pub(crate) fn run(root: &Path) -> Result<()> {
     SVD2RUST.require()?;
     FORM.require()?;
+    let workspace = Workspace::load(root)?;
     for chip in &CHIPS {
-        chip.generate(root)
+        chip.generate(root, workspace.target_directory())
             .with_context(|| format!("could not generate the `{}` PAC", chip.name))?;
     }
     Ok(())
+}
+
+pub(crate) fn is_generated(package: &str) -> bool {
+    package
+        .strip_suffix(PACKAGE_SUFFIX)
+        .is_some_and(|chip| CHIPS.iter().any(|known| known.name == chip))
 }
 
 struct Tool {
@@ -60,14 +69,19 @@ impl Tool {
         );
         let reported = String::from_utf8_lossy(&output.stdout);
         ensure!(
-            reported.starts_with(self.version),
-            "`{}` reports `{}`, the PACs are generated with `{}`",
+            reports_version(&reported, self.program, self.version),
+            "`{}` reports `{}`, the PACs are generated with version {}",
             self.program,
             reported.trim(),
             self.version
         );
         Ok(())
     }
+}
+
+fn reports_version(reported: &str, program: &str, version: &str) -> bool {
+    let mut words = reported.split_whitespace();
+    words.next() == Some(program) && words.next() == Some(version)
 }
 
 struct Chip {
@@ -77,9 +91,11 @@ struct Chip {
 }
 
 impl Chip {
-    fn generate(&self, root: &Path) -> Result<()> {
-        let package = root.join("crates").join(format!("{}-pac", self.name));
-        let work = root.join("target").join("pac").join(self.name);
+    fn generate(&self, root: &Path, target: &Path) -> Result<()> {
+        let package = root
+            .join("crates")
+            .join(format!("{}{PACKAGE_SUFFIX}", self.name));
+        let work = target.join("pac").join(self.name);
         recreate(&work)?;
 
         let source = package.join("svd").join(self.svd_file);
@@ -110,24 +126,29 @@ impl Chip {
                 .arg(&work),
         )?;
 
-        let sources = package.join("src");
-        recreate(&sources)?;
+        let formed = work.join("src");
+        recreate(&formed)?;
         process::execute(
             Command::new(FORM.program)
                 .env("RUST_LOG", "warn")
                 .arg("--input")
                 .arg(work.join("lib.rs"))
                 .arg("--outdir")
-                .arg(&sources),
+                .arg(&formed),
         )?;
-        copy(&work.join("generic.rs"), &sources.join("generic.rs"))?;
+        copy(&work.join("generic.rs"), &formed.join("generic.rs"))?;
+
+        let sources = package.join("src");
+        recreate(&sources)?;
+        copy_tree(&formed, &sources)?;
         for file in ["build.rs", "device.x"] {
             copy(&work.join(file), &package.join(file))?;
         }
 
         process::execute(
             Command::new("rustfmt")
-                .args(["+nightly", "--edition", "2024"])
+                .arg(process::nightly())
+                .args(["--edition", "2024"])
                 .arg(sources.join("lib.rs"))
                 .arg(package.join("build.rs"))
                 .current_dir(root),
@@ -152,4 +173,68 @@ fn copy(from: &Path, to: &Path) -> Result<()> {
     fs::copy(from, to)
         .with_context(|| format!("could not copy `{}` to `{}`", from.display(), to.display()))?;
     Ok(())
+}
+
+fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+    fs::create_dir_all(to).with_context(|| format!("could not create `{}`", to.display()))?;
+    let unreadable = || format!("could not read `{}`", from.display());
+    for entry in fs::read_dir(from).with_context(unreadable)? {
+        let entry = entry.with_context(unreadable)?;
+        let (source, destination) = (entry.path(), to.join(entry.file_name()));
+        if source.is_dir() {
+            copy_tree(&source, &destination)?;
+        } else {
+            copy(&source, &destination)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::env;
+
+    use super::*;
+
+    #[test]
+    fn only_the_generated_crates_count_as_pacs() {
+        assert!(is_generated("gd32f425-pac"));
+        assert!(is_generated("gd32f303-pac"));
+        assert!(!is_generated("gd32f405-pac"));
+        assert!(!is_generated("gd32f425"));
+        assert!(!is_generated("openwoot-gd32f4"));
+    }
+
+    #[test]
+    fn a_tool_must_report_exactly_the_pinned_version() {
+        assert!(reports_version(
+            "svd2rust 0.37.1 (8f7c2a1 2025-06-01)\n",
+            "svd2rust",
+            "0.37.1"
+        ));
+        assert!(reports_version("form 0.13.0\n", "form", "0.13.0"));
+        assert!(!reports_version("svd2rust 0.37.10\n", "svd2rust", "0.37.1"));
+        assert!(!reports_version("form 0.12.0\n", "form", "0.13.0"));
+        assert!(!reports_version("", "form", "0.13.0"));
+    }
+
+    #[test]
+    fn a_tree_is_copied_with_its_subdirectories() {
+        let root = env::temp_dir().join(format!("openwoot-xtask-pac-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let (from, to) = (root.join("formed"), root.join("src"));
+        fs::create_dir_all(from.join("adc0")).unwrap();
+        fs::write(from.join("lib.rs"), "mod adc0;").unwrap();
+        fs::write(from.join("adc0").join("ctl0.rs"), "pub struct Ctl0;").unwrap();
+        copy_tree(&from, &to).unwrap();
+        let copied = (
+            fs::read_to_string(to.join("lib.rs")).unwrap(),
+            fs::read_to_string(to.join("adc0").join("ctl0.rs")).unwrap(),
+        );
+        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(
+            copied,
+            ("mod adc0;".to_owned(), "pub struct Ctl0;".to_owned())
+        );
+    }
 }

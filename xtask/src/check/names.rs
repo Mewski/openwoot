@@ -37,9 +37,8 @@ pub(super) fn in_shared_code(
             .filter(|file| file.starts_with(&member.directory))
         {
             let text = fs::read_to_string(file)
-                .with_context(|| format!("could not read `{}`", file.display()))?
-                .to_lowercase();
-            for name in names.iter().filter(|name| text.contains(name.as_str())) {
+                .with_context(|| format!("could not read `{}`", file.display()))?;
+            for name in names_in(&text, &names) {
                 problems.push(format!(
                     "{}: shared code names the board or chip `{name}`",
                     relative(&workspace.root, file)
@@ -48,4 +47,31 @@ pub(super) fn in_shared_code(
         }
     }
     Ok(())
+}
+
+fn names_in<'n>(text: &str, names: &'n BTreeSet<String>) -> impl Iterator<Item = &'n str> {
+    let text = text.to_lowercase();
+    names
+        .iter()
+        .map(String::as_str)
+        .filter(move |name| text.contains(name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_board_or_chip_name_is_found_in_any_case() {
+        let names = BTreeSet::from(["gd32f4", "wooting-80he", "wooting_80he"].map(str::to_owned));
+        assert_eq!(
+            names_in("use Wooting_80HE::scan;", &names).collect::<Vec<_>>(),
+            ["wooting_80he"]
+        );
+        assert_eq!(
+            names_in("// GD32F4 and wooting-80he", &names).collect::<Vec<_>>(),
+            ["gd32f4", "wooting-80he"]
+        );
+        assert_eq!(names_in("let chip = 1;", &names).count(), 0);
+    }
 }

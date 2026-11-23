@@ -62,7 +62,17 @@ impl Bits<'_> {
     }
 }
 
-pub(super) fn window_peripheral(window: &Window) -> Result<Peripheral> {
+pub(super) fn add_window(device: &mut Device, window: &Window) -> Result<()> {
+    ensure!(
+        device.get_peripheral(window.peripheral).is_none(),
+        "peripheral `{}` exists already",
+        window.peripheral
+    );
+    device.peripherals.push(window_peripheral(window)?);
+    Ok(())
+}
+
+fn window_peripheral(window: &Window) -> Result<Peripheral> {
     let register = Register {
         name: &format!("{}[%s]", window.register),
         description: window.register_description,
@@ -158,7 +168,35 @@ pub(super) fn resize(register: &mut RegisterInfo, name: &str, width: u32) -> Res
     Ok(())
 }
 
-pub(super) fn narrow(register: &mut RegisterInfo, size: u32) -> Result<()> {
+pub(super) fn narrow_registers(
+    peripheral: &mut PeripheralInfo,
+    size: u32,
+    kept: &[&str],
+) -> Result<()> {
+    for name in kept {
+        ensure!(
+            peripheral.get_register(name).is_some(),
+            "the SVD file has no register `{}.{name}`",
+            peripheral.name
+        );
+    }
+    let mut narrowed = 0_usize;
+    for register in peripheral
+        .registers_mut()
+        .filter(|register| !kept.contains(&register.name.as_str()))
+    {
+        narrow(register, size)?;
+        narrowed += 1;
+    }
+    ensure!(
+        narrowed > 0,
+        "the SVD file has no register in `{}` to narrow",
+        peripheral.name
+    );
+    Ok(())
+}
+
+fn narrow(register: &mut RegisterInfo, size: u32) -> Result<()> {
     let kept = mask(size);
     if let Some(overflow) = register.fields().find(|field| field.msb() >= size) {
         bail!(

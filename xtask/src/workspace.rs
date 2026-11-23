@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use cargo_metadata::{Metadata, MetadataCommand, Package, TargetKind};
 
+use crate::pac;
+
 #[derive(Debug)]
 pub(crate) struct Board {
     pub(crate) name: String,
@@ -76,7 +78,7 @@ impl Workspace {
     pub(crate) fn is_pac(&self, package: &Package) -> bool {
         let directory = Self::package_directory(package);
         directory.parent() == Some(self.root.join("crates").as_path())
-            && package.name.ends_with("-pac")
+            && pac::is_generated(package.name.as_str())
     }
 
     pub(crate) fn target_directory(&self) -> &Path {
@@ -103,7 +105,7 @@ impl Workspace {
         let [binary] = binaries.as_slice() else {
             bail!("board `{}` must have exactly one binary", package.name);
         };
-        let chip_hals: Vec<(&str, &str)> = package
+        let mut chip_hals: Vec<(&str, &str)> = package
             .dependencies
             .iter()
             .filter_map(|dependency| {
@@ -112,6 +114,8 @@ impl Workspace {
                     .and_then(|member| Some((member.name.as_str(), chip_target(member)?)))
             })
             .collect();
+        chip_hals.sort_unstable();
+        chip_hals.dedup();
         let [(chip_hal, target)] = chip_hals.as_slice() else {
             bail!(
                 "board `{}` must depend on exactly one chip HAL",

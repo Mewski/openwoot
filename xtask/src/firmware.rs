@@ -110,3 +110,62 @@ const fn address_halves(address: u32) -> [u16; 2] {
         u16::from_le_bytes([byte0, byte1]),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn segments_are_joined_with_erased_bytes_between_them() {
+        let segments = [
+            Segment {
+                address: 0x0800_8000,
+                bytes: &[1, 2],
+            },
+            Segment {
+                address: 0x0800_8004,
+                bytes: &[3],
+            },
+        ];
+        assert_eq!(flatten(&segments).unwrap(), [1, 2, 0xFF, 0xFF, 3]);
+    }
+
+    #[test]
+    fn overlapping_segments_are_rejected() {
+        let segments = [
+            Segment {
+                address: 0x0800_8000,
+                bytes: &[1, 2, 3],
+            },
+            Segment {
+                address: 0x0800_8002,
+                bytes: &[4],
+            },
+        ];
+        assert_eq!(
+            flatten(&segments).unwrap_err().to_string(),
+            "loadable segments overlap at 0x0800_8002"
+        );
+        assert!(flatten(&[]).is_err());
+    }
+
+    #[test]
+    fn hex_records_end_at_sixteen_bytes_and_at_each_64_kib_boundary() {
+        let bytes = [0xAB_u8; 20];
+        let segments = [Segment {
+            address: 0x0800_FFF8,
+            bytes: &bytes,
+        }];
+        let hex = intel_hex(&segments, 0x0800_8001)
+            .unwrap()
+            .to_ascii_uppercase();
+        let records: Vec<&str> = hex.lines().collect();
+        assert_eq!(records.len(), 6);
+        assert_eq!(records[0], ":020000040800F2");
+        assert!(records[1].starts_with(":08FFF800ABABABAB"));
+        assert_eq!(records[2], ":020000040801F1");
+        assert!(records[3].starts_with(":0C000000ABABABAB"));
+        assert_eq!(records[4], ":04000005080080016E");
+        assert_eq!(records[5], ":00000001FF");
+    }
+}
