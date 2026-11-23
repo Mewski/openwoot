@@ -6,6 +6,7 @@ use openwoot::{
     analog::MinMax,
     scan::{Map, RecheckFrom, Shared, ZeroLevel},
 };
+use static_cell::ConstStaticCell;
 
 use crate::hal;
 
@@ -51,6 +52,8 @@ pub const WIRING: Wiring<INPUTS> = Wiring {
     ],
     sample_time: SampleTime::Cycles3,
 };
+
+const _: () = assert!(WIRING.is_valid());
 
 pub const ANSI: Map<INPUTS, ADDRESSES> = Map::from_codes([
     [
@@ -136,9 +139,11 @@ pub const JIS: Map<INPUTS, ADDRESSES> = Map::from_codes([
 pub const SENSOR_MAPS: [Map<INPUTS, ADDRESSES>; 3] = [ANSI, ISO, JIS];
 
 pub static SCAN: Shared<Sensing, INPUTS, ADDRESSES> = Shared::new();
+pub static SENSORS: ConstStaticCell<Sensors> = ConstStaticCell::new(Sensors::new());
 
 pub type Converter = hal::scan::Converter<INPUTS>;
 pub type Scanner = openwoot::scan::Scanner<Sensing, INPUTS, ADDRESSES>;
+pub type Sensors = openwoot::scan::Sensors<<Sensing as openwoot::scan::Sensing>::Noise, INPUTS>;
 
 #[derive(Debug)]
 pub struct Sensing;
@@ -151,9 +156,9 @@ impl openwoot::scan::Sensing for Sensing {
 }
 
 #[derive(Debug)]
-pub struct ScanInterrupt;
+pub struct Interrupt;
 
-impl hal::scan::Conversion for ScanInterrupt {
+impl hal::scan::Conversion for Interrupt {
     fn on_conversion() {
         SCAN.on_conversion();
     }
@@ -167,7 +172,10 @@ pub fn select_layout(variant: u8) {
 
 #[cfg(test)]
 mod tests {
-    use openwoot::{keys::Key, scan::Position};
+    use openwoot::{
+        keys::Key,
+        scan::{ADDRESSES_PER_INPUT, Position},
+    };
 
     use super::*;
     use crate::{KEY_COLUMNS, KEY_ROWS};
@@ -206,6 +214,28 @@ mod tests {
         assert_eq!(
             JIS.key(Position::new(4, 14)),
             Some(Key { row: 1, column: 14 })
+        );
+    }
+
+    fn digest(map: &Map<INPUTS, ADDRESSES>) -> u64 {
+        let addresses = u8::try_from(ADDRESSES_PER_INPUT).unwrap();
+        (0..u8::try_from(INPUTS).unwrap())
+            .flat_map(|input| (0..addresses).map(move |address| Position::new(input, address)))
+            .map(|position| map.key(position).map_or(u8::MAX, Key::code))
+            .fold(0xcbf2_9ce4_8422_2325, |hash, code| {
+                (hash ^ u64::from(code)).wrapping_mul(0x0100_0000_01b3)
+            })
+    }
+
+    #[test]
+    fn the_sensor_maps_are_those_of_the_reference_firmware() {
+        assert_eq!(
+            SENSOR_MAPS.map(|map| digest(&map)),
+            [
+                0x9c64_91e9_4a52_38af,
+                0x3280_ec86_8fc4_e843,
+                0x90ff_530d_ff49_2a20,
+            ]
         );
     }
 }

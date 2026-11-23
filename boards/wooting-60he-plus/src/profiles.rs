@@ -244,7 +244,7 @@ const fn uncreated() -> Preset {
         actuation_points: &[],
         advanced: &[],
         lighting: lighting([]),
-        colors: [None; LAYERS],
+        colors: [Some(&COLOR_RUN), None, None, None],
         lightbar_brightness: None,
     }
 }
@@ -298,7 +298,10 @@ mod tests {
     use openwoot_protocol::keys::Layer;
 
     use super::*;
-    use crate::lighting::{ANSI, GEOMETRY, LEDS, PAGE_LENGTH, PAGES};
+    use crate::{
+        keys::PROFILES,
+        lighting::{ANSI, GEOMETRY, LEDS, PAGE_LENGTH, PAGES},
+    };
 
     const STEP_MS: u32 = 16;
     const KEY_EVENTS: [(u32, Key, KeyEvent); 4] = [
@@ -367,7 +370,7 @@ mod tests {
         0x4557_32fa_a4c5_385e,
         0x4557_32fa_a4c5_385e,
         0x4557_32fa_a4c5_385e,
-        0xd829_58f0_d35a_ab4b,
+        0x22d8_f370_338c_9b56,
     ];
     const RAPID_FRAMES: [u64; 60] = [
         0xea07_e981_fd06_fa3f,
@@ -494,6 +497,51 @@ mod tests {
                 .layer(Layer::Two)
                 .and_then(|colors| colors.get(5 * KEY_COLUMNS + 1)),
             Some(&from_rgb565(0xF800))
+        );
+    }
+
+    fn lit_keys(preset: &Preset) -> usize {
+        let mut layers = EffectStack::<KEY_ROWS, KEY_COLUMNS>::new();
+        layers.apply(&preset.lighting.effects);
+        let mut frame = Frame::<PAGES, PAGE_LENGTH>::new();
+        let mut canvas = Painter::new(&mut frame, &LEDS, &ANSI, None);
+        let base = preset.colors.first().copied().flatten();
+        for row in 0..KEY_ROWS {
+            for column in 0..KEY_COLUMNS {
+                let color = base
+                    .and_then(|colors| colors.get(row * KEY_COLUMNS + column))
+                    .copied()
+                    .unwrap_or(NO_COLOR);
+                canvas.set_key(row, column, color);
+            }
+        }
+        layers.render(&mut canvas, GEOMETRY, STEP_MS);
+        (0..KEY_ROWS)
+            .flat_map(|row| (0..KEY_COLUMNS).map(move |column| (row, column)))
+            .filter_map(|(row, column)| canvas.key(row, column))
+            .filter(|color| *color != NO_COLOR)
+            .count()
+    }
+
+    #[test]
+    fn every_profile_slot_lights_every_key_led() {
+        let key_leds = ANSI.leds.iter().flatten().flatten().count();
+        for slot in 0..PROFILES {
+            assert_eq!(lit_keys(FACTORY.preset(slot)), key_leds, "slot {slot}");
+        }
+    }
+
+    #[test]
+    fn each_factory_profile_has_its_base_colours() {
+        let base = |slot| FACTORY.preset(slot).colors[0];
+        assert_eq!(
+            [base(0), base(1), base(2), base(3)],
+            [
+                Some(&COLOR_RUN),
+                Some(&BLUE_RUN),
+                Some(&COLOR_RUN),
+                Some(&COLOR_RUN)
+            ]
         );
     }
 }

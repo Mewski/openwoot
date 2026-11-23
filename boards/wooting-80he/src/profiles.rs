@@ -85,7 +85,7 @@ static PRESETS: [Preset; 4] = [
                 gamepad_curve: false,
             })],
         ),
-        colors: [None; LAYERS],
+        colors: [Some(&BLUE_RUN), None, None, None],
         lightbar_brightness: None,
     },
     ANALOG_GLOW,
@@ -153,7 +153,7 @@ const ANALOG_GLOW: Preset = Preset {
             gamepad_curve: false,
         })],
     ),
-    colors: [None; LAYERS],
+    colors: [Some(&BLUE_RUN), None, None, None],
     lightbar_brightness: None,
 };
 const OTHER: Preset = Preset {
@@ -408,6 +408,7 @@ mod tests {
     use super::*;
     use crate::{
         NAME,
+        keys::PROFILES,
         lighting::{ANSI, GEOMETRY, LEDS, PAGE_LENGTH, PAGES},
     };
 
@@ -715,5 +716,65 @@ mod tests {
     #[test]
     fn the_light_bar_count_matches_the_led_table() {
         assert_eq!(usize::from(LIGHTBAR_COUNT), LIGHTBAR_LEDS.len());
+    }
+
+    fn lit_keys(preset: &Preset) -> usize {
+        let mut layers = EffectStack::<KEY_ROWS, KEY_COLUMNS>::new();
+        layers.apply(&preset.lighting.effects);
+        let mut frame = Frame::<PAGES, PAGE_LENGTH>::new();
+        let mut canvas = Painter::new(&mut frame, &LEDS, &ANSI, None);
+        let base = preset.colors.first().copied().flatten();
+        for row in 0..KEY_ROWS {
+            for column in 0..KEY_COLUMNS {
+                let color = base
+                    .and_then(|colors| colors.get(row * KEY_COLUMNS + column))
+                    .copied()
+                    .unwrap_or(NO_COLOR);
+                canvas.set_key(row, column, color);
+            }
+        }
+        layers.render(&mut canvas, GEOMETRY, STEP_MS);
+        (0..KEY_ROWS)
+            .flat_map(|row| (0..KEY_COLUMNS).map(move |column| (row, column)))
+            .filter_map(|(row, column)| canvas.key(row, column))
+            .filter(|color| *color != NO_COLOR)
+            .count()
+    }
+
+    #[test]
+    fn every_profile_slot_lights_every_key_led() {
+        let key_leds = ANSI.leds.iter().flatten().flatten().count();
+        for slot in 0..PROFILES {
+            assert_eq!(lit_keys(FACTORY.preset(slot)), key_leds, "slot {slot}");
+            assert_eq!(
+                lit_keys(EDITION.factory.preset(slot)),
+                key_leds,
+                "edition slot {slot}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_factory_profile_has_its_base_colours() {
+        let regular = |slot| FACTORY.preset(slot).colors[0];
+        assert_eq!(
+            [regular(0), regular(1), regular(2), regular(3)],
+            [
+                Some(&BLUE_RUN),
+                Some(&RED_RUN),
+                Some(&BLUE_RUN),
+                Some(&BLUE_RUN)
+            ]
+        );
+        let edition = |slot| EDITION.factory.preset(slot).colors[0];
+        assert_eq!(
+            [edition(0), edition(1), edition(2), edition(3)],
+            [
+                Some(&RED_RUN),
+                Some(&BLUE_RUN),
+                Some(&RED_RUN),
+                Some(&BLUE_RUN)
+            ]
+        );
     }
 }

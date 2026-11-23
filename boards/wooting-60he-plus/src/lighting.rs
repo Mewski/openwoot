@@ -12,8 +12,8 @@ use openwoot_drivers::is31fl3741::Configuration;
 
 use crate::hal;
 
-pub const ROWS: usize = 6;
-pub const COLUMNS: usize = 14;
+pub const ROWS: usize = crate::KEY_ROWS;
+pub const COLUMNS: usize = crate::KEY_COLUMNS;
 pub const PAGES: usize = 7;
 pub const PAGE_LENGTH: usize = 30;
 pub const LED_COUNT: usize = 108;
@@ -361,14 +361,22 @@ pub fn variant(layout_variant: u8) -> &'static Variant<ROWS, COLUMNS> {
 
 #[cfg(test)]
 mod tests {
+    use openwoot::scan::Map;
+
     use super::*;
+    use crate::scan::{self, ADDRESSES, INPUTS};
 
     const BUS_HZ: u64 = 400_000;
     const BITS_PER_BYTE: u64 = 9;
     const BITS_PER_TRANSFER: u64 = 2;
+    const CHANNELS_PER_LED: usize = 3;
 
     fn variants() -> [&'static Variant<ROWS, COLUMNS>; 3] {
         [&ANSI, &ISO, &UNKNOWN]
+    }
+
+    fn layouts() -> [(&'static Variant<ROWS, COLUMNS>, Map<INPUTS, ADDRESSES>); 2] {
+        [(&ANSI, scan::ANSI), (&ISO, scan::ISO)]
     }
 
     #[test]
@@ -416,5 +424,100 @@ mod tests {
         let microseconds = bits * 1_000_000 / BUS_HZ;
         assert!(microseconds < u64::from(openwoot::lighting::FRAME_PERIOD_MS) * 1000);
         assert_eq!(microseconds, 5_230);
+    }
+
+    fn digest(bytes: impl IntoIterator<Item = u8>) -> u64 {
+        bytes.into_iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        })
+    }
+
+    fn key_leds(variant: &Variant<ROWS, COLUMNS>) -> u64 {
+        digest(
+            variant
+                .leds
+                .iter()
+                .flatten()
+                .map(|led| led.map_or(u8::MAX, |led| led.0)),
+        )
+    }
+
+    #[test]
+    fn every_layout_lights_each_sensor_key_and_besides_only_the_space_bar() {
+        for (variant, map) in layouts() {
+            for (_, key) in map.iter() {
+                assert!(variant.led(key.row(), key.column()).is_some(), "{key:?}");
+            }
+            for (row, leds) in (0..).zip(variant.leds.iter()) {
+                for (column, led) in (0..).zip(leds.iter()) {
+                    let Some(led) = led else {
+                        continue;
+                    };
+                    let key = Key::new(row, column);
+                    let fill = key.row() == variant.spacebar.row()
+                        && variant.spacebar_fill.contains(&key.column);
+                    assert!(map.position(key).is_some() || fill, "{led:?}");
+                    let keys = variant
+                        .leds
+                        .iter()
+                        .flatten()
+                        .flatten()
+                        .filter(|other| *other == led)
+                        .count();
+                    assert_eq!(keys, 1, "{led:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_sensor_position_lights_the_same_led_in_every_layout() {
+        for (variant, map) in layouts() {
+            for (position, key) in map.iter() {
+                for (other_variant, other_map) in layouts() {
+                    let Some(other_key) = other_map.key(position) else {
+                        continue;
+                    };
+                    assert_eq!(
+                        variant.led(key.row(), key.column()),
+                        other_variant.led(other_key.row(), other_key.column()),
+                        "{position:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_two_leds_share_a_driver_register() {
+        let first_registers = || {
+            LEDS.positions.iter().flatten().map(|position| {
+                let page = LEDS.pages[usize::from(position.page)];
+                (
+                    page.bank,
+                    usize::from(page.first_register) + usize::from(position.offset),
+                )
+            })
+        };
+        for (index, (bank, register)) in first_registers().enumerate() {
+            for (other_bank, other_register) in first_registers().skip(index + 1) {
+                assert!(
+                    bank != other_bank || register.abs_diff(other_register) >= CHANNELS_PER_LED,
+                    "bank {bank}, registers {register} and {other_register}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_led_tables_are_those_of_the_reference_firmware() {
+        assert_eq!(
+            [key_leds(&ANSI), key_leds(&ISO)],
+            [0x0e21_ea91_a153_615e, 0xce4c_e979_8b44_f358]
+        );
+        let positions = LEDS.positions.iter().flat_map(|position| {
+            position.map_or([u8::MAX; 2], |position| [position.page, position.offset])
+        });
+        assert_eq!(digest(positions), 0x6b24_a79b_82c2_08e7);
     }
 }

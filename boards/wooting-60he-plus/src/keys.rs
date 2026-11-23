@@ -302,9 +302,9 @@ const LAYERS: [[[Action; KEY_COLUMNS]; KEY_ROWS]; 3] = [
             Action::None,
         ],
         [
-            Action::Keyboard(0x4F),
-            Action::Function(Function::ToggleKeyDisable),
             Action::Keyboard(0x50),
+            Action::Function(Function::ToggleKeyDisable),
+            Action::Keyboard(0x4F),
             Action::None,
             Action::None,
             Action::None,
@@ -397,5 +397,80 @@ mod tests {
             KEYMAP.action(Layer::Base, Key::new(5, 10), 0),
             KEYMAP.action(Layer::Base, Key::new(5, 10), 1)
         );
+    }
+
+    fn usage(character: u8) -> u8 {
+        match character {
+            b'a'..=b'z' => character - b'a' + 0x04,
+            b'1'..=b'9' => character - b'1' + 0x1E,
+            _ => 0x27,
+        }
+    }
+
+    #[test]
+    fn the_base_layer_has_the_digit_and_letter_rows_in_typing_order() {
+        for variant in 0..u8::try_from(LAYOUT_VARIANTS).unwrap() {
+            for (row, first_column, characters) in [
+                (1, 1, "1234567890"),
+                (2, 1, "qwertyuiop"),
+                (3, 1, "asdfghjkl"),
+                (4, 2, "zxcvbnm"),
+            ] {
+                for (column, character) in (first_column..).zip(characters.bytes()) {
+                    assert_eq!(
+                        KEYMAP.action(Layer::Base, Key::new(row, column), variant),
+                        Action::Keyboard(usage(character)),
+                        "{}",
+                        char::from(character)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_sensor_key_has_a_base_action_of_its_own() {
+        for (variant, map) in (0..).zip(SENSOR_MAPS) {
+            for (_, key) in map.iter() {
+                let action = KEYMAP.action(Layer::Base, key, variant);
+                assert_ne!(action, Action::None, "{key:?}");
+                let keys = map
+                    .iter()
+                    .filter(|(_, other)| KEYMAP.action(Layer::Base, *other, variant) == action)
+                    .count();
+                assert_eq!(keys, 1, "{action:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_layer_key_selects_the_same_layer_on_the_layer_it_opens() {
+        for variant in 0..u8::try_from(LAYOUT_VARIANTS).unwrap() {
+            for layer in Layer::ALL {
+                for (_, key) in sensor_map(variant).iter() {
+                    if let Action::Layer(opened) = KEYMAP.action(layer, key, variant) {
+                        assert_eq!(
+                            KEYMAP.action(opened, key, variant),
+                            Action::Layer(opened),
+                            "{key:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_second_fn_layer_has_the_left_arrow_left_of_the_right_arrow() {
+        for variant in 0..u8::try_from(LAYOUT_VARIANTS).unwrap() {
+            assert_eq!(
+                KEYMAP.action(Layer::Two, Key::new(5, 0), variant),
+                Action::Keyboard(0x50)
+            );
+            assert_eq!(
+                KEYMAP.action(Layer::Two, Key::new(5, 2), variant),
+                Action::Keyboard(0x4F)
+            );
+        }
     }
 }

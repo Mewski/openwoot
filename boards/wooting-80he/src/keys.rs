@@ -264,10 +264,22 @@ const VARIANT_PATCHES: [&[Patch]; LAYOUT_VARIANTS] = [
     &[],
     &[
         Patch {
+            layer: Layer::Base,
             key: Key::new(5, 10),
             action: Action::Keyboard(0x88),
         },
         Patch {
+            layer: Layer::Base,
+            key: Key::new(5, 11),
+            action: Action::Keyboard(0xE6),
+        },
+        Patch {
+            layer: Layer::One,
+            key: Key::new(5, 10),
+            action: Action::None,
+        },
+        Patch {
+            layer: Layer::One,
             key: Key::new(5, 11),
             action: Action::Keyboard(0xE6),
         },
@@ -361,5 +373,103 @@ mod tests {
             KEYMAP.action(Layer::Base, Key::new(5, 10), 0),
             Action::Keyboard(0xE6)
         );
+    }
+
+    #[test]
+    fn a_modifier_key_stays_that_modifier_while_fn_is_held() {
+        for (variant, map) in (0..).zip(SENSOR_MAPS) {
+            for (_, key) in map.iter() {
+                let held = KEYMAP.action(Layer::One, key, variant);
+                if matches!(held, Action::Keyboard(0xE0..=0xE7)) {
+                    assert_eq!(held, KEYMAP.action(Layer::Base, key, variant), "{key:?}");
+                }
+            }
+        }
+        assert_eq!(KEYMAP.action(Layer::One, Key::new(5, 10), 2), Action::None);
+    }
+
+    fn usage(character: u8) -> u8 {
+        match character {
+            b'a'..=b'z' => character - b'a' + 0x04,
+            b'1'..=b'9' => character - b'1' + 0x1E,
+            _ => 0x27,
+        }
+    }
+
+    #[test]
+    fn the_base_layer_has_the_digit_and_letter_rows_in_typing_order() {
+        for variant in 0..u8::try_from(LAYOUT_VARIANTS).unwrap() {
+            for (row, first_column, characters) in [
+                (1, 1, "1234567890"),
+                (2, 1, "qwertyuiop"),
+                (3, 1, "asdfghjkl"),
+                (4, 2, "zxcvbnm"),
+            ] {
+                for (column, character) in (first_column..).zip(characters.bytes()) {
+                    assert_eq!(
+                        KEYMAP.action(Layer::Base, Key::new(row, column), variant),
+                        Action::Keyboard(usage(character)),
+                        "{}",
+                        char::from(character)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_sensor_key_has_a_base_action_of_its_own() {
+        for (variant, map) in (0..).zip(SENSOR_MAPS) {
+            for (_, key) in map.iter() {
+                let action = KEYMAP.action(Layer::Base, key, variant);
+                assert_ne!(action, Action::None, "{key:?}");
+                let keys = map
+                    .iter()
+                    .filter(|(_, other)| KEYMAP.action(Layer::Base, *other, variant) == action)
+                    .count();
+                assert_eq!(keys, 1, "{action:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_layer_key_selects_the_same_layer_on_the_layer_it_opens() {
+        for variant in 0..u8::try_from(LAYOUT_VARIANTS).unwrap() {
+            for layer in Layer::ALL {
+                for (_, key) in sensor_map(variant).iter() {
+                    if let Action::Layer(opened) = KEYMAP.action(layer, key, variant) {
+                        assert_eq!(
+                            KEYMAP.action(opened, key, variant),
+                            Action::Layer(opened),
+                            "{key:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_mode_key_and_the_fn_shortcuts_for_profiles_and_brightness_are_bound() {
+        for variant in 0..u8::try_from(LAYOUT_VARIANTS).unwrap() {
+            assert_eq!(
+                KEYMAP.action(Layer::Base, Key::new(0, 14), variant),
+                Action::Function(Function::ToggleModeProfile)
+            );
+            for (column, slot) in (1..).zip(0..PROFILES) {
+                assert_eq!(
+                    KEYMAP.action(Layer::One, Key::new(1, column), variant),
+                    Action::Function(Function::Profile(Slot::new(slot)))
+                );
+            }
+            assert_eq!(
+                KEYMAP.action(Layer::One, Key::new(0, 12), variant),
+                Action::Function(Function::BrightnessDown)
+            );
+            assert_eq!(
+                KEYMAP.action(Layer::One, Key::new(0, 13), variant),
+                Action::Function(Function::BrightnessUp)
+            );
+        }
     }
 }

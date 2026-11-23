@@ -27,7 +27,7 @@ use openwoot::{
 };
 use openwoot_drivers::{is31fl3741::Is31fl3741, spi_nor::SpiNor};
 pub use openwoot_gd32f4 as hal;
-use openwoot_image::{Descriptor, Region, UpdateMode, UsbIds};
+use openwoot_image::{Descriptor, Region, UpdateMode, UpdateProtocol, UsbIds};
 
 include!(concat!(env!("OUT_DIR"), "/memory_layout.rs"));
 
@@ -44,6 +44,7 @@ pub const USB_IDS: UsbIds = UsbIds {
     product_id_base: 0x1400,
 };
 pub const UPDATE_MODE: Option<UpdateMode> = Some(UpdateMode {
+    protocol: UpdateProtocol::WootingFactoryBootloader,
     product_id: 0x140F,
     block_size: 256,
 });
@@ -57,7 +58,7 @@ pub const SERIAL_PAGE: Region = Region {
 };
 pub const KEY_ROWS: usize = 6;
 pub const KEY_COLUMNS: usize = 17;
-pub const DESCRIPTOR: Descriptor = Descriptor::new(NAME, USB_IDS, IMAGE, UPDATE_MODE);
+pub const DESCRIPTOR: Descriptor = Descriptor::new(NAME, USB_IDS, IMAGE, RAM, UPDATE_MODE);
 pub const CLOCK_TREE: rcu::ClockTree = rcu::ClockTree {
     crystal: Hertz::from_mhz(25),
     pll: Pll {
@@ -72,13 +73,18 @@ pub const CLOCK_TREE: rcu::ClockTree = rcu::ClockTree {
     timer_multiplier: TimerMultiplier::Quadruple,
 };
 
+const _: () = assert!(
+    IMAGE.start == BOOTLOADER.end && IMAGE.end == SERIAL_PAGE.start,
+    "the image area of `memory.x` starts behind the bootloader and ends at the serial page"
+);
+
 hal::bind_interrupts!(struct Irqs {
     USBHS => usb::InterruptHandler;
     DMA1_Channel2 => hal::spi::InterruptHandler;
     I2C0_EV => hal::i2c::InterruptHandler;
     I2C0_ER => hal::i2c::InterruptHandler;
     DMA0_Channel6 => hal::i2c::InterruptHandler;
-    ADC => hal::scan::InterruptHandler<scan::ScanInterrupt>;
+    ADC => hal::scan::InterruptHandler<scan::Interrupt>;
 });
 
 pub type UsbDriver = usb::Driver;
@@ -220,7 +226,11 @@ fn serial_number() -> Option<&'static str> {
 
 #[inline(never)]
 fn install_scanner(converter: scan::Converter) {
-    if !scan::SCAN.install(|| scan::Scanner::new(converter, scan::ANSI, scan::PARALLEL_ORDER)) {
+    let installed = scan::SENSORS.try_take().is_some_and(|sensors| {
+        scan::SCAN
+            .install(|| scan::Scanner::new(converter, scan::ANSI, scan::PARALLEL_ORDER, sensors))
+    });
+    if !installed {
         hal::system::reset();
     }
 }
@@ -250,6 +260,28 @@ mod tests {
     fn image_keeps_clear_of_the_bootloader_and_the_serial_page() {
         assert_eq!(IMAGE.start, BOOTLOADER.end);
         assert_eq!(IMAGE.end, SERIAL_PAGE.start);
+    }
+
+    #[test]
+    fn the_descriptor_carries_the_image_area_and_ram_of_memory_x() {
+        let descriptor = Descriptor::from_bytes(&DESCRIPTOR.to_bytes()).unwrap();
+        assert_eq!(descriptor, DESCRIPTOR);
+        assert_eq!(descriptor.image(), IMAGE);
+        assert_eq!(
+            descriptor.ram(),
+            Region {
+                start: 0x2000_0000,
+                end: 0x2003_0000
+            }
+        );
+        assert_eq!(
+            descriptor.update_mode(),
+            Some(UpdateMode {
+                protocol: UpdateProtocol::WootingFactoryBootloader,
+                product_id: 0x140F,
+                block_size: 256,
+            })
+        );
     }
 
     #[test]

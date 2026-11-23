@@ -52,13 +52,23 @@ pub const SERIAL_PAGE: Region = Region {
 };
 pub const KEY_ROWS: usize = 6;
 pub const KEY_COLUMNS: usize = 14;
-pub const DESCRIPTOR: Descriptor = Descriptor::new(NAME, USB_IDS, IMAGE, UPDATE_MODE);
+pub const DESCRIPTOR: Descriptor = Descriptor::new(NAME, USB_IDS, IMAGE, RAM, UPDATE_MODE);
 pub const CLOCK_TREE: rcu::ClockTree = rcu::ClockTree {
     pll_multiplier: PllMultiplier::new::<30>(),
     ahb_divider: AhbDivider::By1,
     apb1_divider: ApbDivider::By2,
     apb2_divider: ApbDivider::By1,
 };
+
+const _: () = assert!(
+    IMAGE.start == BOOTLOADER.end && IMAGE.end == SERIAL_PAGE.start,
+    "the image area of `memory.x` starts behind the bootloader and ends at the serial page"
+);
+
+const _: () = assert!(
+    CLOCK_TREE.is_valid() && usb::supports_system_clock(CLOCK_TREE.clocks().system),
+    "the clock tree stays within the bus limits and gives the USB controller its 48 MHz"
+);
 
 hal::bind_interrupts!(struct Irqs {
     USBD_HP_CAN0_TX => usb::InterruptHandler;
@@ -67,7 +77,7 @@ hal::bind_interrupts!(struct Irqs {
     I2C0_EV => hal::i2c::InterruptHandler;
     I2C0_ER => hal::i2c::InterruptHandler;
     DMA0_Channel5 => hal::i2c::InterruptHandler;
-    ADC0_1 => hal::scan::InterruptHandler<scan::ScanInterrupt>;
+    ADC0_1 => hal::scan::InterruptHandler<scan::Interrupt>;
 });
 
 pub type UsbDriver = usb::Driver<Pin<'A', 15, Output>>;
@@ -177,7 +187,11 @@ fn serial_number() -> Option<&'static str> {
 
 #[inline(never)]
 fn install_scanner(converter: scan::Converter) {
-    if !scan::SCAN.install(|| scan::Scanner::new(converter, scan::ANSI, scan::PARALLEL_ORDER)) {
+    let installed = scan::SENSORS.try_take().is_some_and(|sensors| {
+        scan::SCAN
+            .install(|| scan::Scanner::new(converter, scan::ANSI, scan::PARALLEL_ORDER, sensors))
+    });
+    if !installed {
         hal::system::reset();
     }
 }
@@ -207,6 +221,21 @@ mod tests {
     fn image_keeps_clear_of_the_bootloader_and_the_serial_page() {
         assert_eq!(IMAGE.start, BOOTLOADER.end);
         assert_eq!(IMAGE.end, SERIAL_PAGE.start);
+    }
+
+    #[test]
+    fn the_descriptor_carries_the_image_area_and_ram_of_memory_x() {
+        let descriptor = Descriptor::from_bytes(&DESCRIPTOR.to_bytes()).unwrap();
+        assert_eq!(descriptor, DESCRIPTOR);
+        assert_eq!(descriptor.image(), IMAGE);
+        assert_eq!(
+            descriptor.ram(),
+            Region {
+                start: 0x2000_0000,
+                end: 0x2001_8000
+            }
+        );
+        assert_eq!(descriptor.update_mode(), None);
     }
 
     #[test]

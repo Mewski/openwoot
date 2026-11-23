@@ -12,9 +12,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     fs::write(
         out.join("memory_layout.rs"),
         format!(
-            "pub const IMAGE: Region = Region {{ start: {}, end: {} }};\n",
+            "pub const IMAGE: Region = Region {{ start: {}, end: {} }};\npub const RAM: Region = \
+             Region {{ start: {}, end: {} }};\n",
             grouped_hex(layout.flash.start),
             grouped_hex(layout.flash.end),
+            grouped_hex(layout.ram.start),
+            grouped_hex(layout.ram.end),
         ),
     )?;
     println!("cargo:rustc-link-search={}", out.display());

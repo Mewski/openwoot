@@ -4,14 +4,13 @@
 use embassy_executor::{SendSpawner, Spawner};
 use embassy_futures::block_on;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
-use embassy_usb::UsbDevice;
 use openwoot::{
     keys::{Keys, Travels},
     layout::Standard,
     lighting::Bar,
     profile::{Configurator, Model},
     protocol::{self, Handler},
-    runtime::{Channel, Firmware, KeyReports, KeyTask, Reports, State},
+    runtime::{Channel, Device, Firmware, KeyReports, KeyTask, Reports, State},
     usb::Negotiated,
 };
 use static_cell::StaticCell;
@@ -99,6 +98,9 @@ fn start(spawner: Spawner, key_executor: SendSpawner) {
 
 #[inline(never)]
 fn open_model(board: &mut Board) -> &'static Mutex<Mutual, ProfileModel> {
+    if board.storage.opened.is_err() {
+        STATE.diagnostics().storage_loaded(&board.storage.opened);
+    }
     let model = MODEL.init(Mutex::new(Model::new(
         STATE.keys(),
         STATE.profile(),
@@ -116,7 +118,7 @@ fn open_model(board: &mut Board) -> &'static Mutex<Mutual, ProfileModel> {
 }
 
 #[embassy_executor::task]
-async fn device(mut device: UsbDevice<'static, Driver>) {
+async fn device(mut device: Device<'static, Driver, Mutual>) {
     device.run().await;
 }
 
@@ -126,7 +128,7 @@ async fn channel(
     handler: Handler<ProfileConfigurator>,
     mut bootloader: hal::system::Bootloader,
 ) {
-    channel.run(handler, &mut bootloader).await;
+    channel.run_timed(handler, &mut bootloader).await;
 }
 
 #[embassy_executor::task]
@@ -155,8 +157,6 @@ async fn scanning(task: KeyTask<'static, Mutual>) {
 }
 
 #[panic_handler]
-fn halt(_info: &core::panic::PanicInfo) -> ! {
-    loop {
-        core::hint::spin_loop();
-    }
+fn restart(_info: &core::panic::PanicInfo) -> ! {
+    hal::system::reset()
 }
