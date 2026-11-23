@@ -11,6 +11,8 @@ pub(super) const MOUSE_REPORT_ID: u8 = 3;
 pub const CONSUMER_SLOTS: usize = 3;
 pub(super) const MOUSE_BUTTONS: u8 = 5;
 
+const MOUSE_AXIS_MIN: i8 = -127;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SystemControl {
     PowerDown,
@@ -95,8 +97,8 @@ impl InputReport for MouseReport {
     const LEN: usize = 3;
 
     fn to_bytes(&self) -> Self::Bytes {
-        let [x] = self.x.to_le_bytes();
-        let [y] = self.y.to_le_bytes();
+        let [x] = self.x.max(MOUSE_AXIS_MIN).to_le_bytes();
+        let [y] = self.y.max(MOUSE_AXIS_MIN).to_le_bytes();
         [
             MOUSE_REPORT_ID,
             self.buttons & ((1 << MOUSE_BUTTONS) - 1),

@@ -9,6 +9,8 @@ pub const NKRO_DESCRIPTOR: &[u8] = &nkro_descriptor().to_array::<{ nkro_descript
 pub(super) const BOOT_KEY_SLOTS: usize = 6;
 pub(super) const NKRO_BITMAP_LEN: usize = bitmap_len();
 
+const ERROR_ROLL_OVER: u8 = 0x01;
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Modifiers(u8);
 
@@ -16,6 +18,7 @@ pub struct Modifiers(u8);
 pub struct BootReport {
     pub modifiers: Modifiers,
     pub keys: [u8; BOOT_KEY_SLOTS],
+    rolled_over: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,25 +86,31 @@ impl Modifiers {
 
 impl BootReport {
     pub fn press(&mut self, usage: u8) -> bool {
-        if self.modifiers.set(usage, true) || self.keys.contains(&usage) {
+        if usage == 0 || self.modifiers.set(usage, true) || self.keys.contains(&usage) {
             return true;
         }
-        match self.keys.iter_mut().find(|slot| **slot == 0) {
-            Some(slot) => {
-                *slot = usage;
-                true
-            }
-            None => false,
+        if let Some(slot) = self.keys.iter_mut().find(|slot| **slot == 0) {
+            *slot = usage;
+            true
+        } else {
+            self.rolled_over = true;
+            false
         }
     }
 
     pub fn release(&mut self, usage: u8) {
-        if !self.modifiers.set(usage, false) {
-            self.keys
-                .iter_mut()
-                .filter(|slot| **slot == usage)
-                .for_each(|slot| *slot = 0);
+        if usage == 0 || self.modifiers.set(usage, false) {
+            return;
         }
+        for slot in self.keys.iter_mut().filter(|slot| **slot == usage) {
+            *slot = 0;
+            self.rolled_over = false;
+        }
+    }
+
+    #[must_use]
+    pub const fn is_rolled_over(&self) -> bool {
+        self.rolled_over
     }
 }
 
@@ -112,7 +121,11 @@ impl InputReport for BootReport {
     const LEN: usize = 8;
 
     fn to_bytes(&self) -> Self::Bytes {
-        let [first, second, third, fourth, fifth, sixth] = self.keys;
+        let [first, second, third, fourth, fifth, sixth] = if self.rolled_over {
+            [ERROR_ROLL_OVER; BOOT_KEY_SLOTS]
+        } else {
+            self.keys
+        };
         [
             self.modifiers.bits(),
             0,

@@ -29,6 +29,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 critical-section = { workspace = true, features = ["std"] }
+embassy-time = { workspace = true, features = ["generic-queue-8", "mock-driver"] }
 embassy-usb-driver = { workspace = true }
 
 [lints]

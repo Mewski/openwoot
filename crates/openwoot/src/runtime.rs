@@ -1,4 +1,5 @@
 mod channel;
+mod device;
 mod firmware;
 mod key_notices;
 mod key_reports;
@@ -9,6 +10,7 @@ mod state;
 mod usb;
 
 pub use channel::Channel;
+pub use device::Device;
 pub use firmware::Firmware;
 pub use key_notices::KeyNotices;
 pub use key_reports::{KeyReports, Pending};

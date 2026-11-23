@@ -14,7 +14,6 @@ pub use controls::{
     CONSUMER_SLOTS, ConsumerReport, DESCRIPTOR as CONTROLS_DESCRIPTOR, MouseReport, SystemControl,
     SystemReport,
 };
-pub use descriptor::Collection;
 pub use gamepad::{
     DESCRIPTOR as GAMEPAD_DESCRIPTOR, Hat, Report as GamepadReport,
     SLIDER_MAX as GAMEPAD_SLIDER_MAX, STICK_CENTER as GAMEPAD_STICK_CENTER,

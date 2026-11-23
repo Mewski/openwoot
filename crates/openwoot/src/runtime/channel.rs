@@ -21,4 +21,19 @@ impl<'d, D: Driver<'d>> Channel<'d, D> {
             .run(&mut handler, self.host.feature_requests(), bootloader)
             .await
     }
+
+    pub async fn run_timed<C: Configuration>(
+        self,
+        mut handler: Handler<C>,
+        bootloader: &mut (impl UpdateMode + Restart),
+    ) -> ! {
+        let mut channel = protocol::Channel::with_delay(
+            self.endpoints.output,
+            self.endpoints.input,
+            embassy_time::Delay,
+        );
+        channel
+            .run(&mut handler, self.host.feature_requests(), bootloader)
+            .await
+    }
 }

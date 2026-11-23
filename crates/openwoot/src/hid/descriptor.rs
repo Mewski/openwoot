@@ -9,10 +9,9 @@ pub(super) struct Builder {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Collection {
+pub(super) enum Collection {
     Physical,
     Application,
-    Logical,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,7 +113,6 @@ impl Builder {
         let kind = match collection {
             Collection::Physical => 0,
             Collection::Application => 1,
-            Collection::Logical => 2,
         };
         self.unsigned(Item::Collection, kind)
     }
@@ -270,5 +268,70 @@ impl Item {
             Self::UsageMinimum => 0x18,
             Self::UsageMaximum => 0x28,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn emitted(builder: &Builder) -> &[u8] {
+        &builder.bytes[..builder.len]
+    }
+
+    #[test]
+    fn a_signed_item_takes_the_smallest_size_that_keeps_its_sign() {
+        let item = |value| Builder::new().logical_maximum(value);
+        assert_eq!(emitted(&item(0)), [0x25, 0x00]);
+        assert_eq!(emitted(&item(127)), [0x25, 0x7F]);
+        assert_eq!(emitted(&item(128)), [0x26, 0x80, 0x00]);
+        assert_eq!(emitted(&item(255)), [0x26, 0xFF, 0x00]);
+        assert_eq!(emitted(&item(-128)), [0x25, 0x80]);
+        assert_eq!(emitted(&item(-129)), [0x26, 0x7F, 0xFF]);
+        assert_eq!(emitted(&item(32_767)), [0x26, 0xFF, 0x7F]);
+        assert_eq!(emitted(&item(32_768)), [0x27, 0x00, 0x80, 0x00, 0x00]);
+        assert_eq!(emitted(&item(-32_768)), [0x26, 0x00, 0x80]);
+        assert_eq!(emitted(&item(-32_769)), [0x27, 0xFF, 0x7F, 0xFF, 0xFF]);
+        assert_eq!(emitted(&item(i32::MIN)), [0x27, 0x00, 0x00, 0x00, 0x80]);
+    }
+
+    #[test]
+    fn an_unsigned_item_takes_the_smallest_size_that_holds_its_value() {
+        let item = |value| Builder::new().unit(value);
+        assert_eq!(emitted(&item(0xFF)), [0x65, 0xFF]);
+        assert_eq!(emitted(&item(0x100)), [0x66, 0x00, 0x01]);
+        assert_eq!(emitted(&item(0xFFFF)), [0x66, 0xFF, 0xFF]);
+        assert_eq!(emitted(&item(0x1_0000)), [0x67, 0x00, 0x00, 0x01, 0x00]);
+        assert_eq!(
+            emitted(&Builder::new().usage_page(0xFF53)),
+            [0x06, 0x53, 0xFF]
+        );
+        assert_eq!(emitted(&Builder::new().usage(0x80)), [0x09, 0x80]);
+    }
+
+    #[test]
+    fn a_count_above_two_bytes_is_malformed() {
+        let item = |count| Builder::new().report_count(count);
+        assert_eq!(emitted(&item(255)), [0x95, 0xFF]);
+        assert_eq!(emitted(&item(256)), [0x96, 0x00, 0x01]);
+        assert_eq!(emitted(&item(65_535)), [0x96, 0xFF, 0xFF]);
+        assert!(!item(65_535).malformed);
+        assert!(item(65_536).malformed);
+        assert_eq!(item(65_536).len, 0);
+    }
+
+    #[test]
+    fn structure_errors_and_overflow_are_malformed() {
+        assert!(Builder::new().end_collection().malformed);
+        assert!(Builder::new().report_id(0).malformed);
+        assert!(!Builder::new().report_id(255).malformed);
+        let open = Builder::new().collection(Collection::Application);
+        assert_eq!((open.depth, open.malformed), (1, false));
+        let mut full = Builder::new();
+        for _ in 0..CAPACITY / 2 {
+            full = full.usage(1);
+        }
+        assert_eq!((full.len, full.malformed), (CAPACITY, false));
+        assert!(full.usage(1).malformed);
     }
 }

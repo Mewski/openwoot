@@ -1,10 +1,7 @@
 use embassy_sync::{blocking_mutex::raw::RawMutex, mutex::Mutex};
-use embassy_usb::{
-    UsbDevice,
-    driver::{self, Driver},
-};
+use embassy_usb::driver::{self, Driver};
 
-use super::{Channel, KeyReports, KeyTask, Lighting, Reports, State, Usb};
+use super::{Channel, Device, KeyReports, KeyTask, Lighting, Reports, State, Usb};
 use crate::{
     lighting,
     usb::{Face, Identity, Negotiated},
@@ -19,7 +16,7 @@ pub struct Firmware<
     const PAGES: usize,
     const LENGTH: usize,
 > {
-    pub device: UsbDevice<'static, Negotiated<D>>,
+    pub device: Device<'static, Negotiated<D>, M>,
     pub channel: Channel<'static, Negotiated<D>>,
     pub reports: Reports<'static, Negotiated<D>>,
     pub key_reports: &'static KeyReports<M>,
@@ -55,7 +52,7 @@ where
             &state.host,
         );
         Self {
-            device,
+            device: Device::new(device, &state.key_reports),
             channel,
             reports,
             key_reports: &state.key_reports,

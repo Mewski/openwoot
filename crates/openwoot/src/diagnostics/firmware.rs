@@ -105,6 +105,8 @@ impl Diagnostics {
     #[must_use]
     pub fn report(&self, usb: Usb, hardware: Hardware) -> Report {
         let profile = self.profile.load(Ordering::Relaxed);
+        let key_reports = self.key_reports.value();
+        let key_passes = self.key_passes.value();
         Report {
             scan: Scan {
                 cycles: self.scan_cycles.value(),
@@ -112,8 +114,8 @@ impl Diagnostics {
                 overruns: hardware.scan_overruns,
             },
             keys: Keys {
-                passes: self.key_passes.value(),
-                reports: self.key_reports.value(),
+                passes: key_passes,
+                reports: key_reports,
             },
             profile: Profile {
                 active: (profile != NO_PROFILE).then_some(profile),

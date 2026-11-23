@@ -6,11 +6,12 @@ use embassy_sync::{
 };
 
 use crate::{
-    keys::Notice,
+    keys::{NOTICE_CAPACITY, Notice},
     lighting::{BLACK, Lighting, Overlay, OverlayId, Span},
 };
 
-const KEY_NOTICE_CAPACITY: usize = 16;
+const NOTICES_BESIDE_A_KEY_PASS: usize = 8;
+const KEY_NOTICE_CAPACITY: usize = NOTICE_CAPACITY + NOTICES_BESIDE_A_KEY_PASS;
 
 const BRIGHTNESS_REPEAT_MS: u32 = 50;
 const PROFILE_BLINK_MS: u16 = 1000;
@@ -27,9 +28,31 @@ struct Repeat {
     due_ms: u32,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct BrightnessKeys {
+    held: Option<bool>,
+    pressed: Option<bool>,
+}
+
 pub struct KeyNotices {
     channel: Channel<CriticalSectionRawMutex, Notice, KEY_NOTICE_CAPACITY>,
+    brightness: Mutex<CriticalSectionRawMutex, Cell<BrightnessKeys>>,
     repeat: Mutex<CriticalSectionRawMutex, Cell<Option<Repeat>>>,
+}
+
+impl BrightnessKeys {
+    fn with_key(self, increase: bool, held: bool) -> Self {
+        if held {
+            Self {
+                held: Some(increase),
+                pressed: Some(increase),
+            }
+        } else if self.held == Some(increase) {
+            Self { held: None, ..self }
+        } else {
+            self
+        }
+    }
 }
 
 impl KeyNotices {
@@ -37,11 +60,19 @@ impl KeyNotices {
     pub const fn new() -> Self {
         Self {
             channel: Channel::new(),
+            brightness: Mutex::new(Cell::new(BrightnessKeys {
+                held: None,
+                pressed: None,
+            })),
             repeat: Mutex::new(Cell::new(None)),
         }
     }
 
     pub fn send(&self, notice: Notice) -> bool {
+        if let Notice::Brightness { increase, held } = notice {
+            self.brightness_key(increase, held);
+            return true;
+        }
         self.channel.try_send(notice).is_ok()
     }
 
@@ -65,18 +96,45 @@ impl KeyNotices {
         while let Ok(notice) = self.channel.try_receive() {
             self.apply_notice(lighting, notice, now_ms);
         }
-        let repeat = self.repeat.lock(Cell::get);
-        if let Some(repeat) = repeat
-            && now_ms.wrapping_sub(repeat.due_ms).cast_signed() >= 0
-        {
-            lighting.step_brightness(repeat.increase, now_ms);
-            self.repeat.lock(|cell| {
-                cell.set(Some(Repeat {
-                    due_ms: repeat.due_ms.wrapping_add(BRIGHTNESS_REPEAT_MS),
-                    ..repeat
-                }));
+        let keys = self.brightness.lock(|cell| {
+            let keys = cell.get();
+            cell.set(BrightnessKeys {
+                pressed: None,
+                ..keys
             });
+            keys
+        });
+        if let Some(increase) = keys.pressed {
+            lighting.step_brightness(increase, now_ms);
         }
+        let repeat = match (keys.held, self.repeat.lock(Cell::get)) {
+            (None, _) => None,
+            (Some(increase), Some(repeat))
+                if repeat.increase == increase && keys.pressed.is_none() =>
+            {
+                Some(repeat)
+            }
+            (Some(increase), _) => Some(Repeat {
+                increase,
+                due_ms: now_ms.wrapping_add(BRIGHTNESS_REPEAT_MS),
+            }),
+        };
+        let repeat = repeat.map(|repeat| {
+            if now_ms.wrapping_sub(repeat.due_ms).cast_signed() < 0 {
+                return repeat;
+            }
+            lighting.step_brightness(repeat.increase, now_ms);
+            Repeat {
+                due_ms: repeat.due_ms.wrapping_add(BRIGHTNESS_REPEAT_MS),
+                ..repeat
+            }
+        });
+        self.repeat.lock(|cell| cell.set(repeat));
+    }
+
+    fn brightness_key(&self, increase: bool, held: bool) {
+        self.brightness
+            .lock(|cell| cell.set(cell.get().with_key(increase, held)));
     }
 
     fn apply_notice<
@@ -103,13 +161,7 @@ impl KeyNotices {
                 lighting.update_lock_indicators(locks, now_ms);
                 lighting.hooks_mut().locks_changed(locks);
             }
-            Notice::Brightness { increase, held } => {
-                let repeat = held.then_some(Repeat {
-                    increase,
-                    due_ms: now_ms.wrapping_add(BRIGHTNESS_REPEAT_MS),
-                });
-                self.repeat.lock(|cell| cell.set(repeat));
-            }
+            Notice::Brightness { increase, held } => self.brightness_key(increase, held),
             Notice::Disabled { key, disabled } => {
                 if disabled {
                     lighting.start_overlay(
@@ -174,5 +226,51 @@ impl core::fmt::Debug for KeyNotices {
             .debug_struct("KeyNotices")
             .field("queued", &self.channel.len())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_brightness_key_holds_until_its_own_release() {
+        let up = BrightnessKeys::default().with_key(true, true);
+        assert_eq!(
+            up,
+            BrightnessKeys {
+                held: Some(true),
+                pressed: Some(true),
+            }
+        );
+        let down = up.with_key(false, true);
+        assert_eq!(down.held, Some(false));
+        assert_eq!(down.with_key(true, false).held, Some(false));
+        assert_eq!(down.with_key(false, false).held, None);
+        assert_eq!(down.with_key(false, false).pressed, Some(false));
+    }
+
+    #[test]
+    fn a_brightness_key_never_fills_the_notice_queue() {
+        let notices = KeyNotices::new();
+        for _ in 0..KEY_NOTICE_CAPACITY {
+            assert!(notices.send(Notice::ShowLayer(1)));
+        }
+        assert!(!notices.send(Notice::ShowLayer(2)));
+        assert!(notices.send(Notice::Brightness {
+            increase: false,
+            held: true,
+        }));
+        assert!(notices.send(Notice::Brightness {
+            increase: false,
+            held: false,
+        }));
+        assert_eq!(
+            notices.brightness.lock(Cell::get),
+            BrightnessKeys {
+                held: None,
+                pressed: Some(false),
+            }
+        );
     }
 }

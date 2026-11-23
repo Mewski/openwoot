@@ -1,7 +1,4 @@
-use embassy_futures::{
-    select::{Either, select},
-    yield_now,
-};
+use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_time::{Duration, Instant, Timer};
 use openwoot_protocol::keys::ScanMode;
@@ -10,13 +7,14 @@ use super::{KeyNotices, KeyReports};
 use crate::{
     diagnostics::Diagnostics,
     keys::{Functions, Keys, Notice, Parts, ProfileSource, Shared, Switch},
-    lighting::{KeyActivity, KeyEvents, LockState},
+    lighting::{KeyActivity, KeyEvent, KeyEvents, LockState},
     scan::{self, Sensing, SensorReadout},
     usb::{Face, HidProtocol, HostState, KeyboardFormat},
 };
 
 const CALIBRATION_TIMEOUT: Duration = Duration::from_secs(1);
 const CYCLE_TIMEOUT: Duration = Duration::from_millis(50);
+const RETRY_DELAY: Duration = Duration::from_millis(1);
 
 pub struct KeyTask<'d, M: RawMutex> {
     pub shared: &'d Shared<M>,
@@ -34,6 +32,7 @@ pub struct Progress {
     last_ms: Option<u32>,
     locks: Option<LockState>,
     rebound_filter: Option<bool>,
+    suspended: bool,
 }
 
 impl<M: RawMutex> KeyTask<'_, M> {
@@ -57,7 +56,7 @@ impl<M: RawMutex> KeyTask<'_, M> {
         loop {
             match select(scan.calibrate(), Timer::after(CALIBRATION_TIMEOUT)).await {
                 Either::First(true) => break,
-                Either::First(false) => yield_now().await,
+                Either::First(false) => Timer::after(RETRY_DELAY).await,
                 Either::Second(()) => self.recover::<S, INPUTS, ADDRESSES, ROWS, COLUMNS>(scan),
             }
         }
@@ -69,7 +68,7 @@ impl<M: RawMutex> KeyTask<'_, M> {
                     self.diagnostics.scan_cycle_completed();
                     self.step(scan, keys, &mut progress, now_ms);
                 }
-                Either::First(false) => yield_now().await,
+                Either::First(false) => Timer::after(RETRY_DELAY).await,
                 Either::Second(()) => self.recover::<S, INPUTS, ADDRESSES, ROWS, COLUMNS>(scan),
             }
         }
@@ -95,7 +94,6 @@ impl<M: RawMutex> KeyTask<'_, M> {
         let elapsed_ms = progress
             .last_ms
             .map_or(0, |last_ms| now_ms.wrapping_sub(last_ms));
-        progress.last_ms = Some(now_ms);
         keys.set_boot_format(
             self.face.keyboard == KeyboardFormat::Boot
                 || self.host.keyboard_protocol() == HidProtocol::Boot,
@@ -142,12 +140,15 @@ impl<M: RawMutex> KeyTask<'_, M> {
                 progress.rebound_filter = Some(rebound_filter);
             }
             self.sensors.serve::<ROWS, COLUMNS, _, _>(scanner, travel);
+            if scanner.is_settling() {
+                return false;
+            }
             keys.pass(
                 scanner
                     .events()
                     .iter()
                     .map(|event| (event.key, event.travel)),
-                u16::try_from(elapsed_ms & u32::from(u16::MAX)).unwrap_or(u16::MAX),
+                u16::try_from(elapsed_ms).unwrap_or(u16::MAX),
                 |key| map.position(key).map_or(0, |position| travel.get(position)),
             );
             for (position, key) in map.iter() {
@@ -156,17 +157,34 @@ impl<M: RawMutex> KeyTask<'_, M> {
                     sensor.hold_events(holds);
                 }
             }
+            true
         });
-        if processed.is_none() {
-            return;
+        if processed == Some(true) {
+            progress.last_ms = Some(now_ms);
+            self.diagnostics.keys_passed();
+            self.deliver(keys, progress, now_ms);
         }
-        self.diagnostics.keys_passed();
-        if self.reports.publish(keys.output()) {
+    }
+
+    fn deliver<F: Functions, const ROWS: usize, const COLUMNS: usize>(
+        &self,
+        keys: &mut Keys<F, ROWS, COLUMNS>,
+        progress: &mut Progress,
+        now_ms: u32,
+    ) {
+        let suspended = self.host.is_suspended();
+        if progress.suspended != suspended {
+            progress.suspended = suspended;
+            self.reports.resend();
+        }
+        if !suspended && self.reports.publish(keys.output()) {
             self.diagnostics.key_report_published();
         }
+        let mut pressed = false;
         for notice in keys.take_notices() {
             match notice {
                 Notice::Key { key, event } => {
+                    pressed |= event == KeyEvent::Pressed;
                     let _ = self.events.try_send(KeyActivity {
                         key,
                         event,
@@ -177,6 +195,9 @@ impl<M: RawMutex> KeyTask<'_, M> {
                     self.notices.send(notice);
                 }
             }
+        }
+        if suspended && pressed {
+            self.reports.request_wake_up();
         }
         let leds = self.host.keyboard_leds();
         let locks = LockState {

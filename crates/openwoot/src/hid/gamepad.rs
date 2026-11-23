@@ -95,17 +95,17 @@ impl InputReport for Report {
         let mut bytes = [0; 25];
         let words = [
             self.buttons & ((1 << BUTTONS) - 1),
-            self.x,
-            self.y,
-            self.z,
-            self.rz,
-            self.rx,
-            self.ry,
-            self.throttle,
-            self.elevator,
-            self.accelerator,
-            self.rudder,
-            self.trigger,
+            self.x.min(STICK_MAX),
+            self.y.min(STICK_MAX),
+            self.z.min(STICK_MAX),
+            self.rz.min(STICK_MAX),
+            self.rx.min(STICK_MAX),
+            self.ry.min(STICK_MAX),
+            self.throttle.min(SLIDER_MAX),
+            self.elevator.min(SLIDER_MAX),
+            self.accelerator.min(SLIDER_MAX),
+            self.rudder.min(SLIDER_MAX),
+            self.trigger.min(SLIDER_MAX),
         ];
         for (chunk, word) in bytes.as_chunks_mut::<2>().0.iter_mut().zip(words) {
             *chunk = word.to_le_bytes();

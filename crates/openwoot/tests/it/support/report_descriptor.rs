@@ -1,5 +1,9 @@
 use std::collections::BTreeMap;
 
+const CONSTANT: u32 = 0x01;
+const VARIABLE: u32 = 0x02;
+const USAGE_ID: u32 = 0xFFFF;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Kind {
     Input,
@@ -47,7 +51,6 @@ struct Globals {
     usage_page: u32,
     logical_minimum: i64,
     logical_maximum: i64,
-    unsigned_logical_maximum: i64,
     physical_minimum: i64,
     physical_maximum: i64,
     unit: u32,
@@ -90,15 +93,136 @@ impl Parsed {
             .map(|collection| collection.usage)
             .collect()
     }
+
+    #[must_use]
+    pub(crate) fn value(
+        &self,
+        kind: Kind,
+        report_id: u8,
+        usage: u32,
+        payload: &[u8],
+    ) -> Option<i64> {
+        self.data_fields(kind, report_id)
+            .find_map(|field| field.value(usage, payload))
+    }
+
+    #[must_use]
+    pub(crate) fn pressed(&self, kind: Kind, report_id: u8, payload: &[u8]) -> Vec<u32> {
+        self.data_fields(kind, report_id)
+            .flat_map(|field| field.pressed(payload))
+            .collect()
+    }
+
+    #[must_use]
+    pub(crate) fn logical_range(
+        &self,
+        kind: Kind,
+        report_id: u8,
+        usage: u32,
+    ) -> Option<(i64, i64)> {
+        self.data_fields(kind, report_id)
+            .find(|field| field.covers(usage))
+            .map(|field| (field.logical_minimum, field.logical_maximum))
+    }
+
+    fn data_fields(&self, kind: Kind, report_id: u8) -> impl Iterator<Item = &Field> {
+        self.fields.iter().filter(move |field| {
+            field.kind == kind && field.report_id == report_id && field.flags & CONSTANT == 0
+        })
+    }
+}
+
+impl Field {
+    fn is_array(&self) -> bool {
+        self.flags & VARIABLE == 0
+    }
+
+    fn covers(&self, usage: u32) -> bool {
+        match &self.usages {
+            Usages::List(usages) => usages.contains(&usage),
+            Usages::Range { minimum, maximum } => (*minimum..=*maximum).contains(&usage),
+        }
+    }
+
+    fn slot(&self, usage: u32) -> Option<usize> {
+        let slot = match &self.usages {
+            Usages::List(usages) => usages.iter().position(|listed| *listed == usage)?,
+            Usages::Range { minimum, maximum } => {
+                if !(*minimum..=*maximum).contains(&usage) {
+                    return None;
+                }
+                usize::try_from(usage - *minimum).ok()?
+            }
+        };
+        (slot < self.count).then_some(slot)
+    }
+
+    fn usage_at(&self, slot: usize) -> Option<u32> {
+        match &self.usages {
+            Usages::List(usages) => usages.get(slot).copied(),
+            Usages::Range { minimum, maximum } => {
+                let usage = minimum.checked_add(u32::try_from(slot).ok()?)?;
+                (usage <= *maximum).then_some(usage)
+            }
+        }
+    }
+
+    fn selected(&self, index: i64) -> Option<u32> {
+        let Usages::Range { minimum, maximum } = &self.usages else {
+            return None;
+        };
+        let offset = u32::try_from(index.checked_sub(self.logical_minimum)?).ok()?;
+        let usage = minimum.checked_add(offset)?;
+        (usage <= *maximum && usage & USAGE_ID != 0).then_some(usage)
+    }
+
+    fn read(&self, slot: usize, payload: &[u8]) -> i64 {
+        let raw = (0..self.size).fold(0_i64, |value, bit| {
+            let position = self.bit_offset + slot * self.size + bit;
+            let set = payload
+                .get(position / 8)
+                .is_some_and(|byte| (byte >> (position % 8)) & 1 == 1);
+            value | (i64::from(set) << bit)
+        });
+        let negative =
+            self.logical_minimum < 0 && self.size > 0 && (raw >> (self.size - 1)) & 1 == 1;
+        if negative {
+            raw - (1_i64 << self.size)
+        } else {
+            raw
+        }
+    }
+
+    fn value(&self, usage: u32, payload: &[u8]) -> Option<i64> {
+        if self.is_array() {
+            if !self.covers(usage) {
+                return None;
+            }
+            let held =
+                (0..self.count).any(|slot| self.selected(self.read(slot, payload)) == Some(usage));
+            return Some(i64::from(held));
+        }
+        self.slot(usage).map(|slot| self.read(slot, payload))
+    }
+
+    fn pressed(&self, payload: &[u8]) -> Vec<u32> {
+        (0..self.count)
+            .filter_map(|slot| {
+                let value = self.read(slot, payload);
+                if self.is_array() {
+                    self.selected(value)
+                } else if value == 0 {
+                    None
+                } else {
+                    self.usage_at(slot)
+                }
+            })
+            .collect()
+    }
 }
 
 impl Globals {
     fn field(&self, kind: Kind, usages: Usages, bit_offset: usize, flags: u32) -> Field {
-        let logical_maximum = if self.logical_minimum >= 0 && self.logical_maximum < 0 {
-            self.unsigned_logical_maximum
-        } else {
-            self.logical_maximum
-        };
         Field {
             kind,
             report_id: self.report_id,
@@ -107,7 +231,7 @@ impl Globals {
             count: self.count,
             usages,
             logical_minimum: self.logical_minimum,
-            logical_maximum,
+            logical_maximum: self.logical_maximum,
             physical_minimum: self.physical_minimum,
             physical_maximum: self.physical_maximum,
             unit: self.unit,
@@ -159,6 +283,12 @@ pub(crate) fn parse(descriptor: &[u8]) -> Result<Parsed, String> {
                     0x90 => Kind::Output,
                     _ => Kind::Feature,
                 };
+                if globals.logical_minimum > globals.logical_maximum {
+                    return Err(format!(
+                        "logical minimum {} lies above the logical maximum {}",
+                        globals.logical_minimum, globals.logical_maximum
+                    ));
+                }
                 let usages = match (locals.minimum, locals.maximum) {
                     (Some(minimum), Some(maximum)) => Usages::Range { minimum, maximum },
                     _ => Usages::List(std::mem::take(&mut locals.usages)),
@@ -186,10 +316,7 @@ pub(crate) fn parse(descriptor: &[u8]) -> Result<Parsed, String> {
             }
             0x04 => globals.usage_page = unsigned,
             0x14 => globals.logical_minimum = signed,
-            0x24 => {
-                globals.logical_maximum = signed;
-                globals.unsigned_logical_maximum = i64::from(unsigned);
-            }
+            0x24 => globals.logical_maximum = signed,
             0x34 => globals.physical_minimum = signed,
             0x44 => globals.physical_maximum = signed,
             0x64 => globals.unit = unsigned,
