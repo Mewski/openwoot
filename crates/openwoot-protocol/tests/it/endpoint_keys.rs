@@ -31,5 +31,5 @@ fn the_table_holds_the_openwoot_endpoints_and_the_two_of_postcard_rpc() {
         .collect();
     standard.sort_unstable();
     assert_eq!(standard, ["postcard-rpc/ping", "postcard-rpc/schemas/get"]);
-    assert_eq!(endpoints::LIST.endpoints.len(), 57);
+    assert_eq!(endpoints::LIST.endpoints.len(), 58);
 }

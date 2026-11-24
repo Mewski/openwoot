@@ -4,7 +4,7 @@ use crate::{
     Version, advanced,
     configuration::{Capabilities, Rejection},
     device::{self, Layout},
-    diagnostics, gamepad, global, host_lighting, keys, lightbar, lighting,
+    diagnostics, gamepad, geometry, global, host_lighting, keys, lightbar, lighting,
     profile::{self, Change, LayerChange, LayerRef, Slot, Summary},
     sensors, switches,
 };
@@ -15,6 +15,7 @@ type CapabilitiesReply = Result<Capabilities, Rejection>;
 type DeviceSettingsReply = Result<device::Settings, Rejection>;
 type DeviceSettings = device::Settings;
 type LayoutReply = Result<Layout, Rejection>;
+type KeyGeometryReply = Result<geometry::Keys, Rejection>;
 type GlobalSettingsReply = Result<global::Settings, Rejection>;
 type GlobalSettings = global::Settings;
 type ProfilesReply = Result<Summary, Rejection>;
@@ -65,6 +66,7 @@ endpoints! {
     | SetDeviceSettings   | DeviceSettings        | Done                 | "openwoot/device/set"                  |
     | GetLayout           | ()                    | LayoutReply          | "openwoot/layout"                      |
     | SetLayout           | Layout                | Done                 | "openwoot/layout/set"                  |
+    | GetKeyGeometry      | ()                    | KeyGeometryReply     | "openwoot/geometry"                    |
     | GetGlobalSettings   | ()                    | GlobalSettingsReply  | "openwoot/global"                      |
     | SetGlobalSettings   | GlobalSettings        | Done                 | "openwoot/global/set"                  |
     | GetProfiles         | ()                    | ProfilesReply        | "openwoot/profiles"                    |

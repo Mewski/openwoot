@@ -7,6 +7,7 @@ use openwoot::{
 use openwoot_protocol::{
     configuration::Capabilities,
     device::Layout,
+    geometry::{self, Shape, UNIT},
     heapless::Vec,
     keys::{Action, Function, Layer},
     profile::Slot,
@@ -23,6 +24,7 @@ pub const KEYMAP: DefaultKeymap<KEY_ROWS, KEY_COLUMNS> = DefaultKeymap {
     layers: &LAYERS,
     variant_patches: &VARIANT_PATCHES,
 };
+pub static GEOMETRY: [Geometry; LAYOUT_VARIANTS] = [ANSI_GEOMETRY, ISO_GEOMETRY, JIS_GEOMETRY];
 
 const LAYERS: [[[Action; KEY_COLUMNS]; KEY_ROWS]; 2] = [
     [
@@ -286,6 +288,359 @@ const VARIANT_PATCHES: [&[Patch]; LAYOUT_VARIANTS] = [
     ],
 ];
 
+type Geometry = [[Option<geometry::Key>; KEY_COLUMNS]; KEY_ROWS];
+
+const ANSI_GEOMETRY: Geometry = [
+    [
+        Some(key(0, 0, 100)),
+        Some(key(125, 0, 100)),
+        Some(key(225, 0, 100)),
+        Some(key(325, 0, 100)),
+        Some(key(425, 0, 100)),
+        Some(key(550, 0, 100)),
+        Some(key(650, 0, 100)),
+        Some(key(750, 0, 100)),
+        Some(key(850, 0, 100)),
+        None,
+        Some(key(975, 0, 100)),
+        Some(key(1075, 0, 100)),
+        Some(key(1175, 0, 100)),
+        Some(key(1275, 0, 100)),
+        Some(key(1400, 0, 100)),
+        Some(key(1525, 0, 100)),
+        Some(key(1625, 0, 100)),
+    ],
+    [
+        Some(key(0, 125, 100)),
+        Some(key(100, 125, 100)),
+        Some(key(200, 125, 100)),
+        Some(key(300, 125, 100)),
+        Some(key(400, 125, 100)),
+        Some(key(500, 125, 100)),
+        Some(key(600, 125, 100)),
+        Some(key(700, 125, 100)),
+        Some(key(800, 125, 100)),
+        Some(key(900, 125, 100)),
+        Some(key(1000, 125, 100)),
+        Some(key(1100, 125, 100)),
+        Some(key(1200, 125, 100)),
+        None,
+        Some(key(1300, 125, 200)),
+        Some(key(1525, 125, 100)),
+        Some(key(1625, 125, 100)),
+    ],
+    [
+        Some(key(0, 225, 150)),
+        Some(key(150, 225, 100)),
+        Some(key(250, 225, 100)),
+        Some(key(350, 225, 100)),
+        Some(key(450, 225, 100)),
+        Some(key(550, 225, 100)),
+        Some(key(650, 225, 100)),
+        Some(key(750, 225, 100)),
+        Some(key(850, 225, 100)),
+        Some(key(950, 225, 100)),
+        Some(key(1050, 225, 100)),
+        Some(key(1150, 225, 100)),
+        Some(key(1250, 225, 100)),
+        None,
+        Some(key(1350, 225, 150)),
+        Some(key(1525, 225, 100)),
+        Some(key(1625, 225, 100)),
+    ],
+    [
+        Some(key(0, 325, 175)),
+        Some(key(175, 325, 100)),
+        Some(key(275, 325, 100)),
+        Some(key(375, 325, 100)),
+        Some(key(475, 325, 100)),
+        Some(key(575, 325, 100)),
+        Some(key(675, 325, 100)),
+        Some(key(775, 325, 100)),
+        Some(key(875, 325, 100)),
+        Some(key(975, 325, 100)),
+        Some(key(1075, 325, 100)),
+        Some(key(1175, 325, 100)),
+        None,
+        None,
+        Some(key(1275, 325, 225)),
+        None,
+        None,
+    ],
+    [
+        Some(key(0, 425, 225)),
+        None,
+        Some(key(225, 425, 100)),
+        Some(key(325, 425, 100)),
+        Some(key(425, 425, 100)),
+        Some(key(525, 425, 100)),
+        Some(key(625, 425, 100)),
+        Some(key(725, 425, 100)),
+        Some(key(825, 425, 100)),
+        Some(key(925, 425, 100)),
+        Some(key(1025, 425, 100)),
+        Some(key(1125, 425, 100)),
+        None,
+        None,
+        Some(key(1225, 425, 275)),
+        Some(key(1525, 425, 100)),
+        None,
+    ],
+    [
+        Some(key(0, 525, 125)),
+        Some(key(125, 525, 125)),
+        Some(key(250, 525, 125)),
+        None,
+        None,
+        None,
+        Some(key(375, 525, 625)),
+        None,
+        None,
+        None,
+        Some(key(1000, 525, 125)),
+        Some(key(1125, 525, 125)),
+        Some(key(1250, 525, 125)),
+        None,
+        Some(key(1425, 525, 100)),
+        Some(key(1525, 525, 100)),
+        Some(key(1625, 525, 100)),
+    ],
+];
+
+const ISO_GEOMETRY: Geometry = [
+    [
+        Some(key(0, 0, 100)),
+        Some(key(125, 0, 100)),
+        Some(key(225, 0, 100)),
+        Some(key(325, 0, 100)),
+        Some(key(425, 0, 100)),
+        Some(key(550, 0, 100)),
+        Some(key(650, 0, 100)),
+        Some(key(750, 0, 100)),
+        Some(key(850, 0, 100)),
+        None,
+        Some(key(975, 0, 100)),
+        Some(key(1075, 0, 100)),
+        Some(key(1175, 0, 100)),
+        Some(key(1275, 0, 100)),
+        Some(key(1400, 0, 100)),
+        Some(key(1525, 0, 100)),
+        Some(key(1625, 0, 100)),
+    ],
+    [
+        Some(key(0, 125, 100)),
+        Some(key(100, 125, 100)),
+        Some(key(200, 125, 100)),
+        Some(key(300, 125, 100)),
+        Some(key(400, 125, 100)),
+        Some(key(500, 125, 100)),
+        Some(key(600, 125, 100)),
+        Some(key(700, 125, 100)),
+        Some(key(800, 125, 100)),
+        Some(key(900, 125, 100)),
+        Some(key(1000, 125, 100)),
+        Some(key(1100, 125, 100)),
+        Some(key(1200, 125, 100)),
+        None,
+        Some(key(1300, 125, 200)),
+        Some(key(1525, 125, 100)),
+        Some(key(1625, 125, 100)),
+    ],
+    [
+        Some(key(0, 225, 150)),
+        Some(key(150, 225, 100)),
+        Some(key(250, 225, 100)),
+        Some(key(350, 225, 100)),
+        Some(key(450, 225, 100)),
+        Some(key(550, 225, 100)),
+        Some(key(650, 225, 100)),
+        Some(key(750, 225, 100)),
+        Some(key(850, 225, 100)),
+        Some(key(950, 225, 100)),
+        Some(key(1050, 225, 100)),
+        Some(key(1150, 225, 100)),
+        Some(key(1250, 225, 100)),
+        None,
+        None,
+        Some(key(1525, 225, 100)),
+        Some(key(1625, 225, 100)),
+    ],
+    [
+        Some(key(0, 325, 175)),
+        Some(key(175, 325, 100)),
+        Some(key(275, 325, 100)),
+        Some(key(375, 325, 100)),
+        Some(key(475, 325, 100)),
+        Some(key(575, 325, 100)),
+        Some(key(675, 325, 100)),
+        Some(key(775, 325, 100)),
+        Some(key(875, 325, 100)),
+        Some(key(975, 325, 100)),
+        Some(key(1075, 325, 100)),
+        Some(key(1175, 325, 100)),
+        Some(key(1275, 325, 100)),
+        None,
+        Some(iso_enter(1350, 225)),
+        None,
+        None,
+    ],
+    [
+        Some(key(0, 425, 125)),
+        Some(key(125, 425, 100)),
+        Some(key(225, 425, 100)),
+        Some(key(325, 425, 100)),
+        Some(key(425, 425, 100)),
+        Some(key(525, 425, 100)),
+        Some(key(625, 425, 100)),
+        Some(key(725, 425, 100)),
+        Some(key(825, 425, 100)),
+        Some(key(925, 425, 100)),
+        Some(key(1025, 425, 100)),
+        Some(key(1125, 425, 100)),
+        None,
+        None,
+        Some(key(1225, 425, 275)),
+        Some(key(1525, 425, 100)),
+        None,
+    ],
+    [
+        Some(key(0, 525, 125)),
+        Some(key(125, 525, 125)),
+        Some(key(250, 525, 125)),
+        None,
+        None,
+        None,
+        Some(key(375, 525, 625)),
+        None,
+        None,
+        None,
+        Some(key(1000, 525, 125)),
+        Some(key(1125, 525, 125)),
+        Some(key(1250, 525, 125)),
+        None,
+        Some(key(1425, 525, 100)),
+        Some(key(1525, 525, 100)),
+        Some(key(1625, 525, 100)),
+    ],
+];
+
+const JIS_GEOMETRY: Geometry = [
+    [
+        Some(key(0, 0, 100)),
+        Some(key(125, 0, 100)),
+        Some(key(225, 0, 100)),
+        Some(key(325, 0, 100)),
+        Some(key(425, 0, 100)),
+        Some(key(550, 0, 100)),
+        Some(key(650, 0, 100)),
+        Some(key(750, 0, 100)),
+        Some(key(850, 0, 100)),
+        None,
+        Some(key(975, 0, 100)),
+        Some(key(1075, 0, 100)),
+        Some(key(1175, 0, 100)),
+        Some(key(1275, 0, 100)),
+        Some(key(1400, 0, 100)),
+        Some(key(1525, 0, 100)),
+        Some(key(1625, 0, 100)),
+    ],
+    [
+        Some(key(0, 125, 100)),
+        Some(key(100, 125, 100)),
+        Some(key(200, 125, 100)),
+        Some(key(300, 125, 100)),
+        Some(key(400, 125, 100)),
+        Some(key(500, 125, 100)),
+        Some(key(600, 125, 100)),
+        Some(key(700, 125, 100)),
+        Some(key(800, 125, 100)),
+        Some(key(900, 125, 100)),
+        Some(key(1000, 125, 100)),
+        Some(key(1100, 125, 100)),
+        Some(key(1200, 125, 100)),
+        Some(key(1300, 125, 100)),
+        Some(key(1400, 125, 100)),
+        Some(key(1525, 125, 100)),
+        Some(key(1625, 125, 100)),
+    ],
+    [
+        Some(key(0, 225, 150)),
+        Some(key(150, 225, 100)),
+        Some(key(250, 225, 100)),
+        Some(key(350, 225, 100)),
+        Some(key(450, 225, 100)),
+        Some(key(550, 225, 100)),
+        Some(key(650, 225, 100)),
+        Some(key(750, 225, 100)),
+        Some(key(850, 225, 100)),
+        Some(key(950, 225, 100)),
+        Some(key(1050, 225, 100)),
+        Some(key(1150, 225, 100)),
+        Some(key(1250, 225, 100)),
+        None,
+        None,
+        Some(key(1525, 225, 100)),
+        Some(key(1625, 225, 100)),
+    ],
+    [
+        Some(key(0, 325, 175)),
+        Some(key(175, 325, 100)),
+        Some(key(275, 325, 100)),
+        Some(key(375, 325, 100)),
+        Some(key(475, 325, 100)),
+        Some(key(575, 325, 100)),
+        Some(key(675, 325, 100)),
+        Some(key(775, 325, 100)),
+        Some(key(875, 325, 100)),
+        Some(key(975, 325, 100)),
+        Some(key(1075, 325, 100)),
+        Some(key(1175, 325, 100)),
+        Some(key(1275, 325, 100)),
+        None,
+        Some(iso_enter(1350, 225)),
+        None,
+        None,
+    ],
+    [
+        Some(key(0, 425, 225)),
+        None,
+        Some(key(225, 425, 100)),
+        Some(key(325, 425, 100)),
+        Some(key(425, 425, 100)),
+        Some(key(525, 425, 100)),
+        Some(key(625, 425, 100)),
+        Some(key(725, 425, 100)),
+        Some(key(825, 425, 100)),
+        Some(key(925, 425, 100)),
+        Some(key(1025, 425, 100)),
+        Some(key(1125, 425, 100)),
+        Some(key(1225, 425, 100)),
+        None,
+        Some(key(1325, 425, 175)),
+        Some(key(1525, 425, 100)),
+        None,
+    ],
+    [
+        Some(key(0, 525, 125)),
+        Some(key(125, 525, 100)),
+        Some(key(225, 525, 125)),
+        Some(key(350, 525, 100)),
+        None,
+        None,
+        Some(key(450, 525, 450)),
+        None,
+        None,
+        Some(key(900, 525, 125)),
+        Some(key(1025, 525, 125)),
+        Some(key(1150, 525, 125)),
+        Some(key(1275, 525, 100)),
+        None,
+        Some(key(1425, 525, 100)),
+        Some(key(1525, 525, 100)),
+        Some(key(1625, 525, 100)),
+    ],
+];
+
 #[must_use]
 pub fn capabilities(edition: Option<u8>) -> Capabilities {
     Capabilities {
@@ -307,6 +662,26 @@ pub fn sensor_map(variant: u8) -> Map<INPUTS, ADDRESSES> {
         .or(SENSOR_MAPS.first())
         .copied()
         .unwrap_or_else(|| Map::from_codes([[0xFF; 16]; INPUTS]))
+}
+
+const fn key(x: u16, y: u16, width: u16) -> geometry::Key {
+    geometry::Key {
+        x,
+        y,
+        width,
+        height: UNIT,
+        shape: Shape::Rectangle,
+    }
+}
+
+const fn iso_enter(x: u16, y: u16) -> geometry::Key {
+    geometry::Key {
+        x,
+        y,
+        width: UNIT + UNIT / 2,
+        height: 2 * UNIT,
+        shape: Shape::IsoEnter,
+    }
 }
 
 #[cfg(test)]
@@ -470,6 +845,90 @@ mod tests {
                 KEYMAP.action(Layer::One, Key::new(0, 13), variant),
                 Action::Function(Function::BrightnessUp)
             );
+        }
+    }
+
+    fn keys_of(layout: &Geometry) -> impl Iterator<Item = &geometry::Key> {
+        layout.as_flattened().iter().flatten()
+    }
+
+    #[test]
+    fn exactly_the_keys_with_a_sensor_have_geometry_in_every_layout() {
+        for (layout, map) in GEOMETRY.iter().zip(SENSOR_MAPS) {
+            for (row, keys) in (0..).zip(layout) {
+                for (column, geometry) in (0..).zip(keys) {
+                    let key = Key::new(row, column);
+                    assert_eq!(geometry.is_some(), map.position(key).is_some(), "{key:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_two_keys_overlap_and_every_edge_lies_on_a_quarter_unit() {
+        let quarter = UNIT / 4;
+        for layout in &GEOMETRY {
+            for key in keys_of(layout) {
+                for edge in [key.x, key.y, key.width, key.height] {
+                    assert_eq!(edge % quarter, 0, "{key:?}");
+                }
+            }
+            for x in (quarter / 2..1725).step_by(usize::from(quarter)) {
+                for y in (quarter / 2..625).step_by(usize::from(quarter)) {
+                    let covering = keys_of(layout).filter(|key| key.contains(x, y)).count();
+                    assert!(covering <= 1, "({x}, {y})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_layout_spans_seventeen_and_a_quarter_by_six_and_a_quarter_units() {
+        for layout in &GEOMETRY {
+            assert_eq!(keys_of(layout).map(|key| key.x).min(), Some(0));
+            assert_eq!(keys_of(layout).map(|key| key.y).min(), Some(0));
+            assert_eq!(
+                keys_of(layout).map(|key| key.x + key.width).max(),
+                Some(1725)
+            );
+            assert_eq!(
+                keys_of(layout).map(|key| key.y + key.height).max(),
+                Some(625)
+            );
+        }
+    }
+
+    #[test]
+    fn the_function_row_leaves_a_quarter_unit_between_its_groups_and_above_the_digits() {
+        for layout in &GEOMETRY {
+            let row: Vec<u16, KEY_COLUMNS> = layout[0].iter().flatten().map(|key| key.x).collect();
+            assert_eq!(
+                row,
+                [
+                    0, 125, 225, 325, 425, 550, 650, 750, 850, 975, 1075, 1175, 1275, 1400, 1525,
+                    1625
+                ]
+            );
+            assert!(layout[1].iter().flatten().all(|key| key.y == 125));
+        }
+    }
+
+    #[test]
+    fn iso_and_jis_have_the_iso_enter_and_jis_a_shorter_space_bar() {
+        let [ansi, iso, jis] = &GEOMETRY;
+        assert_eq!(ansi[3][14], Some(key(1275, 325, 225)));
+        assert!(keys_of(ansi).all(|key| key.shape == Shape::Rectangle));
+        for layout in [iso, jis] {
+            assert_eq!(layout[3][14], Some(iso_enter(1350, 225)));
+            assert_eq!(
+                keys_of(layout)
+                    .filter(|key| key.shape == Shape::IsoEnter)
+                    .count(),
+                1
+            );
+        }
+        for (layout, width) in [(ansi, 625), (iso, 625), (jis, 450)] {
+            assert_eq!(layout[5][6].map(|key| key.width), Some(width));
         }
     }
 }

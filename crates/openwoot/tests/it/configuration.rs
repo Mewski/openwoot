@@ -16,11 +16,11 @@ use openwoot_protocol::{
     device::Layout,
     encode_message, encode_request,
     endpoints::{
-        ActivateProfile, GetCapabilities, GetKeymap, GetLayout, GetSwitchModels, GetSwitches,
-        GetVersion, Save, SetGamepadDetection, SetKeyReports, SetKeymap, SetLayout, SetLighting,
-        SetSwitches,
+        ActivateProfile, GetCapabilities, GetKeyGeometry, GetKeymap, GetLayout, GetSwitchModels,
+        GetSwitches, GetVersion, Save, SetGamepadDetection, SetKeyReports, SetKeymap, SetLayout,
+        SetLighting, SetSwitches,
     },
-    gamepad,
+    gamepad, geometry,
     heapless::Vec,
     keys::{Action, Keymap, Layer},
     lightbar,
@@ -152,6 +152,10 @@ fn a_keyboard_without_configuration_still_answers_its_version_and_refuses_the_re
     );
     assert_eq!(
         ask!(handler, Save, ()),
+        Ok(Some(Err(Rejection::Unsupported)))
+    );
+    assert_eq!(
+        ask!(handler, GetKeyGeometry, ()),
         Ok(Some(Err(Rejection::Unsupported)))
     );
 }
@@ -364,6 +368,42 @@ fn the_switch_and_layout_endpoints_answer_through_the_profile_configurator() {
     assert_eq!(ask!(handler, Save, ()), Ok(Some(Ok(()))));
 }
 
+#[test]
+fn the_key_geometry_of_the_layout_in_effect_reaches_the_host() {
+    let iso_enter = geometry::Key {
+        x: 1350,
+        y: 225,
+        width: 150,
+        height: 200,
+        shape: geometry::Shape::IsoEnter,
+    };
+    let mut ansi = [[None; COLUMNS]; ROWS];
+    ansi[2][14] = Some(geometry::Key {
+        height: 100,
+        shape: geometry::Shape::Rectangle,
+        ..iso_enter
+    });
+    let mut iso = [[None; COLUMNS]; ROWS];
+    iso[3][14] = Some(iso_enter);
+    let tables = [ansi, iso];
+    let keys = keys::Shared::new();
+    let shared = profile::Shared::new();
+    let model = Mutex::<CriticalSectionRawMutex, _>::new(open(&keys, &shared, None));
+    let mut handler = Handler::with_configuration(
+        VERSION,
+        stock_identity(None),
+        Configurator::new(&model, switch_capabilities()).with_geometry(&tables),
+    );
+    let expected: geometry::Keys = ansi.as_flattened().iter().copied().collect();
+    assert_eq!(
+        ask!(handler, GetKeyGeometry, ()),
+        Ok(Some(Ok(expected.clone())))
+    );
+    assert_eq!(ask!(handler, SetLayout, Layout::Iso), Ok(Some(Ok(()))));
+    assert_eq!(ask!(handler, GetLayout, ()), Ok(Some(Ok(Layout::Ansi))));
+    assert_eq!(ask!(handler, GetKeyGeometry, ()), Ok(Some(Ok(expected))));
+}
+
 fn answered<T>(endpoint: &str, answer: &Result<T, Rejection>) {
     assert!(
         !matches!(answer, Err(Rejection::Unsupported)),
@@ -374,6 +414,7 @@ fn answered<T>(endpoint: &str, answer: &Result<T, Rejection>) {
 fn configured_profiles<'a>(
     model: &'a Mutex<CriticalSectionRawMutex, ProfileModel<'a>>,
 ) -> Configurator<'a, CriticalSectionRawMutex, Nor, ROWS, COLUMNS> {
+    static GEOMETRY: [[[Option<geometry::Key>; COLUMNS]; ROWS]; 1] = [[[None; COLUMNS]; ROWS]];
     Configurator::new(
         model,
         Capabilities {
@@ -382,6 +423,7 @@ fn configured_profiles<'a>(
             ..switch_capabilities()
         },
     )
+    .with_geometry(&GEOMETRY)
 }
 
 #[test]
@@ -403,6 +445,10 @@ fn the_profile_configurator_answers_every_keyboard_wide_endpoint() {
     answered(
         "layout/set",
         &block_on(configurator.set_layout(layout.unwrap())),
+    );
+    answered(
+        "geometry",
+        &block_on(configurator.key_geometry(&mut geometry::Keys::new())),
     );
     let global = block_on(configurator.global_settings());
     answered("global", &global);

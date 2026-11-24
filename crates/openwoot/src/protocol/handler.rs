@@ -12,13 +12,14 @@ use openwoot_protocol::{
         ActivateProfile, CreateProfile, DeleteProfile, EnterUpdateMode, FactoryReset,
         GetAdvancedKeys, GetCapabilities, GetDeviceSettings, GetDiagnostics, GetGamepadMapping,
         GetGamepadSettings, GetGlobalLightbar, GetGlobalSettings, GetHostSignals, GetKeyColors,
-        GetKeyOverrides, GetKeySettings, GetKeymap, GetLayout, GetLightbar, GetLighting,
-        GetProfileInfo, GetProfileRevision, GetProfiles, GetSensorValues, GetSwitchModels,
-        GetSwitches, GetVersion, LeaveHostControl, ResetHostColors, ResetHostKeyColor, Restart,
-        Revert, Save, SetAdvancedKeys, SetDeviceSettings, SetGamepadDetection, SetGamepadMapping,
-        SetGamepadSettings, SetGlobalLightbar, SetGlobalSettings, SetHostColors, SetHostKeyColor,
-        SetHostSignals, SetKeyColors, SetKeyOverrides, SetKeyReports, SetKeySettings, SetKeymap,
-        SetLayout, SetLightbar, SetLighting, SetProfileInfo, SetRawScanning, SetSwitches,
+        GetKeyGeometry, GetKeyOverrides, GetKeySettings, GetKeymap, GetLayout, GetLightbar,
+        GetLighting, GetProfileInfo, GetProfileRevision, GetProfiles, GetSensorValues,
+        GetSwitchModels, GetSwitches, GetVersion, LeaveHostControl, ResetHostColors,
+        ResetHostKeyColor, Restart, Revert, Save, SetAdvancedKeys, SetDeviceSettings,
+        SetGamepadDetection, SetGamepadMapping, SetGamepadSettings, SetGlobalLightbar,
+        SetGlobalSettings, SetHostColors, SetHostKeyColor, SetHostSignals, SetKeyColors,
+        SetKeyOverrides, SetKeyReports, SetKeySettings, SetKeymap, SetLayout, SetLightbar,
+        SetLighting, SetProfileInfo, SetRawScanning, SetSwitches,
     },
     gamepad, keys, lightbar,
     profile::{LayerRef, Slot},
@@ -287,6 +288,9 @@ async fn keyboard_endpoints<C: Configuration>(
         },
         plain GetLayout => async |configuration, ()| configuration.layout().await,
         checked SetLayout => async |configuration, layout| configuration.set_layout(layout).await,
+        filled GetKeyGeometry => async |configuration, (), keys| {
+            configuration.key_geometry(keys).await
+        },
         plain GetGlobalSettings => async |configuration, ()| configuration.global_settings().await,
         checked SetGlobalSettings => async |configuration, settings| {
             configuration.set_global_settings(settings).await

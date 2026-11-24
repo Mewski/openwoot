@@ -8,6 +8,7 @@ pub mod diagnostics;
 pub mod endpoints;
 mod error;
 pub mod gamepad;
+pub mod geometry;
 pub mod global;
 pub mod host_lighting;
 pub mod keys;

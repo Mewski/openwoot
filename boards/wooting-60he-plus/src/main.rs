@@ -52,7 +52,7 @@ fn start(spawner: Spawner, key_executor: SendSpawner) {
             env!("CARGO_PKG_VERSION_PATCH"),
         ),
         board.stock_identity(),
-        Configurator::new(model, keys::capabilities()),
+        Configurator::new(model, keys::capabilities()).with_geometry(&keys::GEOMETRY),
     )
     .with_diagnostics(STATE.readout(hal::usb::negotiated_speed, hal::diagnostics::hardware))
     .with_host(STATE.host())

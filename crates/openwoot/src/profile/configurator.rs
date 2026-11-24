@@ -6,7 +6,7 @@ use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use openwoot_protocol::{
     advanced,
     configuration::{Capabilities, Invalid, Rejection},
-    device, gamepad, global,
+    device, gamepad, geometry, global,
     keys::{self, Keymap, Layer, Overrides},
     lightbar,
     lighting::{self, KeyColors},
@@ -24,6 +24,7 @@ where
 {
     model: &'a Mutex<M, Model<'a, M, F, ROWS, COLUMNS>>,
     capabilities: Capabilities,
+    geometry: &'a [[[Option<geometry::Key>; COLUMNS]; ROWS]],
 }
 
 impl<'a, M, F, const ROWS: usize, const COLUMNS: usize> Configurator<'a, M, F, ROWS, COLUMNS>
@@ -39,7 +40,17 @@ where
         Self {
             model,
             capabilities,
+            geometry: &[],
         }
+    }
+
+    #[must_use]
+    pub const fn with_geometry(
+        mut self,
+        geometry: &'a [[[Option<geometry::Key>; COLUMNS]; ROWS]],
+    ) -> Self {
+        self.geometry = geometry;
+        self
     }
 
     pub async fn serve(&self) -> ! {
@@ -118,6 +129,18 @@ where
             .ok_or(Invalid::LayoutMissing(layout))?;
         self.model.lock().await.set_layout_variant(variant);
         Ok(())
+    }
+
+    async fn key_geometry(&mut self, keys: &mut geometry::Keys) -> Result<(), Rejection> {
+        let variant = usize::from(self.model.lock().await.variant());
+        let table = self
+            .geometry
+            .get(variant)
+            .or(self.geometry.first())
+            .ok_or(Rejection::Unsupported)?;
+        keys.clear();
+        keys.extend_from_slice(table.as_flattened())
+            .map_err(|_| Rejection::Unsupported)
     }
 
     async fn global_settings(&mut self) -> Result<global::Settings, Rejection> {

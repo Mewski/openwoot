@@ -18,7 +18,7 @@ use openwoot_image::Region;
 use openwoot_protocol::{
     advanced,
     configuration::{Capabilities, Invalid, Rejection},
-    device, gamepad, global,
+    device, gamepad, geometry, global,
     heapless::Vec,
     keys::{Action, Distance, Index, Keymap, Layer, RapidTrigger, ScanMode, TapDuration},
     lighting::{
@@ -848,6 +848,45 @@ fn the_layout_is_the_one_of_the_layout_variant_of_the_unit() {
             "variant {variant}"
         );
     }
+}
+
+#[test]
+fn the_key_geometry_is_the_one_of_the_layout_in_effect() {
+    let keys = keys::Shared::new();
+    let shared = profile::Shared::new();
+    let tables = [100, 150, 200].map(|width| {
+        let mut table = [[None; COLUMNS]; ROWS];
+        table[1][2] = Some(geometry::Key {
+            x: 200,
+            y: 100,
+            width,
+            height: 100,
+            shape: geometry::Shape::Rectangle,
+        });
+        table
+    });
+    for (variant, width) in [(0, 100), (1, 150), (2, 200), (9, 100)] {
+        let model: Mutex<Mutual, ProfileModel<'_>> =
+            Mutex::new(Model::new(&keys, &shared, None, &FACTORY, variant, 4));
+        let mut configurator =
+            Configurator::new(&model, switch_capabilities()).with_geometry(&tables);
+        let mut served = geometry::Keys::new();
+        assert_eq!(block_on(configurator.key_geometry(&mut served)), Ok(()));
+        assert_eq!(served.len(), ROWS * COLUMNS);
+        assert_eq!(
+            served[COLUMNS + 2].map(|key| key.width),
+            Some(width),
+            "variant {variant}"
+        );
+        assert_eq!(served.iter().flatten().count(), 1);
+    }
+    let model: Mutex<Mutual, ProfileModel<'_>> =
+        Mutex::new(Model::new(&keys, &shared, None, &FACTORY, 0, 4));
+    let mut without = Configurator::new(&model, switch_capabilities());
+    assert_eq!(
+        block_on(without.key_geometry(&mut geometry::Keys::new())),
+        Err(Rejection::Unsupported)
+    );
 }
 
 pub(crate) fn switch_capabilities() -> Capabilities {

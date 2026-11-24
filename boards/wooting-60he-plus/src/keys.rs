@@ -6,6 +6,7 @@ use openwoot::{
 use openwoot_protocol::{
     configuration::Capabilities,
     device::Layout,
+    geometry::{self, Shape, UNIT},
     heapless::Vec,
     keys::{Action, Function, Layer},
     profile::Slot,
@@ -22,6 +23,7 @@ pub const KEYMAP: DefaultKeymap<KEY_ROWS, KEY_COLUMNS> = DefaultKeymap {
     layers: &LAYERS,
     variant_patches: &VARIANT_PATCHES,
 };
+pub static GEOMETRY: [Geometry; LAYOUT_VARIANTS] = [ANSI_GEOMETRY, ISO_GEOMETRY];
 
 const LAYERS: [[[Action; KEY_COLUMNS]; KEY_ROWS]; 3] = [
     [
@@ -322,6 +324,176 @@ const LAYERS: [[[Action; KEY_COLUMNS]; KEY_ROWS]; 3] = [
 
 const VARIANT_PATCHES: [&[Patch]; LAYOUT_VARIANTS] = [&[], &[]];
 
+type Geometry = [[Option<geometry::Key>; KEY_COLUMNS]; KEY_ROWS];
+
+const ANSI_GEOMETRY: Geometry = [
+    [None; KEY_COLUMNS],
+    [
+        Some(key(0, 0, 100)),
+        Some(key(100, 0, 100)),
+        Some(key(200, 0, 100)),
+        Some(key(300, 0, 100)),
+        Some(key(400, 0, 100)),
+        Some(key(500, 0, 100)),
+        Some(key(600, 0, 100)),
+        Some(key(700, 0, 100)),
+        Some(key(800, 0, 100)),
+        Some(key(900, 0, 100)),
+        Some(key(1000, 0, 100)),
+        Some(key(1100, 0, 100)),
+        Some(key(1200, 0, 100)),
+        Some(key(1300, 0, 200)),
+    ],
+    [
+        Some(key(0, 100, 150)),
+        Some(key(150, 100, 100)),
+        Some(key(250, 100, 100)),
+        Some(key(350, 100, 100)),
+        Some(key(450, 100, 100)),
+        Some(key(550, 100, 100)),
+        Some(key(650, 100, 100)),
+        Some(key(750, 100, 100)),
+        Some(key(850, 100, 100)),
+        Some(key(950, 100, 100)),
+        Some(key(1050, 100, 100)),
+        Some(key(1150, 100, 100)),
+        Some(key(1250, 100, 100)),
+        Some(key(1350, 100, 150)),
+    ],
+    [
+        Some(key(0, 200, 175)),
+        Some(key(175, 200, 100)),
+        Some(key(275, 200, 100)),
+        Some(key(375, 200, 100)),
+        Some(key(475, 200, 100)),
+        Some(key(575, 200, 100)),
+        Some(key(675, 200, 100)),
+        Some(key(775, 200, 100)),
+        Some(key(875, 200, 100)),
+        Some(key(975, 200, 100)),
+        Some(key(1075, 200, 100)),
+        Some(key(1175, 200, 100)),
+        None,
+        Some(key(1275, 200, 225)),
+    ],
+    [
+        Some(key(0, 300, 225)),
+        None,
+        Some(key(225, 300, 100)),
+        Some(key(325, 300, 100)),
+        Some(key(425, 300, 100)),
+        Some(key(525, 300, 100)),
+        Some(key(625, 300, 100)),
+        Some(key(725, 300, 100)),
+        Some(key(825, 300, 100)),
+        Some(key(925, 300, 100)),
+        Some(key(1025, 300, 100)),
+        Some(key(1125, 300, 100)),
+        None,
+        Some(key(1225, 300, 275)),
+    ],
+    [
+        Some(key(0, 400, 125)),
+        Some(key(125, 400, 125)),
+        Some(key(250, 400, 125)),
+        None,
+        None,
+        None,
+        Some(key(375, 400, 625)),
+        None,
+        None,
+        None,
+        Some(key(1000, 400, 125)),
+        Some(key(1125, 400, 125)),
+        Some(key(1250, 400, 125)),
+        Some(key(1375, 400, 125)),
+    ],
+];
+
+const ISO_GEOMETRY: Geometry = [
+    [None; KEY_COLUMNS],
+    [
+        Some(key(0, 0, 100)),
+        Some(key(100, 0, 100)),
+        Some(key(200, 0, 100)),
+        Some(key(300, 0, 100)),
+        Some(key(400, 0, 100)),
+        Some(key(500, 0, 100)),
+        Some(key(600, 0, 100)),
+        Some(key(700, 0, 100)),
+        Some(key(800, 0, 100)),
+        Some(key(900, 0, 100)),
+        Some(key(1000, 0, 100)),
+        Some(key(1100, 0, 100)),
+        Some(key(1200, 0, 100)),
+        Some(key(1300, 0, 200)),
+    ],
+    [
+        Some(key(0, 100, 150)),
+        Some(key(150, 100, 100)),
+        Some(key(250, 100, 100)),
+        Some(key(350, 100, 100)),
+        Some(key(450, 100, 100)),
+        Some(key(550, 100, 100)),
+        Some(key(650, 100, 100)),
+        Some(key(750, 100, 100)),
+        Some(key(850, 100, 100)),
+        Some(key(950, 100, 100)),
+        Some(key(1050, 100, 100)),
+        Some(key(1150, 100, 100)),
+        Some(key(1250, 100, 100)),
+        None,
+    ],
+    [
+        Some(key(0, 200, 175)),
+        Some(key(175, 200, 100)),
+        Some(key(275, 200, 100)),
+        Some(key(375, 200, 100)),
+        Some(key(475, 200, 100)),
+        Some(key(575, 200, 100)),
+        Some(key(675, 200, 100)),
+        Some(key(775, 200, 100)),
+        Some(key(875, 200, 100)),
+        Some(key(975, 200, 100)),
+        Some(key(1075, 200, 100)),
+        Some(key(1175, 200, 100)),
+        Some(key(1275, 200, 100)),
+        Some(iso_enter(1350, 100)),
+    ],
+    [
+        Some(key(0, 300, 125)),
+        Some(key(125, 300, 100)),
+        Some(key(225, 300, 100)),
+        Some(key(325, 300, 100)),
+        Some(key(425, 300, 100)),
+        Some(key(525, 300, 100)),
+        Some(key(625, 300, 100)),
+        Some(key(725, 300, 100)),
+        Some(key(825, 300, 100)),
+        Some(key(925, 300, 100)),
+        Some(key(1025, 300, 100)),
+        Some(key(1125, 300, 100)),
+        None,
+        Some(key(1225, 300, 275)),
+    ],
+    [
+        Some(key(0, 400, 125)),
+        Some(key(125, 400, 125)),
+        Some(key(250, 400, 125)),
+        None,
+        None,
+        None,
+        Some(key(375, 400, 625)),
+        None,
+        None,
+        None,
+        Some(key(1000, 400, 125)),
+        Some(key(1125, 400, 125)),
+        Some(key(1250, 400, 125)),
+        Some(key(1375, 400, 125)),
+    ],
+];
+
 #[must_use]
 pub fn capabilities() -> Capabilities {
     Capabilities {
@@ -343,6 +515,26 @@ pub fn sensor_map(variant: u8) -> Map<INPUTS, ADDRESSES> {
         .or(SENSOR_MAPS.first())
         .copied()
         .unwrap_or_else(|| Map::from_codes([[0xFF; 16]; INPUTS]))
+}
+
+const fn key(x: u16, y: u16, width: u16) -> geometry::Key {
+    geometry::Key {
+        x,
+        y,
+        width,
+        height: UNIT,
+        shape: Shape::Rectangle,
+    }
+}
+
+const fn iso_enter(x: u16, y: u16) -> geometry::Key {
+    geometry::Key {
+        x,
+        y,
+        width: UNIT + UNIT / 2,
+        height: 2 * UNIT,
+        shape: Shape::IsoEnter,
+    }
 }
 
 #[cfg(test)]
@@ -471,6 +663,73 @@ mod tests {
                 KEYMAP.action(Layer::Two, Key::new(5, 2), variant),
                 Action::Keyboard(0x4F)
             );
+        }
+    }
+
+    fn keys_of(layout: &Geometry) -> impl Iterator<Item = &geometry::Key> {
+        layout.as_flattened().iter().flatten()
+    }
+
+    #[test]
+    fn exactly_the_keys_with_a_sensor_have_geometry_in_every_layout() {
+        for (layout, map) in GEOMETRY.iter().zip(SENSOR_MAPS) {
+            for (row, keys) in (0..).zip(layout) {
+                for (column, geometry) in (0..).zip(keys) {
+                    let key = Key::new(row, column);
+                    assert_eq!(geometry.is_some(), map.position(key).is_some(), "{key:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_two_keys_overlap_and_every_edge_lies_on_a_quarter_unit() {
+        let quarter = UNIT / 4;
+        for layout in &GEOMETRY {
+            for key in keys_of(layout) {
+                for edge in [key.x, key.y, key.width, key.height] {
+                    assert_eq!(edge % quarter, 0, "{key:?}");
+                }
+            }
+            for x in (quarter / 2..1500).step_by(usize::from(quarter)) {
+                for y in (quarter / 2..500).step_by(usize::from(quarter)) {
+                    let covering = keys_of(layout).filter(|key| key.contains(x, y)).count();
+                    assert!(covering <= 1, "({x}, {y})");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_layout_spans_fifteen_by_five_units() {
+        for layout in &GEOMETRY {
+            assert_eq!(keys_of(layout).map(|key| key.x).min(), Some(0));
+            assert_eq!(keys_of(layout).map(|key| key.y).min(), Some(0));
+            assert_eq!(
+                keys_of(layout).map(|key| key.x + key.width).max(),
+                Some(1500)
+            );
+            assert_eq!(
+                keys_of(layout).map(|key| key.y + key.height).max(),
+                Some(500)
+            );
+        }
+    }
+
+    #[test]
+    fn iso_has_the_iso_enter_and_both_layouts_the_long_space_bar() {
+        let [ansi, iso] = &GEOMETRY;
+        assert_eq!(ansi[3][13], Some(key(1275, 200, 225)));
+        assert!(keys_of(ansi).all(|key| key.shape == Shape::Rectangle));
+        assert_eq!(iso[3][13], Some(iso_enter(1350, 100)));
+        assert_eq!(
+            keys_of(iso)
+                .filter(|key| key.shape == Shape::IsoEnter)
+                .count(),
+            1
+        );
+        for layout in [ansi, iso] {
+            assert_eq!(layout[5][6], Some(key(375, 400, 625)));
         }
     }
 }

@@ -352,6 +352,27 @@ fn host_lighting_and_full_sensor_readouts_fit_one_frame() {
 }
 
 #[test]
+fn the_largest_key_geometry_fits_one_frame() {
+    use openwoot_protocol::{
+        endpoints::GetKeyGeometry,
+        geometry::{Key, Keys, Shape},
+    };
+
+    let widest: Keys = filled(
+        Some(Key {
+            x: u16::MAX,
+            y: u16::MAX,
+            width: u16::MAX,
+            height: u16::MAX,
+            shape: Shape::IsoEnter,
+        }),
+        MAX_KEYS,
+    );
+    round_trip!(GetKeyGeometry, (), Ok::<_, Rejection>(widest));
+    round_trip!(GetKeyGeometry, (), Err::<Keys, _>(Rejection::Unsupported));
+}
+
+#[test]
 fn the_largest_diagnostics_report_fits_one_frame() {
     use openwoot_protocol::{
         diagnostics::{

@@ -2,7 +2,7 @@ use openwoot_protocol::{
     advanced,
     configuration::{Capabilities, Rejection},
     device::{self, Layout},
-    gamepad, global,
+    gamepad, geometry, global,
     keys::{self, Layer},
     lightbar, lighting,
     profile::{self, Slot, Summary},
@@ -31,6 +31,10 @@ pub trait Configuration {
     }
 
     async fn set_layout(&mut self, _layout: Layout) -> Result<(), Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    async fn key_geometry(&mut self, _keys: &mut geometry::Keys) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 

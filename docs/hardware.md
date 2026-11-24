@@ -17,7 +17,7 @@ Peripheral names are GigaDevice's, which number instances from 0 (`TIMER1` is ST
 | Multiplexer lines, converter inputs, sample time, sensor maps | `boards/<board>/src/scan.rs` (`WIRING`) |
 | LED driver address and set-up, LED tables, light bar | `boards/<board>/src/lighting.rs` |
 | NOR chip select, NOR layout, device-information source | `boards/<board>/src/storage.rs` |
-| Factory keymap of each layer and layout variant, capabilities reported to the host | `boards/<board>/src/keys.rs` |
+| Factory keymap of each layer and layout variant, key geometry of each layout variant, capabilities reported to the host | `boards/<board>/src/keys.rs` |
 | Factory profiles and the special edition | `boards/<board>/src/profiles.rs` |
 | Image area and RAM | `boards/<board>/memory.x` |
 | Register set-up of every peripheral | the chip HAL: `rcu`, `gpio`, `scan`, `time`, `i2c`, `spi`, `usb`, `system`, `flash`, private `dma` and `basepri` |
