@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use gpui_kit::{
-    Context, Div, FontWeight, Hsla, InteractiveElement as _, KeyDownEvent, KeyUpEvent, Modifiers,
-    ModifiersChangedEvent, ParentElement as _, Pixels, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Task, Window,
+    Context, Div, InteractiveElement as _, KeyDownEvent, KeyUpEvent, Modifiers,
+    ModifiersChangedEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Task, Window,
     component::{
         ActiveTheme as _, Sizable as _,
         button::{Button, ButtonVariants as _},
@@ -24,21 +24,14 @@ use crate::{page::remap::usage_of_key, panel, usage};
 const POLL_INTERVAL: Duration = Duration::from_millis(33);
 const VISIBLE_WITHIN: Duration = Duration::from_millis(500);
 const FULL_TRAVEL: f32 = 4095.0;
-const BAR_WIDTH: f32 = 240.0;
+const BAR_WIDTH: f32 = 160.0;
+const VALUE_WIDTH: f32 = 64.0;
 
 pub(super) struct Tester {
     travel: Option<sensors::Values>,
     held: Vec<SharedString>,
     modifiers: Modifiers,
     _poll: Task<()>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct BarLook {
-    track: Hsla,
-    fill: Hsla,
-    muted: Hsla,
-    radius: Pixels,
 }
 
 impl AdvancedPage {
@@ -95,22 +88,40 @@ impl AdvancedPage {
         Some((f32::from(travel) / FULL_TRAVEL).clamp(0.0, 1.0))
     }
 
-    pub(super) fn tester_panel(&self, entry: &advanced::Key, cx: &mut Context<Self>) -> Div {
+    pub(super) fn tester_rows(&self, entry: &advanced::Key, cx: &mut Context<Self>) -> Div {
+        let testing = self.tester.is_some();
+        let toggle = Button::new("advanced-test")
+            .ghost()
+            .small()
+            .label(if testing { "Stop" } else { "Start" })
+            .on_click(cx.listener(|this, _, window, cx| {
+                if this.tester.is_some() {
+                    this.stop_test(cx);
+                } else {
+                    this.start_test(window, cx);
+                }
+            }));
+        let row = panel::row(
+            "Test",
+            Some("Shows key travel and what the computer receives".into()),
+            toggle,
+            cx,
+        );
         let Some(tester) = &self.tester else {
-            return Self::tester_prompt(cx);
+            return row;
         };
-        let theme = cx.theme();
-        let look = BarLook {
-            track: theme.secondary,
-            fill: theme.primary,
-            muted: theme.muted_foreground,
-            radius: theme.radius,
-        };
-        let (fill, muted, radius) = (look.fill, look.muted, look.radius);
         let bars: Vec<Div> = rules::bindings(entry)
-            .map(|(key, _)| self.travel_bar(tester, usize::from(key.get()), look))
+            .map(|(key, _)| {
+                let key = usize::from(key.get());
+                panel::row(
+                    SharedString::from(self.key_name(key)),
+                    None,
+                    travel_bar(tester, key, cx),
+                    cx,
+                )
+            })
             .collect();
-        let mut received: Vec<SharedString> = modifier_names(tester.modifiers);
+        let mut received = modifier_names(tester.modifiers);
         received.extend(tester.held.iter().cloned());
         let received: SharedString = if received.is_empty() {
             "Nothing".into()
@@ -125,90 +136,16 @@ impl AdvancedPage {
                 .on_key_up(cx.listener(Self::tested_key_up))
                 .on_modifiers_changed(cx.listener(Self::tested_modifiers))
                 .on_click(cx.listener(|this, _, window, cx| this.tester_focus.focus(window, cx)))
-                .gap_2()
-                .p_3()
-                .rounded(radius)
-                .border_1()
-                .border_color(fill)
+                .gap_1()
+                .child(row)
                 .children(bars)
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .text_sm()
-                        .child(div().text_color(muted).child("Received by the computer:"))
-                        .child(div().font_weight(FontWeight::SEMIBOLD).child(received)),
-                )
-                .child(
-                    h_flex().child(
-                        Button::new("advanced-test-stop")
-                            .small()
-                            .ghost()
-                            .label("Stop test")
-                            .on_click(cx.listener(|this, _, _, cx| this.stop_test(cx))),
-                    ),
-                ),
+                .child(panel::row(
+                    "Received",
+                    None,
+                    div().text_sm().child(received),
+                    cx,
+                )),
         )
-    }
-
-    fn tester_prompt(cx: &mut Context<Self>) -> Div {
-        v_flex()
-            .gap_2()
-            .child(panel::note(
-                "Press the keys to test the advanced key: the bars show how far each key is \
-                 pressed, the list shows what the computer receives.",
-                cx,
-            ))
-            .child(
-                h_flex().child(
-                    Button::new("advanced-test-start")
-                        .small()
-                        .outline()
-                        .label("Test your binding")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.start_test(window, cx);
-                        })),
-                ),
-            )
-    }
-
-    fn travel_bar(&self, tester: &Tester, key: usize, look: BarLook) -> Div {
-        let fraction = tester
-            .travel
-            .as_ref()
-            .and_then(|travel| travel.get(key).copied().flatten())
-            .map_or(0.0, |travel| {
-                (f32::from(travel) / FULL_TRAVEL).clamp(0.0, 1.0)
-            });
-        h_flex()
-            .gap_3()
-            .items_center()
-            .child(
-                div()
-                    .w_24()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(SharedString::from(self.key_name(key))),
-            )
-            .child(
-                div()
-                    .w(px(BAR_WIDTH))
-                    .h_2()
-                    .rounded(look.radius)
-                    .bg(look.track)
-                    .child(
-                        div()
-                            .h_full()
-                            .w(relative(fraction))
-                            .rounded(look.radius)
-                            .bg(look.fill),
-                    ),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(look.muted)
-                    .child(SharedString::from(format!("{:.0} %", fraction * 100.0))),
-            )
     }
 
     fn tested_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -244,6 +181,42 @@ impl AdvancedPage {
             cx.notify();
         }
     }
+}
+
+fn travel_bar(tester: &Tester, key: usize, cx: &Context<AdvancedPage>) -> Div {
+    let theme = cx.theme();
+    let fraction = tester
+        .travel
+        .as_ref()
+        .and_then(|travel| travel.get(key).copied().flatten())
+        .map_or(0.0, |travel| {
+            (f32::from(travel) / FULL_TRAVEL).clamp(0.0, 1.0)
+        });
+    h_flex()
+        .gap_3()
+        .items_center()
+        .child(
+            div()
+                .w(px(BAR_WIDTH))
+                .h_1p5()
+                .rounded(theme.radius)
+                .bg(theme.secondary)
+                .child(
+                    div()
+                        .h_full()
+                        .w(relative(fraction))
+                        .rounded(theme.radius)
+                        .bg(theme.primary),
+                ),
+        )
+        .child(
+            div()
+                .w(px(VALUE_WIDTH))
+                .text_right()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .child(SharedString::from(format!("{:.0} %", fraction * 100.0))),
+        )
 }
 
 fn received_name(key: &str) -> SharedString {

@@ -1,6 +1,6 @@
 use gpui_kit::{
     Context, Div, ParentElement as _, Styled as _, Window,
-    component::{Disableable as _, color_picker::ColorPicker, h_flex, switch::Switch},
+    component::{Sizable as _, color_picker::ColorPicker, h_flex, switch::Switch},
 };
 use openwoot_protocol::lighting::{Color, Indicators};
 
@@ -45,18 +45,6 @@ impl Lock {
         }
     }
 
-    const fn detail(self) -> &'static str {
-        match self {
-            Self::Caps => "Colours the Caps Lock key while Caps Lock is on.",
-            Self::Scroll => "Colours the Scroll Lock key while Scroll Lock is on.",
-            Self::Num => {
-                "Colours the Num Lock key while Num Lock is on, or while it is off when the \
-                 keyboard settings invert the Num Lock indicator."
-            }
-            Self::Layer => "Colours the Fn key while its layer is locked.",
-        }
-    }
-
     const fn id(self) -> &'static str {
         match self {
             Self::Caps => "caps-lock-indicator",
@@ -68,39 +56,32 @@ impl Lock {
 }
 
 impl LightingPage {
-    pub(super) fn locks_section(&self, cx: &Context<Self>) -> Div {
-        let indicators = self.settings.as_ref().map(|settings| settings.indicators);
-        let mut section = panel::section(
+    pub(super) fn locks_card(&self, cx: &Context<Self>) -> Option<Div> {
+        let indicators = self.settings.as_ref()?.indicators;
+        let mut card = panel::section(
             "Lock indicators",
-            Some(
-                "Each indicator paints its key while the lock is on. Without a colour the key \
-                 stays dark while the lock is on."
-                    .into(),
-            ),
+            Some("Lights the lock key while the lock is on.".into()),
             cx,
         );
         for (lock, picker) in &self.locks {
             let lock = *lock;
-            let lit = indicators.is_some_and(|indicators| lock.color(&indicators).alpha != 0);
-            section = section.child(panel::row(
+            let lit = lock.color(&indicators).alpha != 0;
+            card = card.child(panel::toggle(
                 lock.label(),
-                Some(lock.detail().into()),
+                None,
                 h_flex()
                     .gap_3()
                     .items_center()
-                    .child(ColorPicker::new(picker))
-                    .child(
-                        Switch::new(lock.id())
-                            .checked(lit)
-                            .disabled(indicators.is_none())
-                            .on_change(cx.listener(move |this, lit: &bool, window, cx| {
-                                this.light_lock(lock, *lit, window, cx);
-                            })),
-                    ),
+                    .child(ColorPicker::new(picker).small())
+                    .child(Switch::new(lock.id()).checked(lit).on_change(cx.listener(
+                        move |this, lit: &bool, window, cx| {
+                            this.light_lock(lock, *lit, window, cx);
+                        },
+                    ))),
                 cx,
             ));
         }
-        section
+        Some(card)
     }
 
     fn light_lock(&mut self, lock: Lock, lit: bool, window: &mut Window, cx: &mut Context<Self>) {

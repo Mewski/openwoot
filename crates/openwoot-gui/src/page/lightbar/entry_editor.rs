@@ -1,11 +1,11 @@
 use std::ops::RangeInclusive;
 
 use gpui_kit::{
-    Context, Div, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    Context, Div, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window,
     component::{
-        ActiveTheme as _, Selectable as _, Sizable as _,
-        button::Button,
+        ActiveTheme as _, Sizable as _,
+        button::{Button, ButtonVariants as _},
         color_picker::ColorPicker,
         h_flex,
         input::NumberInput,
@@ -26,26 +26,24 @@ use openwoot_protocol::{
 };
 
 use super::{
-    LightbarPage, Owner,
+    LightbarPage,
     entry::{self, BUILTINS, KINDS, Kind, Spot, full_range, maximum_of, number_row},
     number::Field,
     swatch::Swatch,
 };
 use crate::{
-    page::lighting::{hsla_of, opaque_of, stepper},
+    page::lighting::{hsla_of, opaque_of, segmented, select, stepper, sunken, tile, wide_slider},
     panel,
 };
 
-const INPUT_WIDTH: f32 = 140.0;
-const LED_CELL: f32 = 26.0;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Socket {
-    Meter,
-    Term(Spot),
-    Operand(Spot),
-}
-
+const INPUT_WIDTH: f32 = 120.0;
+const LED_CELL: f32 = 20.0;
+const METER_DIRECTIONS: [(bool, &str); 2] = [(false, "→"), (true, "←")];
+const TRANSITIONS: [(Waveform, &str); 2] = [
+    (Waveform::Square, "Instant"),
+    (Waveform::Triangle, "Smooth"),
+];
+const TARGETS: [&str; 2] = ["Light bar", "Keys"];
 const BACKGROUNDS: [(&str, Background); 5] = [
     ("Full", Background::ProfileColor),
     ("Transparent", Background::Transparent),
@@ -54,159 +52,140 @@ const BACKGROUNDS: [(&str, Background); 5] = [
     ("Darker", Background::DimmedProfileColor),
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Socket {
+    Meter,
+    Term(Spot),
+    Operand(Spot),
+}
+
 impl LightbarPage {
-    pub(super) fn editor_section(&self, cx: &Context<Self>) -> Div {
-        let section = panel::section(
-            "Effect parameters",
-            Some(
-                "Choose the effect type and customise its look; a condition decides when it shows."
-                    .into(),
-            ),
-            cx,
-        );
-        let (Some(chosen), Some(entry)) = (self.chosen, self.chosen_entry()) else {
-            return section.child(panel::note(
-                "Select an effect to change its parameters.",
-                cx,
-            ));
-        };
+    pub(super) fn effect_card(&self, cx: &Context<Self>) -> Option<Div> {
+        let entry = self.chosen_entry()?;
         let kind = Kind::of(&entry.effect);
-        let owner = match chosen.owner {
-            Owner::Profile => "Profile effect",
-            Owner::Global => "Global effect",
-        };
-        section
-            .child(
-                h_flex()
-                    .gap_3()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        v_flex()
-                            .gap_0p5()
-                            .child(
-                                div()
-                                    .text_base()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(format!(
-                                        "{owner} {}: {}",
-                                        chosen.index + 1,
-                                        kind.name()
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(kind.description()),
-                            ),
-                    )
-                    .child(self.kind_menu(kind, cx)),
-            )
-            .children(self.effect_rows(entry, cx))
-            .child(self.condition_rows(entry, cx))
+        Some(
+            panel::section("Effect", None, cx)
+                .child(panel::field("Type", self.kind_tiles(kind, cx), cx))
+                .children(self.effect_rows(entry, cx)),
+        )
     }
 
-    fn kind_menu(&self, current: Kind, cx: &Context<Self>) -> impl IntoElement + use<> {
-        let page = cx.entity().downgrade();
+    fn kind_tiles(&self, current: Kind, cx: &Context<Self>) -> Div {
         let matrix = self.matrix(cx);
-        Button::new("effect-type")
-            .label("Effect type")
-            .small()
-            .outline()
-            .dropdown_caret(true)
-            .dropdown_menu(move |menu, _, _| {
-                KINDS.iter().fold(menu, |menu, kind| {
-                    let page = page.clone();
+        sunken(cx).child(
+            div()
+                .grid()
+                .grid_cols(2)
+                .gap_1()
+                .children(KINDS.iter().enumerate().map(|(index, kind)| {
+                    let kind = *kind;
                     let effect = kind.effect(matrix);
-                    menu.item(
-                        PopupMenuItem::new(kind.name())
-                            .checked(*kind == current)
-                            .on_click(move |_, window, cx| {
-                                let effect = effect.clone();
-                                page.update(cx, |page, cx| {
-                                    page.edit_chosen(|entry| entry.effect = effect, window, cx);
-                                    page.sync_entry_controls(window, cx);
-                                })
-                                .ok();
-                            }),
+                    tile(
+                        format!("lightbar-kind-{index}"),
+                        kind.icon(),
+                        kind.name(),
+                        kind.description(),
+                        kind == current,
+                        cx,
                     )
-                })
-            })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if kind != current {
+                            let effect = effect.clone();
+                            this.edit_chosen(|entry| entry.effect = effect, window, cx);
+                            this.sync_entry_controls(window, cx);
+                        }
+                    }))
+                })),
+        )
     }
 
     fn effect_rows(&self, entry: &Entry, cx: &Context<Self>) -> Vec<Div> {
         match &entry.effect {
             Effect::Meter(meter) => self.meter_rows(meter, cx),
             Effect::ProfileIndicator(indicator) => self.indicator_rows(*indicator, cx),
-            Effect::Mirror(mirror) => vec![
-                panel::row(
-                    "Match with",
-                    Some("Pick the keys whose colours the LEDs copy.".into()),
-                    Button::new("mirror-number-row")
-                        .label("Number row")
-                        .xsmall()
-                        .outline()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            let rect = number_row(this.matrix(cx));
-                            this.edit_rect(move |current| *current = rect, window, cx);
-                        })),
-                    cx,
-                ),
-                self.rect_row(mirror.source, cx),
-                self.range_row(mirror.range, cx),
-            ],
-            Effect::Blink(blink) => self.blink_rows(*blink, cx),
+            Effect::Mirror(mirror) => {
+                let mut rows = self.rect_rows(mirror.source, cx);
+                rows.extend(self.range_row(cx));
+                rows
+            }
+            Effect::Blink(blink) => {
+                let mut rows = vec![
+                    self.color_pair_row(cx),
+                    choice_toggle(
+                        "Transition",
+                        "blink-transition",
+                        &TRANSITIONS,
+                        blink.waveform,
+                        |effect, waveform| {
+                            if let Effect::Blink(blink) = effect {
+                                blink.waveform = waveform;
+                            }
+                        },
+                        cx,
+                    ),
+                    panel::toggle("Period", None, self.number(Field::Period, "ms"), cx),
+                ];
+                rows.extend(self.target_rows(blink.target, cx));
+                rows
+            }
             Effect::Solid(solid) => {
                 let mut rows = vec![self.color_row("Colour", Swatch::Main, cx)];
                 rows.extend(self.target_rows(solid.target, cx));
                 rows
             }
-            Effect::Custom(custom) => vec![
-                self.custom_strip(custom.colors.as_slice(), cx),
-                self.color_row("LED colour", Swatch::Main, cx),
-                panel::row(
-                    "Fill",
-                    None,
-                    Button::new("custom-fill")
-                        .label("Give every LED this colour")
-                        .xsmall()
-                        .outline()
-                        .on_click(cx.listener(|this, _, window, cx| this.fill_custom(window, cx))),
-                    cx,
-                ),
-                self.range_row(custom.range, cx),
-            ],
+            Effect::Custom(custom) => {
+                let mut rows = vec![
+                    self.custom_strip(custom.colors.as_slice(), cx),
+                    panel::toggle(
+                        "Colour",
+                        None,
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .when_some(self.swatch(Swatch::Main), |this, picker| {
+                                this.child(ColorPicker::new(picker).small())
+                            })
+                            .child(
+                                Button::new("custom-fill")
+                                    .label("Fill all")
+                                    .ghost()
+                                    .small()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.fill_custom(window, cx);
+                                    })),
+                            ),
+                        cx,
+                    ),
+                ];
+                rows.extend(self.range_row(cx));
+                rows
+            }
         }
     }
 
     fn meter_rows(&self, meter: &Meter, cx: &Context<Self>) -> Vec<Div> {
-        vec![
-            self.signal_row("Data point", meter.signal, Socket::Meter, cx),
-            panel::row(
-                "Max value",
-                Some("The value that fills the whole range.".into()),
-                self.number(Field::Maximum),
-                cx,
-            ),
-            self.color_row("Main colour", Swatch::Main, cx),
+        let mut rows = vec![
+            self.signal_field("Data point", meter.signal, Socket::Meter, cx),
+            panel::toggle("Maximum", None, self.number(Field::Maximum, ""), cx),
+            self.color_row("Colour", Swatch::Main, cx),
             self.optional_color_row(
-                "Background colour",
-                "The colour of the unlit LEDs; without it the effects below show through.",
+                "Background",
+                None,
                 Swatch::Second,
                 meter.background.is_some(),
                 cx,
             ),
             self.optional_color_row(
-                "Blend colour",
-                "Blends from this colour at the start of the bar to the main colour at its end.",
+                "Blend",
+                Some("Fades from this colour at the start of the bar."),
                 Swatch::Third,
                 meter.gradient_start.is_some(),
                 cx,
             ),
-            choice_row(
+            choice_toggle(
                 "Direction",
-                [("Left to right", false), ("Right to left", true)],
+                "meter-direction",
+                &METER_DIRECTIONS,
                 meter.reverse,
                 |effect, reverse| {
                     if let Effect::Meter(meter) = effect {
@@ -215,51 +194,41 @@ impl LightbarPage {
                 },
                 cx,
             ),
-            self.range_row(meter.range, cx),
-        ]
+        ];
+        rows.extend(self.range_row(cx));
+        rows
     }
 
     fn indicator_rows(&self, indicator: ProfileIndicator, cx: &Context<Self>) -> Vec<Div> {
         let leds = self.leds(cx).max(1);
-        let mut rows = vec![panel::row(
-            "Background colour",
-            Some(
-                "Full paints the whole range in the profile colour; the others mark the \
-                 profile's section on this background."
-                    .into(),
-            ),
+        let fixed = matches!(indicator.background, Background::Fixed(_));
+        let mut rows = vec![panel::field(
+            "Background",
             h_flex()
-                .flex_wrap()
-                .gap_1()
-                .children(BACKGROUNDS.map(|(label, background)| {
-                    let selected = entry::background_name(indicator.background) == label;
-                    Button::new(SharedString::from(format!("indicator-{label}")))
-                        .label(label)
-                        .xsmall()
-                        .outline()
-                        .selected(selected)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if !selected {
-                                this.set_background(background, window, cx);
-                            }
-                        }))
-                })),
+                .w_full()
+                .gap_2()
+                .items_center()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(Self::background_menu(indicator.background, cx)),
+                )
+                .when(fixed, |this| {
+                    this.when_some(self.swatch(Swatch::Main), |this, picker| {
+                        this.child(ColorPicker::new(picker).small())
+                    })
+                }),
             cx,
         )];
-        if matches!(indicator.background, Background::Fixed(_)) {
-            rows.push(self.color_row("Fixed colour", Swatch::Main, cx));
-        }
-        rows.push(panel::row(
-            "Divide into",
-            Some(
-                "At least this many sections; 1 divides the range by the number of profiles."
-                    .into(),
-            ),
+        rows.push(panel::toggle(
+            "Sections",
+            Some("At least this many; 1 divides by the profile count.".into()),
             stepper(
                 "indicator-segments",
                 indicator.segments,
                 1..=leds,
-                format!("{} sections", indicator.segments),
+                indicator.segments.to_string(),
                 cx.listener(|this, segments: &u8, window, cx| {
                     let segments = *segments;
                     this.edit_chosen(
@@ -275,99 +244,73 @@ impl LightbarPage {
             ),
             cx,
         ));
-        rows.push(self.range_row(indicator.range, cx));
+        rows.extend(self.range_row(cx));
         rows
     }
 
-    fn blink_rows(&self, blink: Blink, cx: &Context<Self>) -> Vec<Div> {
-        let mut rows = vec![
-            self.color_row("Main colour", Swatch::Main, cx),
-            self.color_row("Secondary colour", Swatch::Second, cx),
-            choice_row(
-                "Transition",
-                [
-                    ("Instant", Waveform::Square),
-                    ("Smooth", Waveform::Triangle),
-                ],
-                blink.waveform,
-                |effect, waveform| {
-                    if let Effect::Blink(blink) = effect {
-                        blink.waveform = waveform;
-                    }
-                },
-                cx,
-            ),
-            panel::row(
-                "Cycle duration",
-                Some("Milliseconds for one cycle from the main colour and back.".into()),
-                self.number(Field::Period),
-                cx,
-            ),
-        ];
-        rows.extend(self.target_rows(blink.target, cx));
-        rows
+    fn background_menu(current: Background, cx: &Context<Self>) -> impl IntoElement + use<> {
+        let page = cx.entity().downgrade();
+        let label = entry::background_name(current);
+        select("indicator-background", label).dropdown_menu(move |menu, _, _| {
+            BACKGROUNDS.iter().fold(menu, |menu, (name, background)| {
+                let page = page.clone();
+                let background = *background;
+                let checked = *name == label;
+                menu.item(PopupMenuItem::new(*name).checked(checked).on_click(
+                    move |_, window, cx| {
+                        if !checked {
+                            page.update(cx, |page, cx| {
+                                page.set_background(background, window, cx);
+                            })
+                            .ok();
+                        }
+                    },
+                ))
+            })
+        })
     }
 
     fn target_rows(&self, target: Target, cx: &Context<Self>) -> Vec<Div> {
         let on_keys = matches!(target, Target::Keys(_));
-        let chooser = panel::row(
-            "Show on",
+        let mut rows = vec![panel::toggle(
+            "Target",
             None,
-            h_flex()
-                .gap_1()
-                .children([("Light bar", false), ("Keys", true)].map(|(label, keys)| {
-                    Button::new(SharedString::from(format!("target-{label}")))
-                        .label(label)
-                        .xsmall()
-                        .outline()
-                        .selected(on_keys == keys)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if on_keys != keys {
-                                this.retarget(keys, window, cx);
-                            }
-                        }))
-                })),
+            segmented(
+                "effect-target",
+                TARGETS,
+                usize::from(on_keys),
+                cx.listener(move |this, index: &usize, window, cx| {
+                    let keys = *index == 1;
+                    if keys != on_keys {
+                        this.retarget(keys, window, cx);
+                    }
+                }),
+            ),
             cx,
+        )];
+        match target {
+            Target::Lightbar(_) => rows.extend(self.range_row(cx)),
+            Target::Keys(rect) => rows.extend(self.rect_rows(rect, cx)),
+        }
+        rows
+    }
+
+    fn range_row(&self, cx: &Context<Self>) -> Option<Div> {
+        let range = self.range.as_ref()?;
+        let value = range.state.read(cx).value();
+        let readout = format!(
+            "{}–{}",
+            u16::from(super::led_of(value.start())) + 1,
+            u16::from(super::led_of(value.end())) + 1
         );
-        let place = match target {
-            Target::Lightbar(range) => self.range_row(range, cx),
-            Target::Keys(rect) => self.rect_row(rect, cx),
-        };
-        vec![chooser, place]
-    }
-
-    fn range_row(&self, range: Range, cx: &Context<Self>) -> Div {
-        let last_led = self.leds(cx).saturating_sub(1);
-        panel::row(
-            "LED range",
-            Some("Choose which part of the Light Indicator shows the effect.".into()),
-            h_flex()
-                .gap_3()
-                .child(stepper(
-                    "range-first",
-                    range.first,
-                    0..=range.last.min(last_led),
-                    format!("from LED {}", u16::from(range.first) + 1),
-                    cx.listener(|this, first: &u8, window, cx| {
-                        let first = *first;
-                        this.edit_range(move |range| range.first = first, window, cx);
-                    }),
-                ))
-                .child(stepper(
-                    "range-last",
-                    range.last,
-                    range.first..=last_led,
-                    format!("to LED {}", u16::from(range.last) + 1),
-                    cx.listener(|this, last: &u8, window, cx| {
-                        let last = *last;
-                        this.edit_range(move |range| range.last = last, window, cx);
-                    }),
-                )),
+        Some(panel::field(
+            "LEDs",
+            wide_slider(&range.state, readout, cx),
             cx,
-        )
+        ))
     }
 
-    fn rect_row(&self, rect: KeyRect, cx: &Context<Self>) -> Div {
+    fn rect_rows(&self, rect: KeyRect, cx: &Context<Self>) -> Vec<Div> {
         let matrix = self.matrix(cx);
         let last_row = matrix.rows.saturating_sub(1);
         let last_column = matrix.columns.saturating_sub(1);
@@ -387,58 +330,57 @@ impl LightbarPage {
                 }),
             )
         };
-        panel::row(
-            "Keys",
-            Some(
-                "The rectangle of the key matrix, from its first corner to its last, counting \
-                 from the top left."
-                    .into(),
+        vec![
+            panel::toggle(
+                "First key",
+                None,
+                h_flex()
+                    .gap_1()
+                    .child(corner(
+                        "rect-first-row",
+                        rect.first.row,
+                        0..=rect.last.row,
+                        "Row",
+                        |rect, row| {
+                            rect.first.row = row;
+                        },
+                    ))
+                    .child(corner(
+                        "rect-first-column",
+                        rect.first.column,
+                        0..=rect.last.column,
+                        "Col",
+                        |rect, column| rect.first.column = column,
+                    )),
+                cx,
             ),
-            v_flex()
-                .gap_1()
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(div().w(px(36.0)).text_sm().child("From"))
-                        .child(corner(
-                            "rect-first-row",
-                            rect.first.row,
-                            0..=rect.last.row,
-                            "row",
-                            |rect, row| rect.first.row = row,
-                        ))
-                        .child(corner(
-                            "rect-first-column",
-                            rect.first.column,
-                            0..=rect.last.column,
-                            "column",
-                            |rect, column| rect.first.column = column,
-                        )),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(div().w(px(36.0)).text_sm().child("To"))
-                        .child(corner(
-                            "rect-last-row",
-                            rect.last.row,
-                            rect.first.row..=last_row,
-                            "row",
-                            |rect, row| rect.last.row = row,
-                        ))
-                        .child(corner(
-                            "rect-last-column",
-                            rect.last.column,
-                            rect.first.column..=last_column,
-                            "column",
-                            |rect, column| rect.last.column = column,
-                        )),
-                ),
-            cx,
-        )
+            panel::toggle(
+                "Last key",
+                None,
+                h_flex()
+                    .gap_1()
+                    .child(corner(
+                        "rect-last-row",
+                        rect.last.row,
+                        rect.first.row..=last_row,
+                        "Row",
+                        |rect, row| {
+                            rect.last.row = row;
+                        },
+                    ))
+                    .child(corner(
+                        "rect-last-column",
+                        rect.last.column,
+                        rect.first.column..=last_column,
+                        "Col",
+                        |rect, column| rect.last.column = column,
+                    )),
+                cx,
+            ),
+        ]
     }
 
-    pub(super) fn signal_row(
+    pub(super) fn signal_field(
         &self,
         label: &'static str,
         signal: Signal,
@@ -447,30 +389,40 @@ impl LightbarPage {
     ) -> Div {
         let detail = match signal {
             Signal::Builtin(builtin) => entry::builtin_detail(builtin),
-            Signal::Host(_) => "A value a program on the computer sends by its id.",
+            Signal::Host(_) => "A value a program on the computer sends by id.",
         };
         let host_field = match socket {
             Socket::Meter => Field::MeterHost,
             Socket::Term(spot) => Field::SignalHost(spot),
             Socket::Operand(spot) => Field::OperandHost(spot),
         };
-        panel::row(
+        panel::field(
             label,
-            Some(detail.into()),
-            h_flex()
-                .gap_2()
-                .items_center()
-                .child(self.signal_menu(signal, socket, cx))
-                .when(matches!(signal, Signal::Host(_)), |this| {
-                    this.child(self.number(host_field))
-                }),
+            v_flex()
+                .w_full()
+                .gap_1p5()
+                .child(
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .items_center()
+                        .child(div().flex_1().min_w_0().child(self.signal_menu(
+                            Some(signal),
+                            socket,
+                            cx,
+                        )))
+                        .when(matches!(signal, Signal::Host(_)), |this| {
+                            this.child(self.number(host_field, ""))
+                        }),
+                )
+                .child(panel::note(detail, cx)),
             cx,
         )
     }
 
-    fn signal_menu(
+    pub(super) fn signal_menu(
         &self,
-        current: Signal,
+        current: Option<Signal>,
         socket: Socket,
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
@@ -479,63 +431,96 @@ impl LightbarPage {
             .capabilities(cx)
             .is_some_and(|capabilities| capabilities.host_signals);
         let host = match current {
-            Signal::Host(id) => id,
-            Signal::Builtin(_) => self
+            Some(Signal::Host(id)) => id,
+            _ => self
                 .host_ids
                 .as_ref()
                 .and_then(|ids| ids.first().copied())
                 .unwrap_or_default(),
         };
-        let id = match socket {
-            Socket::Meter => "signal-meter".to_owned(),
-            Socket::Term(spot) => format!("signal-term-{}-{}", spot.group, spot.term),
-            Socket::Operand(spot) => format!("signal-operand-{}-{}", spot.group, spot.term),
+        let (id, label) = match socket {
+            Socket::Meter => ("signal-meter".to_owned(), None),
+            Socket::Term(spot) => (format!("signal-term-{}-{}", spot.group, spot.term), None),
+            Socket::Operand(spot) => (
+                format!("signal-operand-{}-{}", spot.group, spot.term),
+                Some("Value"),
+            ),
         };
-        Button::new(SharedString::from(id))
-            .label(entry::signal_name(current))
-            .small()
-            .outline()
-            .dropdown_caret(true)
-            .dropdown_menu(move |menu, _, _| {
-                let choices = BUILTINS
-                    .iter()
-                    .map(|builtin| Signal::Builtin(*builtin))
-                    .chain(host_signals.then_some(Signal::Host(host)));
-                choices.fold(menu, |menu, signal| {
-                    let page = page.clone();
-                    let label = match signal {
-                        Signal::Builtin(builtin) => entry::builtin_name(builtin).to_owned(),
-                        Signal::Host(_) => "Host signal".to_owned(),
-                    };
-                    menu.item(
-                        PopupMenuItem::new(label)
-                            .checked(same_signal(signal, current))
-                            .on_click(move |_, window, cx| {
-                                page.update(cx, |page, cx| {
-                                    page.set_signal(socket, signal, window, cx);
-                                })
-                                .ok();
-                            }),
-                    )
-                })
+        let shown = current.map_or_else(
+            || label.unwrap_or_default().to_owned(),
+            |signal| match signal {
+                Signal::Builtin(builtin) => entry::builtin_name(builtin).to_owned(),
+                Signal::Host(_) => "Host signal".to_owned(),
+            },
+        );
+        select(id, shown).dropdown_menu(move |menu, _, _| {
+            let choices = label
+                .map(|_| None)
+                .into_iter()
+                .chain(
+                    BUILTINS
+                        .iter()
+                        .map(|builtin| Some(Signal::Builtin(*builtin))),
+                )
+                .chain(host_signals.then_some(Some(Signal::Host(host))));
+            choices.fold(menu, |menu, choice| {
+                let page = page.clone();
+                let name = match choice {
+                    None => "Value".to_owned(),
+                    Some(Signal::Builtin(builtin)) => entry::builtin_name(builtin).to_owned(),
+                    Some(Signal::Host(_)) => "Host signal".to_owned(),
+                };
+                menu.item(
+                    PopupMenuItem::new(name)
+                        .checked(same_choice(choice, current))
+                        .on_click(move |_, window, cx| {
+                            page.update(cx, |page, cx| {
+                                page.set_signal(socket, choice, window, cx);
+                            })
+                            .ok();
+                        }),
+                )
             })
+        })
     }
 
-    pub(super) fn number(&self, field: Field) -> Div {
+    pub(super) fn number(&self, field: Field, unit: &'static str) -> Div {
         div()
             .w(px(INPUT_WIDTH))
             .when_some(self.field(field), |this, state| {
-                this.child(NumberInput::new(state).small())
+                this.child(
+                    NumberInput::new(state)
+                        .stepper(false)
+                        .when(!unit.is_empty(), |input| {
+                            input.suffix(div().text_xs().child(unit))
+                        }),
+                )
             })
     }
 
     fn color_row(&self, label: &'static str, swatch: Swatch, cx: &Context<Self>) -> Div {
-        panel::row(
+        panel::toggle(
             label,
             None,
             div().when_some(self.swatch(swatch), |this, picker| {
-                this.child(ColorPicker::new(picker))
+                this.child(ColorPicker::new(picker).small())
             }),
+            cx,
+        )
+    }
+
+    fn color_pair_row(&self, cx: &Context<Self>) -> Div {
+        panel::toggle(
+            "Colours",
+            None,
+            h_flex()
+                .gap_2()
+                .when_some(self.swatch(Swatch::Main), |this, picker| {
+                    this.child(ColorPicker::new(picker).small())
+                })
+                .when_some(self.swatch(Swatch::Second), |this, picker| {
+                    this.child(ColorPicker::new(picker).small())
+                }),
             cx,
         )
     }
@@ -543,7 +528,7 @@ impl LightbarPage {
     fn optional_color_row(
         &self,
         label: &'static str,
-        description: &'static str,
+        help: Option<&'static str>,
         swatch: Swatch,
         enabled: bool,
         cx: &Context<Self>,
@@ -552,15 +537,15 @@ impl LightbarPage {
             Swatch::Second => "meter-background",
             Swatch::Main | Swatch::Third => "meter-blend",
         };
-        panel::row(
+        panel::toggle(
             label,
-            Some(description.into()),
+            help.map(SharedString::from),
             h_flex()
                 .gap_3()
                 .items_center()
                 .when(enabled, |this| {
                     this.when_some(self.swatch(swatch), |this, picker| {
-                        this.child(ColorPicker::new(picker))
+                        this.child(ColorPicker::new(picker).small())
                     })
                 })
                 .child(Switch::new(id).checked(enabled).on_change(cx.listener(
@@ -575,16 +560,15 @@ impl LightbarPage {
     fn custom_strip(&self, colors: &[Rgb], cx: &Context<Self>) -> Div {
         let theme = cx.theme();
         let leds = self.leds(cx);
-        panel::row(
-            "LEDs",
-            Some("Click an LED to choose its colour.".into()),
-            h_flex().gap_1().children((0..leds).map(|led| {
+        panel::field(
+            "Colours",
+            h_flex().flex_wrap().gap_1().children((0..leds).map(|led| {
                 let color = colors.get(usize::from(led)).copied().unwrap_or_default();
                 div()
                     .id(SharedString::from(format!("custom-led-{led}")))
                     .w(px(LED_CELL))
                     .h(px(LED_CELL))
-                    .rounded(px(4.0))
+                    .rounded(theme.radius)
                     .border_2()
                     .border_color(if led == self.led {
                         theme.primary
@@ -606,13 +590,13 @@ impl LightbarPage {
     fn set_signal(
         &mut self,
         socket: Socket,
-        signal: Signal,
+        signal: Option<Signal>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.edit_chosen(
-            |entry| match socket {
-                Socket::Meter => {
+            |entry| match (socket, signal) {
+                (Socket::Meter, Some(signal)) => {
                     if let Effect::Meter(meter) = &mut entry.effect
                         && meter.signal != signal
                     {
@@ -620,16 +604,21 @@ impl LightbarPage {
                         meter.maximum = maximum_of(signal);
                     }
                 }
-                Socket::Term(spot) => {
+                (Socket::Term(spot), Some(signal)) => {
                     if let Some(term) = entry::term_mut(entry, spot) {
                         entry::set_term_signal(term, signal);
                     }
                 }
-                Socket::Operand(spot) => {
+                (Socket::Operand(spot), _) => {
                     if let Some(Term::Compare(comparison)) = entry::term_mut(entry, spot) {
-                        comparison.operand = Operand::Signal(signal);
+                        comparison.operand = match (signal, comparison.operand) {
+                            (Some(signal), _) => Operand::Signal(signal),
+                            (None, Operand::Constant(value)) => Operand::Constant(value),
+                            (None, Operand::Signal(_)) => Operand::Constant(1.0),
+                        };
                     }
                 }
+                (Socket::Meter | Socket::Term(_), None) => {}
             },
             window,
             cx,
@@ -721,9 +710,10 @@ impl LightbarPage {
             window,
             cx,
         );
+        self.sync_entry_controls(window, cx);
     }
 
-    fn edit_range(
+    pub(super) fn edit_range(
         &mut self,
         change: impl FnOnce(&mut Range),
         window: &mut Window,
@@ -758,26 +748,32 @@ impl LightbarPage {
     }
 }
 
-fn choice_row<T: Copy + PartialEq + 'static>(
+fn choice_toggle<T: Copy + PartialEq + 'static, const N: usize>(
     label: &'static str,
-    choices: [(&'static str, T); 2],
+    id: &'static str,
+    choices: &'static [(T, &'static str); N],
     current: T,
     change: fn(&mut Effect, T),
     cx: &Context<LightbarPage>,
 ) -> Div {
-    panel::row(
+    let selected = choices
+        .iter()
+        .position(|(value, _)| *value == current)
+        .unwrap_or(0);
+    panel::toggle(
         label,
         None,
-        h_flex().gap_1().children(choices.map(|(name, value)| {
-            Button::new(SharedString::from(format!("{label}-{name}")))
-                .label(name)
-                .xsmall()
-                .outline()
-                .selected(current == value)
-                .on_click(cx.listener(move |this, _, window, cx| {
+        segmented(
+            id,
+            choices.iter().map(|(_, name)| *name),
+            selected,
+            cx.listener(move |this, index: &usize, window, cx| {
+                if let Some((value, _)) = choices.get(*index) {
+                    let value = *value;
                     this.edit_chosen(|entry| change(&mut entry.effect, value), window, cx);
-                }))
-        })),
+                }
+            }),
+        ),
         cx,
     )
 }
@@ -815,10 +811,10 @@ const fn rect_of(effect: &mut Effect) -> Option<&mut KeyRect> {
     }
 }
 
-fn same_signal(signal: Signal, other: Signal) -> bool {
-    match (signal, other) {
-        (Signal::Host(_), Signal::Host(_)) => true,
-        (Signal::Builtin(builtin), Signal::Builtin(other)) => builtin == other,
+fn same_choice(choice: Option<Signal>, current: Option<Signal>) -> bool {
+    match (choice, current) {
+        (None, None) | (Some(Signal::Host(_)), Some(Signal::Host(_))) => true,
+        (Some(Signal::Builtin(builtin)), Some(Signal::Builtin(other))) => builtin == other,
         _ => false,
     }
 }

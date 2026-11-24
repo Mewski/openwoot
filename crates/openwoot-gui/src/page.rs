@@ -61,7 +61,7 @@ impl Page {
             Self::Lighting => "Lighting",
             Self::Lightbar => "Light bar",
             Self::Switches => "Switches",
-            Self::Profiles => "Profiles",
+            Self::Profiles => "My profiles",
             Self::Settings => "Keyboard settings",
             Self::Firmware => "Firmware",
             Self::Diagnostics => "Diagnostics",

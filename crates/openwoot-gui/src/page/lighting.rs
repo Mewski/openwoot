@@ -1,25 +1,29 @@
+mod brush;
 mod color;
+mod controls;
 mod effect;
 mod effect_editor;
 mod key_colors;
+mod layers;
 mod lock;
 mod painter;
 mod palette;
-mod stepper;
 
 use std::{mem, time::Duration};
 
 use gpui_kit::{
-    AppContext as _, Context, Div, Entity, IntoElement, ParentElement as _, Render, SharedString,
+    AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
     Styled as _, Subscription, Task, Window,
     component::{
         ActiveTheme as _,
         color_picker::{ColorPickerEvent, ColorPickerState},
-        slider::{Slider, SliderEvent, SliderState},
+        h_flex,
+        slider::{SliderEvent, SliderState},
         v_flex,
     },
     div,
     prelude::FluentBuilder as _,
+    px,
 };
 use openwoot_protocol::{
     configuration::{Capabilities, Validate as _},
@@ -29,12 +33,13 @@ use openwoot_protocol::{
     profile::{Change, LayerChange, LayerRef, Slot},
 };
 
+use self::{brush::Brush, effect::Dial, lock::Lock};
 pub(crate) use self::{
-    color::{BLACK, WHITE, hex, hsla_of, opaque_of, rgb_of},
+    color::{BLACK, WHITE, hsla_of, opaque_of},
+    controls::{add_button, pill, segmented, select, stepper, sunken, tile, wide_slider},
     effect::{level_of, percent_of},
-    stepper::stepper,
 };
-use self::{effect::Dial, lock::Lock, painter::Tool};
+use super::Page;
 use crate::{
     keyboard::Selection,
     panel,
@@ -42,6 +47,7 @@ use crate::{
 };
 
 const SEND_DELAY: Duration = Duration::from_millis(120);
+const COLOURS_WIDTH: f32 = 300.0;
 
 type LayerMaps = [Option<KeyColors>; LAYERS];
 
@@ -52,11 +58,11 @@ pub(crate) struct LightingPage {
     maps: Option<LayerMaps>,
     layer: Layer,
     selection: Selection,
-    tool: Tool,
+    picking: bool,
     effect: Option<usize>,
     problem: Option<SharedString>,
     brightness: Entity<SliderState>,
-    paint: Entity<ColorPickerState>,
+    brush: Brush,
     locks: Vec<(Lock, Entity<ColorPickerState>)>,
     dials: Vec<(Dial, Entity<SliderState>)>,
     first_color: Entity<ColorPickerState>,
@@ -76,7 +82,7 @@ struct Pending {
 impl LightingPage {
     pub(crate) fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let brightness = cx.new(|_| SliderState::new().min(0.0).max(100.0).step(1.0));
-        let paint = cx.new(|cx| ColorPickerState::new(window, cx).default_value(hsla_of(WHITE)));
+        let brush = Brush::new(window, cx);
         let first_color = cx.new(|cx| ColorPickerState::new(window, cx));
         let second_color = cx.new(|cx| ColorPickerState::new(window, cx));
         let locks: Vec<(Lock, Entity<ColorPickerState>)> = Lock::ALL
@@ -93,15 +99,16 @@ impl LightingPage {
                 )
             })
             .collect();
-        let subscriptions = Self::subscriptions(
+        let mut subscriptions = Self::subscriptions(
             &store,
             &brightness,
-            [&paint, &first_color, &second_color],
+            [&first_color, &second_color],
             &locks,
             &dials,
             window,
             cx,
         );
+        subscriptions.extend(brush.subscriptions(window, cx));
         let mut page = Self {
             store,
             profile: None,
@@ -109,11 +116,11 @@ impl LightingPage {
             maps: None,
             layer: Layer::Base,
             selection: Selection::default(),
-            tool: Tool::Select,
+            picking: false,
             effect: None,
             problem: None,
             brightness,
-            paint,
+            brush,
             locks,
             dials,
             first_color,
@@ -129,7 +136,7 @@ impl LightingPage {
     fn subscriptions(
         store: &Entity<Store>,
         brightness: &Entity<SliderState>,
-        [paint, first_color, second_color]: [&Entity<ColorPickerState>; 3],
+        [first_color, second_color]: [&Entity<ColorPickerState>; 2],
         locks: &[(Lock, Entity<ColorPickerState>)],
         dials: &[(Dial, Entity<SliderState>)],
         window: &mut Window,
@@ -146,21 +153,11 @@ impl LightingPage {
             cx.subscribe_in(
                 brightness,
                 window,
-                |this, _, event: &SliderEvent, window, cx| {
-                    if let SliderEvent::Release(value) = event {
+                |this, _, event: &SliderEvent, window, cx| match event {
+                    SliderEvent::Change(_) => cx.notify(),
+                    SliderEvent::Release(value) => {
                         let level = level_of(value.end());
                         this.edit_settings(|settings| settings.brightness = level, window, cx);
-                    }
-                },
-            ),
-            cx.subscribe_in(
-                paint,
-                window,
-                |this, _, event: &ColorPickerEvent, window, cx| {
-                    if let ColorPickerEvent::Change(Some(_)) = event
-                        && this.tool == Tool::Select
-                    {
-                        this.paint_selection(window, cx);
                     }
                 },
             ),
@@ -215,8 +212,9 @@ impl LightingPage {
             subscriptions.push(cx.subscribe_in(
                 slider,
                 window,
-                move |this, _, event: &SliderEvent, window, cx| {
-                    if let SliderEvent::Release(value) = event {
+                move |this, _, event: &SliderEvent, window, cx| match event {
+                    SliderEvent::Change(_) => cx.notify(),
+                    SliderEvent::Release(value) => {
                         let position = value.end();
                         this.edit_effect(|effect| dial.apply(effect, position), window, cx);
                     }
@@ -446,7 +444,7 @@ impl LightingPage {
                 )
             }));
         }
-        self.problem = problem.map(|invalid| format!("Not sent to the keyboard: {invalid}").into());
+        self.problem = problem.map(|invalid| format!("Not sent: {invalid}").into());
         cx.notify();
         if sent.is_empty() {
             return;
@@ -462,53 +460,45 @@ impl LightingPage {
         })
         .detach();
     }
-
-    fn brightness_section(&self, cx: &Context<Self>) -> Div {
-        let level = self.settings.as_ref().map(|settings| settings.brightness);
-        panel::section(
-            "Brightness",
-            Some(
-                "The brightness of the keys in this profile. Fn + brightness keys on the keyboard \
-                 change it too."
-                    .into(),
-            ),
-            cx,
-        )
-        .child(panel::row(
-            SharedString::from(match level {
-                Some(level) => format!("Brightness {} %", percent_of(level)),
-                None => "Brightness".to_owned(),
-            }),
-            None,
-            Slider::new(&self.brightness).disabled(level.is_none()),
-            cx,
-        ))
-    }
 }
 
 impl Render for LightingPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let loading = self.settings.is_none() || self.maps.is_none();
-        panel::page(
-            "Lighting",
-            "Brightness, key colours, effects and lock indicators of the active profile. Changes \
-             show on the keyboard at once; Save keeps them.",
-            cx,
-        )
-        .child(
-            v_flex()
-                .gap_4()
-                .max_w_full()
-                .when_some(self.problem.clone(), |this, problem| {
-                    this.child(div().text_sm().text_color(cx.theme().danger).child(problem))
-                })
-                .when(loading && self.profile.is_some(), |this| {
-                    this.child(panel::note("Reading the lighting of the profile…", cx))
-                })
-                .child(self.brightness_section(cx))
-                .child(self.colors_section(window, cx))
-                .child(self.effects_section(cx))
-                .child(self.locks_section(cx)),
-        )
+        panel::page()
+            .child(panel::stage_with_side(
+                self.layers_column(cx),
+                self.key_map(window, cx),
+            ))
+            .children(self.caption(cx))
+            .child(panel::heading(
+                Page::Lighting.title(),
+                Some("Key colours for each layer, with effects drawn on top.".into()),
+                self.heading_actions(cx),
+                cx,
+            ))
+            .when_some(self.problem.clone(), |this, problem| {
+                this.child(div().text_xs().text_color(cx.theme().danger).child(problem))
+            })
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_4()
+                    .items_start()
+                    .child(
+                        v_flex()
+                            .flex_none()
+                            .w(px(COLOURS_WIDTH))
+                            .gap_4()
+                            .children(self.colors_card(cx))
+                            .children(self.locks_card(cx)),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_4()
+                            .children(self.effects_card(window, cx)),
+                    ),
+            )
     }
 }

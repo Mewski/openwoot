@@ -1,5 +1,6 @@
 use std::mem;
 
+use gpui_kit::assets::IconName as Catalog;
 use openwoot_protocol::lighting::{
     AnalogLevel, AnalogRgbFill, Breathing, Color, Effect, HueCycle, HueRange, KeyRipple, KeyTest,
     LevelMeter, PolarGradient, RainbowWave, ReactiveColoring, ReactiveFade, Scanner,
@@ -74,15 +75,8 @@ pub(super) const HUE_RANGES: [(HueRange, &str); 6] = [
     (HueRange::From110To184, "Ocean"),
     (HueRange::From2To39, "Inferno"),
     (HueRange::From64To114, "Spring"),
-    (HueRange::From214To254, "Pink!"),
+    (HueRange::From214To254, "Pink"),
     (HueRange::From113To204, "Blue Spectrum"),
-];
-
-pub(super) const DIRECTIONS: [(ScannerDirection, &str); 4] = [
-    (ScannerDirection::Left, "Left"),
-    (ScannerDirection::Right, "Right"),
-    (ScannerDirection::Up, "Up"),
-    (ScannerDirection::Down, "Down"),
 ];
 
 const MS_PER_PERIOD: f32 = 250.0;
@@ -137,47 +131,41 @@ pub(super) const fn name(effect: &Effect) -> &'static str {
 pub(super) const fn description(effect: &Effect) -> &'static str {
     match effect {
         Effect::RainbowWave(_) => "A band of colours moves across the keys.",
-        Effect::Scanner(_) => {
-            "A window sweeps back and forth over the keys; the keys outside it are dimmed."
-        }
-        Effect::Breathing(_) => "All keys fade down and up again.",
+        Effect::Scanner(_) => "A window sweeps across the keys; keys outside it dim.",
+        Effect::Breathing(_) => "All keys fade down and up.",
         Effect::HueCycle(_) => "All keys change colour together.",
-        Effect::KeyRipple(_) => "Each key press sends ripples across the keys.",
+        Effect::KeyRipple(_) => "Key presses send out ripples.",
         Effect::ReactiveFade(_) => "Pressed keys light up and fade out.",
-        Effect::LevelMeter(_) => {
-            "The number row shows how deep the deepest key is pressed, as a bar."
-        }
-        Effect::AnalogSpotlight(_) => {
-            "A square of keys around a pressed key lights up; it grows with the key's depth."
-        }
-        Effect::AnalogGlow(_) => "Pressed keys and their neighbours glow with the key's depth.",
-        Effect::AnalogRgbFill(_) => {
-            "The three rightmost keys of the bottom row mix red, green and blue by their depth \
-             into the colour of every key."
-        }
-        Effect::KeyTest(_) => {
-            "Keys show green while they send a press and red while they are below the actuation \
-             point without sending, so rapid trigger can be watched."
-        }
+        Effect::LevelMeter(_) => "The number row shows how deep the deepest key is.",
+        Effect::AnalogSpotlight(_) => "Keys around a pressed key light up with its depth.",
+        Effect::AnalogGlow(_) => "Pressed keys and their neighbours glow with the depth.",
+        Effect::AnalogRgbFill(_) => "The three bottom-right keys mix red, green and blue.",
+        Effect::KeyTest(_) => "Green while a key sends a press, red while held below actuation.",
         Effect::SimplexNoise(_) => "Two colours drift across the keys like clouds.",
-        Effect::PolarGradient(_) => "Two colours swirl around the centre of the keyboard.",
+        Effect::PolarGradient(_) => "Two colours swirl around the centre.",
+    }
+}
+
+pub(super) const fn icon(effect: &Effect) -> Catalog {
+    match effect {
+        Effect::RainbowWave(_) => Catalog::Rainbow,
+        Effect::Scanner(_) => Catalog::ScanLine,
+        Effect::Breathing(_) => Catalog::SunDim,
+        Effect::HueCycle(_) => Catalog::RefreshCw,
+        Effect::KeyRipple(_) => Catalog::Radio,
+        Effect::ReactiveFade(_) => Catalog::Sparkles,
+        Effect::LevelMeter(_) => Catalog::Gauge,
+        Effect::AnalogSpotlight(_) => Catalog::Droplet,
+        Effect::AnalogGlow(_) => Catalog::Crosshair,
+        Effect::AnalogRgbFill(_) => Catalog::Blend,
+        Effect::KeyTest(_) => Catalog::Zap,
+        Effect::SimplexNoise(_) => Catalog::Activity,
+        Effect::PolarGradient(_) => Catalog::LoaderCircle,
     }
 }
 
 pub(super) fn same_kind(effect: &Effect, other: &Effect) -> bool {
     mem::discriminant(effect) == mem::discriminant(other)
-}
-
-pub(super) fn summary(effect: &Effect) -> String {
-    let hues = hue_range(effect).map(hue_name);
-    let reading = Dial::of(effect)
-        .first()
-        .and_then(|dial| dial.reading(effect));
-    match (hues, reading) {
-        (Some(hues), Some(reading)) => format!("{hues} · {reading}"),
-        (Some(text), None) | (None, Some(text)) => text,
-        (None, None) => String::new(),
-    }
 }
 
 pub(super) const fn hue_range(effect: &Effect) -> Option<HueRange> {
@@ -365,35 +353,14 @@ impl Dial {
     pub(super) const fn label(self, effect: &Effect) -> &'static str {
         match (self, effect) {
             (Self::Cycle | Self::Steps | Self::Breath | Self::Drift, _) => "Speed",
-            (Self::Spread, _) => "Spread speed",
+            (Self::Spread, _) => "Spread",
             (Self::Level, Effect::Breathing(_)) => "Minimum brightness",
+            (Self::Level, Effect::Scanner(_)) => "Outside brightness",
             (Self::Level, _) => "Base brightness",
-            (Self::Fade | Self::Decay, _) => "Fade speed",
+            (Self::Fade | Self::Decay, _) => "Fade",
             (Self::Scale, _) => "Scale",
-            (Self::Spin, _) => "Spin speed",
-            (Self::Twist, _) => "Spiral",
-        }
-    }
-
-    pub(super) const fn detail(self, effect: &Effect) -> Option<&'static str> {
-        match (self, effect) {
-            (Self::Level, Effect::Scanner(_)) => Some("Brightness of the keys outside the window."),
-            (Self::Level, Effect::Breathing(_)) => Some("Brightness at the bottom of each breath."),
-            (Self::Level, Effect::KeyRipple(_)) => {
-                Some("Brightness of the keys a ripple has not reached.")
-            }
-            (Self::Level, Effect::ReactiveFade(_)) => {
-                Some("Brightness of the keys that are not lit by a press.")
-            }
-            (Self::Level, Effect::LevelMeter(_)) => {
-                Some("Brightness of the number row keys the bar does not reach.")
-            }
-            (Self::Level, Effect::AnalogSpotlight(_) | Effect::AnalogGlow(_)) => {
-                Some("Brightness of the keys away from pressed keys.")
-            }
-            (Self::Level, Effect::KeyTest(_)) => Some("Brightness of the keys at rest."),
-            (Self::Spin | Self::Twist, _) => Some("Negative values turn the other way."),
-            _ => None,
+            (Self::Spin, _) => "Spin",
+            (Self::Twist, _) => "Twist",
         }
     }
 
@@ -403,29 +370,18 @@ impl Dial {
                 Self::Cycle,
                 Effect::RainbowWave(RainbowWave { period, .. })
                 | Effect::HueCycle(HueCycle { period, .. }),
-            ) => {
-                let seconds = f32::from(*period) * MS_PER_PERIOD / MS_PER_SECOND;
-                format!("{seconds:.2} s per cycle")
-            }
-            (Self::Steps, Effect::Scanner(scanner)) => {
-                format!("{} steps per second", scanner.steps_per_second)
-            }
-            (Self::Spread, Effect::KeyRipple(ripple)) => {
-                format!("{} keys per second", ripple.steps_per_second)
-            }
+            ) => seconds(f32::from(*period) * MS_PER_PERIOD),
+            (Self::Steps, Effect::Scanner(scanner)) => format!("{}/s", scanner.steps_per_second),
+            (Self::Spread, Effect::KeyRipple(ripple)) => format!("{}/s", ripple.steps_per_second),
             (Self::Level, _) => format!("{} %", percent_of(level(effect)?)),
             (Self::Breath, Effect::Breathing(breathing)) => {
-                let seconds = f32::from(breathing.step_ms) * STEPS_PER_BREATH / MS_PER_SECOND;
-                format!("{seconds:.1} s per breath")
+                seconds(f32::from(breathing.step_ms) * STEPS_PER_BREATH)
             }
             (Self::Fade, Effect::ReactiveFade(fade)) => {
-                let seconds = f32::from(fade.step_ms) * LEVELS_PER_FADE / MS_PER_SECOND;
-                format!("fades in about {seconds:.2} s")
+                seconds(f32::from(fade.step_ms) * LEVELS_PER_FADE)
             }
             (Self::Decay, Effect::KeyRipple(ripple)) => {
-                let seconds =
-                    f32::from(ripple.decay_step_ms) * LEVELS_PER_RIPPLE_FADE / MS_PER_SECOND;
-                format!("fades in about {seconds:.2} s")
+                seconds(f32::from(ripple.decay_step_ms) * LEVELS_PER_RIPPLE_FADE)
             }
             (Self::Drift, Effect::SimplexNoise(noise)) => noise.speed.to_string(),
             (Self::Scale, Effect::SimplexNoise(noise)) => noise.scale.to_string(),
@@ -462,6 +418,17 @@ const fn set_level(effect: &mut Effect, value: u8) {
         | Effect::AnalogGlow(AnalogLevel { base_level, .. })
         | Effect::KeyTest(KeyTest { base_level }) => *base_level = value,
         _ => {}
+    }
+}
+
+fn seconds(milliseconds: f32) -> String {
+    let seconds = milliseconds / MS_PER_SECOND;
+    if seconds < 1.0 {
+        format!("{seconds:.2} s")
+    } else if seconds < 10.0 {
+        format!("{seconds:.1} s")
+    } else {
+        format!("{seconds:.0} s")
     }
 }
 
@@ -581,10 +548,7 @@ mod tests {
             wave,
             Effect::RainbowWave(RainbowWave { period: 255, .. })
         ));
-        assert_eq!(
-            Dial::Cycle.reading(&wave).as_deref(),
-            Some("63.75 s per cycle")
-        );
+        assert_eq!(Dial::Cycle.reading(&wave).as_deref(), Some("64 s"));
         let mut breath = CATALOGUE[2];
         Dial::Breath.apply(&mut breath, 40.0);
         assert!(matches!(
@@ -627,9 +591,12 @@ mod tests {
     }
 
     #[test]
-    fn the_summary_names_the_colours_and_the_speed() {
-        assert_eq!(summary(&CATALOGUE[0]), "Rainbow · 4.00 s per cycle");
-        assert_eq!(summary(&CATALOGUE[1]), "15 steps per second");
-        assert_eq!(summary(&CATALOGUE[9]), "");
+    fn readings_are_compact() {
+        assert_eq!(Dial::Cycle.reading(&CATALOGUE[0]).as_deref(), Some("4.0 s"));
+        assert_eq!(Dial::Steps.reading(&CATALOGUE[1]).as_deref(), Some("15/s"));
+        assert_eq!(
+            Dial::Decay.reading(&CATALOGUE[4]).as_deref(),
+            Some("0.45 s")
+        );
     }
 }

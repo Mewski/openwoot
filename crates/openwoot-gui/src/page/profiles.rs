@@ -9,23 +9,23 @@ use std::{
 };
 
 use gpui_kit::{
-    AppContext as _, AsyncApp, Context, Div, Entity, FontWeight, Hsla, IntoElement,
-    ParentElement as _, PathPromptOptions, Render, Rgba, SharedString, Styled as _, Subscription,
-    WeakEntity, Window,
+    AnyElement, AppContext as _, AsyncApp, Context, Div, Entity, FontWeight, Hsla,
+    InteractiveElement as _, IntoElement, ParentElement as _, PathPromptOptions, Render, Rgba,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity,
+    Window,
     assets::IconName as Catalog,
     component::{
-        ActiveTheme as _, Disableable as _, Icon, Sizable as _, WindowExt as _,
+        ActiveTheme as _, Disableable as _, IconName, Sizable as _, WindowExt as _,
         button::{Button, ButtonVariant, ButtonVariants as _},
         color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
         h_flex,
         input::{Input, InputEvent, InputState},
+        menu::{DropdownMenu as _, PopupMenuItem},
         progress::Progress,
         tag::Tag,
         v_flex,
     },
-    div,
-    prelude::FluentBuilder as _,
-    px,
+    div, px,
 };
 use openwoot_protocol::{
     endpoints::{
@@ -43,6 +43,7 @@ use self::{
     parts::{Parts, apply, fetch},
     preset::{Movement, Preset},
 };
+use super::Page;
 use crate::{
     panel,
     store::{Keyboard, Scope, Store, StoreEvent},
@@ -50,6 +51,10 @@ use crate::{
 
 type Name = heapless::String<NAME_LEN>;
 type Outcome = Result<SharedString, SharedString>;
+
+const ROW_HEIGHT: f32 = 64.0;
+const BADGE_SIZE: f32 = 40.0;
+const NAME_FIELD_WIDTH: f32 = 320.0;
 
 pub(crate) struct ProfilesPage {
     store: Entity<Store>,
@@ -230,15 +235,12 @@ impl ProfilesPage {
         window.open_alert_dialog(cx, move |alert, _, _| {
             let store = store.clone();
             let page = page.clone();
-            let handover_note = handover.as_ref().map_or_else(String::new, |next| {
-                format!(" “{next}” becomes the active profile.")
-            });
-            let description = format!(
-                "Are you sure you want to remove “{name}”? Its keys, lighting and gamepad settings \
-                 are lost. This action cannot be undone.{handover_note}"
+            let description = handover.as_ref().map_or_else(
+                || "This cannot be undone.".to_owned(),
+                |next| format!("This cannot be undone. “{next}” becomes active."),
             );
             alert
-                .title("Delete profile")
+                .title(format!("Delete “{name}”?"))
                 .description(description)
                 .confirm()
                 .ok_text("Delete")
@@ -295,7 +297,7 @@ impl ProfilesPage {
 
     fn create(&mut self, preset: Preset, cx: &mut Context<Self>) {
         if !self.begin(
-            format!("Creating a {}", preset.title()),
+            format!("Creating “{}”", preset.name()),
             preset_steps(preset),
             cx,
         ) {
@@ -465,6 +467,44 @@ fn progress(this: &WeakEntity<ProfilesPage>) -> impl FnMut(&mut AsyncApp) + '_ {
 }
 
 impl ProfilesPage {
+    fn heading(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
+        let busy = self.busy();
+        let full = keyboard.profiles.len() >= usize::from(keyboard.capabilities.profiles);
+        let page = cx.entity().downgrade();
+        let new_profile = Button::new("new-profile")
+            .outline()
+            .small()
+            .icon(Catalog::Plus)
+            .label("New profile")
+            .dropdown_caret(true)
+            .disabled(busy || full)
+            .dropdown_menu(move |menu, _, _| {
+                Preset::ALL.into_iter().fold(menu, |menu, preset| {
+                    let page = page.clone();
+                    menu.item(PopupMenuItem::new(preset.name()).on_click(move |_, _, cx| {
+                        page.update(cx, |page, cx| page.create(preset, cx)).ok();
+                    }))
+                })
+            });
+        panel::heading(
+            Page::Profiles.title(),
+            None,
+            h_flex()
+                .gap_2()
+                .child(
+                    Button::new("import-profile")
+                        .outline()
+                        .small()
+                        .icon(Catalog::Download)
+                        .label("Import profile")
+                        .disabled(busy)
+                        .on_click(cx.listener(|_, _, _, cx| Self::choose_import(cx))),
+                )
+                .child(div().child(new_profile)),
+            cx,
+        )
+    }
+
     fn job_section(job: &Job, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
         let percent = if job.total == 0 {
@@ -484,440 +524,325 @@ impl ProfilesPage {
         });
         panel::section(job.title.clone(), None, cx)
             .child(Progress::new("profile-job").value(percent))
-            .child(panel::note(
-                format!("{} of {} steps", job.done, job.total),
-                cx,
-            ))
             .children(outcome)
-            .when(job.outcome.is_some(), |this| {
-                this.child(
-                    h_flex().justify_end().child(
-                        Button::new("dismiss-job")
-                            .ghost()
-                            .small()
-                            .label("Dismiss")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.job = None;
-                                cx.notify();
-                            })),
-                    ),
+            .children(job.outcome.is_some().then(|| {
+                h_flex().justify_end().child(
+                    Button::new("dismiss-job")
+                        .ghost()
+                        .small()
+                        .label("Dismiss")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.job = None;
+                            cx.notify();
+                        })),
                 )
-            })
+            }))
     }
 
-    fn profiles_section(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
+    fn onboard_section(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
+        let edited = self.edited(cx).map(|(slot, _)| slot);
         let slots = usize::from(keyboard.capabilities.profiles);
         let count = keyboard.profiles.len();
-        let busy = self.busy();
-        let edited = self.edited(cx).map(|(slot, _)| slot);
-        let cards = (0..slots).map(|index| {
-            let Some((slot, info)) = u8::try_from(index)
-                .ok()
-                .map(Slot::new)
-                .zip(keyboard.profiles.get(index))
-            else {
-                return empty_card(index, cx);
-            };
-            Card {
-                index,
-                slot,
-                info,
-                count,
-                slots,
-                active: keyboard.active == slot,
-                edited: edited == Some(slot),
-                busy,
-            }
-            .render(cx)
-        });
+        let cells: Vec<AnyElement> = (0..slots)
+            .map(|index| {
+                let profile = u8::try_from(index)
+                    .ok()
+                    .map(Slot::new)
+                    .zip(keyboard.profiles.get(index));
+                match profile {
+                    Some((slot, info)) => ProfileRow {
+                        index,
+                        slot,
+                        info,
+                        count,
+                        slots,
+                        active: keyboard.active == slot,
+                        selected: edited == Some(slot),
+                        busy: self.busy(),
+                    }
+                    .render(cx)
+                    .into_any_element(),
+                    None => empty_slot(cx).into_any_element(),
+                }
+            })
+            .collect();
+        let mut rows = v_flex().gap_3();
+        let mut cells = cells.into_iter();
+        while let Some(first) = cells.next() {
+            let second = cells.next();
+            rows = rows.child(
+                h_flex()
+                    .gap_3()
+                    .child(div().flex_1().min_w_0().child(first))
+                    .child(div().flex_1().min_w_0().children(second)),
+            );
+        }
         panel::section(
-            "Onboard profiles",
-            Some(
-                format!(
-                    "Stored on your keyboard and available on any computer; {count} of {slots} \
-                     slots in use. Switch profiles here, in the top bar or with the keyboard's \
-                     profile keys; switching saves the profile you leave."
-                )
-                .into(),
-            ),
+            format!("Onboard profiles · {count}/{slots}"),
+            Some("Stored on the keyboard and available on any computer.".into()),
             cx,
         )
-        .child(h_flex().flex_wrap().gap_3().items_start().children(cards))
-        .child(panel::note(
-            "Only the last profile can be deleted, and profile 1 never: the keyboard keeps its \
-             profiles in consecutive slots and always holds profile 1.",
-            cx,
-        ))
+        .child(rows)
     }
 
     fn editor_section(&self, cx: &Context<Self>) -> Div {
-        let Some((slot, info)) = self.edited(cx) else {
+        let Some((slot, _)) = self.edited(cx) else {
             return div();
         };
-        let theme = cx.theme();
-        panel::section(
-            format!("Edit profile {} · {}", u16::from(slot.get()) + 1, info.name),
-            Some("Click Edit on a profile card to edit another profile.".into()),
-            cx,
-        )
-        .child(panel::row(
-            "Profile name",
-            Some(format!("Up to {NAME_LEN} bytes; press Enter to apply.").into()),
-            div()
-                .w(px(260.0))
-                .child(Input::new(&self.name).disabled(self.busy())),
-            cx,
-        ))
-        .children(
-            self.name_problem
-                .clone()
-                .map(|problem| div().text_sm().text_color(theme.danger).child(problem)),
-        )
-        .child(panel::row(
-            "Change colour",
-            Some(
-                "The colour of the profile in openwoot and on the keyboard's profile indicators."
-                    .into(),
-            ),
-            ColorPicker::new(&self.color),
-            cx,
-        ))
-    }
-
-    fn create_section(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
-        let full = keyboard.profiles.len() >= usize::from(keyboard.capabilities.profiles);
         let busy = self.busy();
-        let theme = cx.theme();
         panel::section(
-            "Create profile",
-            Some("Select the type of profile you would like to create.".into()),
-            cx,
-        )
-        .children(full.then(|| panel::note("The keyboard has no free onboard profile slots.", cx)))
-        .child(h_flex().flex_wrap().gap_3().items_start().children(
-            Preset::ALL.into_iter().enumerate().map(|(index, preset)| {
-                v_flex()
-                    .w(px(240.0))
-                    .gap_2()
-                    .p_3()
-                    .rounded(theme.radius_lg)
-                    .border_1()
-                    .border_color(theme.border)
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(div().size_3().rounded_full().bg(hsla_of(preset.color())))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(preset.title()),
-                            ),
-                    )
-                    .child(panel::note(preset.description(), cx))
-                    .child(
-                        Button::new(("create-profile", index))
-                            .outline()
-                            .small()
-                            .icon(Icon::new(Catalog::Plus))
-                            .label("Create profile")
-                            .disabled(full || busy)
-                            .on_click(cx.listener(move |this, _, _, cx| this.create(preset, cx))),
-                    )
-            }),
-        ))
-    }
-
-    fn share_section(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
-        let busy = self.busy();
-        let review = self.import.as_ref().map(|import| match import {
-            Err(problem) => div()
-                .text_sm()
-                .text_color(cx.theme().danger)
-                .child(problem.clone()),
-            Ok(import) => Self::import_review(import, keyboard, busy, cx),
-        });
-        panel::section(
-            "Share",
-            Some(
-                "Export a profile to a file to keep or share it, and import profiles from files. \
-                 Use Export on a profile card to save it."
-                    .into(),
-            ),
+            format!("Edit profile {}", u16::from(slot.get()) + 1),
+            None,
             cx,
         )
         .child(
-            h_flex().child(
-                Button::new("import-profile")
-                    .outline()
-                    .icon(Icon::new(Catalog::FileUp))
-                    .label("Import profile…")
-                    .disabled(busy)
-                    .on_click(cx.listener(|_, _, _, cx| Self::choose_import(cx))),
-            ),
+            h_flex()
+                .items_start()
+                .gap_6()
+                .child(
+                    div().w(px(NAME_FIELD_WIDTH)).child(panel::field(
+                        "Profile name",
+                        v_flex()
+                            .gap_1()
+                            .child(Input::new(&self.name).disabled(busy))
+                            .children(self.name_problem.clone().map(|problem| {
+                                div().text_xs().text_color(cx.theme().danger).child(problem)
+                            })),
+                        cx,
+                    )),
+                )
+                .child(panel::field("Colour", ColorPicker::new(&self.color), cx)),
         )
-        .children(review)
     }
 
-    fn import_review(import: &Import, keyboard: &Keyboard, busy: bool, cx: &Context<Self>) -> Div {
-        let theme = cx.theme();
+    fn import_section(import: &Import, keyboard: &Keyboard, busy: bool, cx: &Context<Self>) -> Div {
         let full = keyboard.profiles.len() >= usize::from(keyboard.capabilities.profiles);
         let active = keyboard.active;
-        v_flex()
-            .gap_2()
-            .p_3()
-            .rounded(theme.radius_lg)
-            .border_1()
-            .border_color(theme.border)
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .size_3()
-                            .rounded_full()
-                            .bg(hsla_of(import.file.info.color)),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(import.file.info.name.as_str().to_owned()),
-                    ),
-            )
-            .child(panel::note(
-                format!(
-                    "From `{}`, saved for {}.",
-                    import.path.display(),
-                    import.file.keyboard
-                ),
-                cx,
-            ))
-            .children(import.warnings.iter().map(|warning| {
-                div()
-                    .text_sm()
-                    .text_color(theme.warning)
-                    .child(warning.clone())
-            }))
-            .child(panel::note(
-                "Importing into the active profile replaces it until you save; Discard in the top \
-                 bar returns to the stored profile.",
-                cx,
-            ))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("import-new")
-                            .primary()
-                            .small()
-                            .label("Add as new profile")
-                            .disabled(full || busy)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.import_into(Target::NewProfile, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("import-active")
-                            .outline()
-                            .small()
-                            .label(format!("Replace “{}”", keyboard.profile_name(active)))
-                            .disabled(busy)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.import_into(Target::Active(active), cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("import-cancel")
-                            .ghost()
-                            .small()
-                            .label("Cancel")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.import = None;
-                                cx.notify();
-                            })),
-                    ),
-            )
+        let mut description = format!(
+            "{}, made for {}.",
+            file_label(&import.path),
+            import.file.keyboard
+        );
+        for warning in &import.warnings {
+            description.push(' ');
+            description.push_str(warning);
+        }
+        panel::section(
+            format!("Import “{}”?", import.file.info.name),
+            Some(description.into()),
+            cx,
+        )
+        .child(
+            h_flex()
+                .justify_end()
+                .gap_2()
+                .child(
+                    Button::new("import-cancel")
+                        .ghost()
+                        .small()
+                        .label("Cancel")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.import = None;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("import-active")
+                        .outline()
+                        .small()
+                        .label(format!("Replace “{}”", keyboard.profile_name(active)))
+                        .tooltip("Kept until you save")
+                        .disabled(busy)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.import_into(Target::Active(active), cx);
+                        })),
+                )
+                .children((!full).then(|| {
+                    Button::new("import-new")
+                        .primary()
+                        .small()
+                        .label("Add as new")
+                        .disabled(busy)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.import_into(Target::NewProfile, cx);
+                        }))
+                })),
+        )
     }
 }
 
-struct Card<'profile> {
+struct ProfileRow<'profile> {
     index: usize,
     slot: Slot,
     info: &'profile profile::Info,
     count: usize,
     slots: usize,
     active: bool,
-    edited: bool,
+    selected: bool,
     busy: bool,
 }
 
-impl Card<'_> {
-    fn render(&self, cx: &Context<ProfilesPage>) -> Div {
-        let theme = cx.theme();
-        let number = self.index + 1;
-        v_flex()
-            .w(px(240.0))
-            .gap_2()
-            .p_3()
-            .rounded(theme.radius_lg)
-            .border_1()
-            .border_color(if self.active {
-                theme.primary
-            } else {
-                theme.border
-            })
-            .bg(theme.background)
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .flex_none()
-                            .size_4()
-                            .rounded_full()
-                            .bg(hsla_of(self.info.color)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .overflow_hidden()
-                            .child(self.info.name.as_str().to_owned()),
-                    )
-                    .when(self.active, |this| {
-                        this.child(Tag::success().small().child("Active"))
-                    }),
-            )
-            .child(panel::note(
-                if self.edited {
-                    format!("Profile {number} · editing")
-                } else {
-                    format!("Profile {number}")
-                },
-                cx,
-            ))
-            .child(self.actions(cx))
-    }
+type RowAction = fn(&mut ProfilesPage, Slot, &mut Window, &mut Context<ProfilesPage>);
 
-    fn actions(&self, cx: &Context<ProfilesPage>) -> Div {
-        let Self {
-            index, slot, busy, ..
-        } = *self;
-        let deletable = index > 0 && index + 1 == self.count;
-        let can_duplicate = self.count < self.slots;
-        let delete_hint = if index == 0 {
-            "Profile 1 cannot be deleted"
-        } else if deletable {
-            "Delete this profile"
+impl ProfileRow<'_> {
+    fn render(&self, cx: &Context<ProfilesPage>) -> Stateful<Div> {
+        let theme = cx.theme();
+        let slot = self.slot;
+        let border = if self.active {
+            theme.primary
+        } else if self.selected {
+            theme.border
         } else {
-            "Only the last profile can be deleted"
+            theme.secondary
         };
         h_flex()
-            .gap_1()
-            .flex_wrap()
+            .id(("profile-row", self.index))
+            .relative()
+            .w_full()
+            .h(px(ROW_HEIGHT))
+            .pl_5()
+            .pr_2()
+            .gap_3()
+            .rounded(theme.radius_lg)
+            .bg(theme.secondary)
+            .border_1()
+            .border_color(border)
+            .cursor_pointer()
+            .on_click(cx.listener(move |this, _, window, cx| this.edit(slot, window, cx)))
             .child(
-                Button::new(("activate-profile", index))
-                    .primary()
-                    .small()
-                    .label("Activate")
-                    .disabled(self.active || busy)
-                    .on_click(cx.listener(move |this, _, _, cx| this.activate(slot, cx))),
+                div()
+                    .absolute()
+                    .top_1()
+                    .left_1()
+                    .px_1()
+                    .rounded_sm()
+                    .bg(theme.group_box)
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child((self.index + 1).to_string()),
             )
             .child(
-                Button::new(("edit-profile", index))
-                    .ghost()
-                    .small()
-                    .icon(Icon::new(Catalog::Pencil))
-                    .tooltip("Edit Profile")
-                    .disabled(self.edited)
-                    .on_click(cx.listener(move |this, _, window, cx| this.edit(slot, window, cx))),
+                div()
+                    .flex_none()
+                    .size(px(BADGE_SIZE))
+                    .rounded_full()
+                    .border_2()
+                    .border_color(hsla_of(self.info.color))
+                    .p_1()
+                    .child(
+                        div()
+                            .size_full()
+                            .rounded_full()
+                            .bg(hsla_of(self.info.color)),
+                    ),
             )
             .child(
-                Button::new(("duplicate-profile", index))
-                    .ghost()
-                    .small()
-                    .icon(Icon::new(Catalog::Layers2))
-                    .tooltip(if can_duplicate {
-                        "Duplicate"
-                    } else {
-                        "Duplicate needs a free profile slot"
-                    })
-                    .disabled(!can_duplicate || busy)
-                    .on_click(cx.listener(move |this, _, _, cx| this.duplicate(slot, cx))),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_base()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(self.info.name.as_str().to_owned()),
             )
-            .child(
-                Button::new(("export-profile", index))
-                    .ghost()
-                    .small()
-                    .icon(Icon::new(Catalog::FileDown))
-                    .tooltip("Export to a file")
-                    .disabled(busy)
-                    .on_click(cx.listener(move |this, _, _, cx| this.export(slot, cx))),
-            )
-            .child(
-                Button::new(("delete-profile", index))
-                    .ghost()
-                    .small()
-                    .icon(Icon::new(Catalog::Trash))
-                    .tooltip(delete_hint)
-                    .disabled(!deletable || busy)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.confirm_delete(slot, window, cx);
-                    })),
-            )
+            .children(self.active.then(|| Tag::primary().small().child("Active")))
+            .child(self.menu(cx))
+    }
+
+    fn menu(&self, cx: &Context<ProfilesPage>) -> Div {
+        let page = cx.entity().downgrade();
+        let slot = self.slot;
+        let active = self.active;
+        let deletable = self.index > 0 && self.index + 1 == self.count;
+        let full = self.count >= self.slots;
+        div().child(
+            Button::new(("profile-menu", self.index))
+                .ghost()
+                .small()
+                .icon(IconName::EllipsisVertical)
+                .disabled(self.busy)
+                .dropdown_menu(move |menu, _, _| {
+                    let item = |label: &'static str, enabled: bool, run: RowAction| {
+                        menu_item(page.clone(), slot, label, enabled, run)
+                    };
+                    menu.item(item("Activate", !active, |page, slot, _, cx| {
+                        page.activate(slot, cx);
+                    }))
+                    .item(item("Duplicate", !full, |page, slot, _, cx| {
+                        page.duplicate(slot, cx);
+                    }))
+                    .item(item("Export…", true, |page, slot, _, cx| {
+                        page.export(slot, cx);
+                    }))
+                    .separator()
+                    .item(item(
+                        "Delete…",
+                        deletable,
+                        |page, slot, window, cx| {
+                            page.confirm_delete(slot, window, cx);
+                        },
+                    ))
+                }),
+        )
     }
 }
 
-fn empty_card(index: usize, cx: &Context<ProfilesPage>) -> Div {
+fn menu_item(
+    page: WeakEntity<ProfilesPage>,
+    slot: Slot,
+    label: &'static str,
+    enabled: bool,
+    run: RowAction,
+) -> PopupMenuItem {
+    PopupMenuItem::new(label)
+        .disabled(!enabled)
+        .on_click(move |_, window, cx| {
+            page.update(cx, |page, cx| run(page, slot, window, cx)).ok();
+        })
+}
+
+fn empty_slot(cx: &Context<ProfilesPage>) -> Div {
     let theme = cx.theme();
-    v_flex()
-        .w(px(240.0))
-        .gap_1()
-        .p_3()
+    h_flex()
+        .w_full()
+        .h(px(ROW_HEIGHT))
+        .justify_center()
         .rounded(theme.radius_lg)
         .border_1()
         .border_dashed()
         .border_color(theme.border)
-        .child(
-            div()
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .child(format!("Profile {} · empty", index + 1)),
-        )
-        .child(panel::note(
-            "Create a profile below, duplicate one or import one.",
-            cx,
-        ))
+        .text_sm()
+        .text_color(theme.muted_foreground)
+        .child("Empty slot")
+}
+
+fn file_label(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
 }
 
 impl Render for ProfilesPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let page = panel::page(
-            "My Profiles",
-            "Onboard profiles: create them from presets, duplicate, rename, colour, activate, \
-             delete, export and import them.",
-            cx,
-        );
+        let page = panel::page();
         let Some(keyboard) = self.store.read(cx).keyboard().cloned() else {
-            return page.child(panel::note(
-                "Connect a keyboard to manage its profiles.",
-                cx,
-            ));
+            return page.child(panel::note("No keyboard", cx));
         };
+        let busy = self.busy();
         let job = self.job.as_ref().map(|job| Self::job_section(job, cx));
-        page.child(
-            v_flex()
-                .gap_4()
-                .max_w_full()
-                .children(job)
-                .child(self.profiles_section(&keyboard, cx))
-                .child(self.editor_section(cx))
-                .child(self.create_section(&keyboard, cx))
-                .child(self.share_section(&keyboard, cx)),
-        )
+        let import = self.import.as_ref().map(|import| match import {
+            Err(problem) => div()
+                .text_sm()
+                .text_color(cx.theme().danger)
+                .child(problem.clone()),
+            Ok(import) => Self::import_section(import, &keyboard, busy, cx),
+        });
+        page.child(self.heading(&keyboard, cx))
+            .children(job)
+            .children(import)
+            .child(self.onboard_section(&keyboard, cx))
+            .child(self.editor_section(cx))
     }
 }
 
@@ -984,12 +909,7 @@ async fn create_from_preset(
             u16::from(slot.get()) + 1
         )
     })?;
-    Ok(format!(
-        "Created “{}” as profile {}. You can start the configuration now.",
-        preset.name(),
-        u16::from(slot.get()) + 1
-    )
-    .into())
+    Ok(format!("Created profile {}", u16::from(slot.get()) + 1).into())
 }
 
 async fn tune_preset(
@@ -1093,7 +1013,7 @@ async fn duplicate_profile(
     };
     set_info(store, slot, copy, cx).await?;
     step(cx);
-    Ok(format!("The profile has been duplicated into profile {number}.").into())
+    Ok(format!("Duplicated into profile {number}").into())
 }
 
 async fn export_profile(
@@ -1106,7 +1026,6 @@ async fn export_profile(
     let parts = Parts::read(store, export.slot, export.lightbar, cx, step)
         .await
         .map_err(|error| error_chain(&error))?;
-    let name = export.info.name.clone();
     let file = ProfileFile::new(export.keyboard, export.info, parts);
     let target = path.clone();
     cx.background_executor()
@@ -1114,7 +1033,7 @@ async fn export_profile(
         .await
         .map_err(|error| error_chain(&error))?;
     step(cx);
-    Ok(format!("Exported “{name}” to `{}`.", path.display()).into())
+    Ok(format!("Exported to {}", path.display()).into())
 }
 
 async fn import_profile(
@@ -1143,16 +1062,10 @@ async fn import_profile(
     set_info(store, slot, file.info.clone(), cx).await?;
     step(cx);
     match target {
-        Target::NewProfile => {
-            Ok(format!("Imported “{}” as profile {number}.", file.info.name).into())
-        }
+        Target::NewProfile => Ok(format!("Imported as profile {number}").into()),
         Target::Active(_) => {
             store.update(cx, |store, cx| store.reload(cx)).await;
-            Ok(format!(
-                "Imported “{}” into the active profile. Save to keep it.",
-                file.info.name
-            )
-            .into())
+            Ok("Imported into the active profile; save to keep it".into())
         }
     }
 }
@@ -1164,18 +1077,10 @@ fn prepare_import(
 ) -> Result<Import, SharedString> {
     let mut warnings = Vec::new();
     if file.keyboard != keyboard.name.as_ref() {
-        warnings.push(
-            format!(
-                "The profile you're importing was created for {}. While most features will \
-                 work, some settings might be off due to different layouts.",
-                file.keyboard
-            )
-            .into(),
-        );
+        warnings.push("Made for another keyboard; some keys may differ.".into());
     }
     if keyboard.capabilities.lightbar_leds == 0 && file.parts.lightbar.take().is_some() {
-        warnings
-            .push("Its light bar settings are left out: this keyboard has no light bar.".into());
+        warnings.push("Light bar settings are skipped.".into());
     }
     file.parts
         .check(&keyboard.capabilities)
@@ -1194,14 +1099,9 @@ fn prepare_import(
 
 fn profile_name(text: &str) -> Result<Name, String> {
     if text.trim().is_empty() {
-        return Err("Enter a name for the profile.".to_owned());
+        return Err("Enter a name.".to_owned());
     }
-    Name::try_from(text).map_err(|_| {
-        format!(
-            "The name is {} bytes long; a profile name holds up to {NAME_LEN} bytes.",
-            text.len()
-        )
-    })
+    Name::try_from(text).map_err(|_| format!("Up to {NAME_LEN} bytes."))
 }
 
 fn copy_name(name: &str) -> Name {

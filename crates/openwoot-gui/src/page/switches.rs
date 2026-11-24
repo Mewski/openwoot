@@ -1,21 +1,17 @@
 mod catalog;
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    mem,
-};
+use std::{collections::BTreeSet, mem};
 
 use gpui_kit::{
-    App, AppContext as _, Context, Div, Entity, Hsla, InteractiveElement as _, IntoElement,
-    Modifiers, ParentElement as _, Pixels, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Window,
+    App, AppContext as _, Context, Div, Entity, FontWeight, Hsla, IntoElement, Modifiers,
+    ParentElement as _, Render, SharedString, Styled as _, Subscription, Window,
     component::{
-        ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _,
-        alert::Alert,
-        button::{Button, ButtonGroup, ButtonVariants as _},
+        ActiveTheme as _, Disableable as _, Sizable as _,
+        button::Button,
         h_flex,
         select::{SearchableVec, Select, SelectEvent, SelectGroup, SelectItem, SelectState},
         slider::{Slider, SliderEvent, SliderState},
+        tab::{Tab, TabBar},
         v_flex,
     },
     div, hsla,
@@ -30,18 +26,15 @@ use openwoot_protocol::{
 
 use crate::{
     keyboard::{KeyFace, KeyboardView, Selection},
+    page::Page,
     panel,
     store::{Keyboard, Scope, Store, StoreEvent},
     usage,
 };
 
 const MILLIMETRES_PER_STEP: f32 = 0.05;
-const KEYBOARD_MARGIN: f32 = 340.0;
-const SLIDER_WIDTH: f32 = 240.0;
-const SELECT_WIDTH: f32 = 280.0;
+const READOUT_WIDTH: f32 = 60.0;
 const MENU_HEIGHT: f32 = 360.0;
-const SWATCH_SIZE: f32 = 10.0;
-const INHERITED_OPACITY: f32 = 0.4;
 const HUE_STEP: f32 = 0.618_034;
 const MODEL_SATURATION: f32 = 0.45;
 const MODEL_LIGHTNESS: f32 = 0.38;
@@ -49,6 +42,7 @@ const FACTORY_MODEL: u8 = 0;
 const EDITION_FACTORY_MODEL: u8 = 1;
 const FIRST_BRAND: &str = "Wooting";
 const OTHER_BRAND: &str = "Other";
+const LABELS: [KeyLabels; 2] = [KeyLabels::Switch, KeyLabels::Travel];
 
 type ModelChoices = SearchableVec<SelectGroup<ModelChoice>>;
 
@@ -213,17 +207,6 @@ impl SwitchesPage {
         self.sync_controls(window, cx);
     }
 
-    fn select_model(&mut self, model: u8, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(keyboard) = self.store.read(cx).keyboard() {
-            self.selection.set(
-                (0..keyboard.key_count()).filter(|key| {
-                    keyboard.has_key(*key) && effective(keyboard, *key).model == model
-                }),
-            );
-        }
-        self.sync_controls(window, cx);
-    }
-
     fn clear_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.selection.clear();
         self.sync_controls(window, cx);
@@ -264,7 +247,7 @@ impl SwitchesPage {
         };
         match checked {
             Err(invalid) => {
-                self.problem = Some(format!("could not change the switches: {invalid}").into());
+                self.problem = Some(invalid.to_string().into());
                 self.shown = None;
                 self.sync_controls(window, cx);
             }
@@ -330,10 +313,6 @@ impl SwitchesPage {
         );
     }
 
-    fn use_factory_switch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.change(|settings, _, _, _| settings.default = None, window, cx);
-    }
-
     fn set_spacer(&mut self, millimetres: f32, window: &mut Window, cx: &mut Context<Self>) {
         let offset = steps_of(millimetres);
         self.change(
@@ -365,274 +344,188 @@ impl SwitchesPage {
         );
     }
 
-    fn keyboard_section(&self, keyboard: &Keyboard, width: Pixels, cx: &Context<Self>) -> Div {
+    fn heading(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
+        let selected_own = keyboard.switches.as_ref().is_some_and(|switches| {
+            self.selection
+                .iter()
+                .any(|key| switches.keys.get(key).copied().flatten().is_some())
+        });
+        panel::heading(
+            Page::Switches.title(),
+            Some("Assign the switches installed in your keyboard for precise key travel.".into()),
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    TabBar::new("switch-labels")
+                        .segmented()
+                        .small()
+                        .children([Tab::new().label("Switch"), Tab::new().label("Travel")])
+                        .when_some(
+                            LABELS.iter().position(|labels| *labels == self.labels),
+                            TabBar::selected_index,
+                        )
+                        .on_click(cx.listener(|this, index: &usize, _, cx| {
+                            if let Some(labels) = LABELS.get(*index) {
+                                this.show_labels(*labels, cx);
+                            }
+                        })),
+                )
+                .when(selected_own, |this| {
+                    this.child(
+                        Button::new("use-default-switch")
+                            .small()
+                            .label("Use default")
+                            .tooltip("Use the default switch for the selected keys")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.use_default_switch(window, cx);
+                            })),
+                    )
+                })
+                .child(
+                    Button::new("select-all")
+                        .small()
+                        .label("Select all keys")
+                        .on_click(cx.listener(|this, _, window, cx| this.select_all(window, cx))),
+                )
+                .child(
+                    Button::new("clear-selection")
+                        .small()
+                        .label("Discard selection")
+                        .disabled(self.selection.is_empty())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.clear_selection(window, cx);
+                        })),
+                ),
+            cx,
+        )
+    }
+
+    fn keyboard(&self, keyboard: &Keyboard, window: &Window, cx: &Context<Self>) -> Div {
         let labels = self.labels;
         let page = cx.weak_entity();
-        let view = KeyboardView::new("switch-keys", keyboard, |key| face(keyboard, labels, key))
-            .selection(&self.selection)
-            .fit_width(width)
-            .on_key_click(move |key, event, window, cx| {
-                page.update(cx, |page, cx| {
-                    page.click_key(key, event.modifiers(), window, cx);
-                })
-                .ok();
-            });
-        let description: SharedString = if self.selection.is_empty() {
-            "Select keys on the keyboard (Shift-, ⌘- or Ctrl-click adds and removes keys), then \
-             choose the switch installed in them. With no keys selected, the choice sets the \
-             default switch."
-                .into()
-        } else {
-            format!(
-                "{} selected: the choices below apply to them only.",
-                keys_text(self.selection.len())
-            )
-            .into()
-        };
-        panel::section("Keyboard", Some(description), cx)
-            .child(self.toolbar(cx))
-            .child(view)
-            .child(models_in_use(keyboard, cx))
-    }
-
-    fn toolbar(&self, cx: &Context<Self>) -> Div {
-        h_flex()
+        v_flex()
             .w_full()
-            .gap_2()
-            .flex_wrap()
-            .justify_between()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        Button::new("select-all")
-                            .small()
-                            .outline()
-                            .label("Select all")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.select_all(window, cx)),
-                            ),
-                    )
-                    .child(
-                        Button::new("clear-selection")
-                            .small()
-                            .ghost()
-                            .label("Clear selection")
-                            .disabled(self.selection.is_empty())
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.clear_selection(window, cx);
-                            })),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Show on keys"),
-                    )
-                    .child(
-                        ButtonGroup::new("switch-labels")
-                            .small()
-                            .outline()
-                            .child(
-                                Button::new("labels-switch")
-                                    .label("Switch")
-                                    .selected(self.labels == KeyLabels::Switch),
-                            )
-                            .child(
-                                Button::new("labels-travel")
-                                    .label("Travel")
-                                    .selected(self.labels == KeyLabels::Travel),
-                            )
-                            .on_click(cx.listener(|this, clicks: &Vec<usize>, _, cx| {
-                                let labels = if clicks.contains(&1) {
-                                    KeyLabels::Travel
-                                } else {
-                                    KeyLabels::Switch
-                                };
-                                this.show_labels(labels, cx);
-                            })),
-                    ),
-            )
+            .gap_4()
+            .child(panel::stage(
+                KeyboardView::new("switch-keys", keyboard, |key| face(keyboard, labels, key))
+                    .selection(&self.selection)
+                    .fit_width(panel::content_width(window))
+                    .on_key_click(move |key, event, window, cx| {
+                        page.update(cx, |page, cx| {
+                            page.click_key(key, event.modifiers(), window, cx);
+                        })
+                        .ok();
+                    }),
+            ))
+            .when(self.selection.is_empty(), |this| {
+                this.child(h_flex().w_full().justify_center().child(panel::label(
+                    "Select keys to give them their own switch",
+                    cx,
+                )))
+            })
     }
 
-    fn switch_section(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
+    fn switch_card(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
         let targets = targets(keyboard, &self.selection);
-        let model = same(targets.iter().map(|switch| switch.model));
-        let travel = model
-            .and_then(|model| keyboard.models.get(usize::from(model)))
-            .map_or_else(
-                || "Mixed".to_owned(),
-                |entry| format!("{:.2} mm", millimetres(entry.travel)),
-            );
-        let (title, description): (SharedString, SharedString) = if self.selection.is_empty() {
+        let travel = same(targets.iter().map(|switch| {
+            keyboard
+                .models
+                .get(usize::from(switch.model))
+                .map(|model| model.travel)
+        }))
+        .flatten()
+        .map_or_else(
+            || "Mixed".into(),
+            |travel| millimetres_text(millimetres(travel)),
+        );
+        let (description, scope) = if self.selection.is_empty() {
             (
-                "Default switch".into(),
-                "Keys without their own switch use the default switch.".into(),
+                "Keys without their own switch use the default switch.",
+                SharedString::from("Default switch"),
             )
         } else {
             (
-                format!("Switch of {}", keys_text(self.selection.len())).into(),
-                "Choose the switch installed in the selected keys.".into(),
+                "Choose the switch installed in the selected keys.",
+                keys_text(self.selection.len()),
             )
         };
-        let reset = if self.selection.is_empty() {
-            let factory = factory_switch(&keyboard.capabilities);
-            let has_default = keyboard
-                .switches
-                .as_ref()
-                .is_some_and(|switches| switches.default.is_some());
-            panel::row(
-                "Use the factory switch",
-                Some(
-                    format!(
-                        "Without a default, keys use the switch the keyboard was built with ({}).",
-                        product_name(factory.model)
-                    )
-                    .into(),
-                ),
-                Button::new("use-factory-switch")
-                    .small()
-                    .outline()
-                    .label("Use factory switch")
-                    .disabled(!has_default)
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.use_factory_switch(window, cx)),
-                    ),
-                cx,
-            )
-        } else {
-            let has_own = keyboard.switches.as_ref().is_some_and(|switches| {
-                self.selection
-                    .iter()
-                    .any(|key| switches.keys.get(key).copied().flatten().is_some())
-            });
-            panel::row(
-                "Use the default switch",
-                Some("The selected keys follow the default switch again.".into()),
-                Button::new("use-default-switch")
-                    .small()
-                    .outline()
-                    .label("Use default switch")
-                    .disabled(!has_own)
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.use_default_switch(window, cx)),
-                    ),
-                cx,
-            )
-        };
-        panel::section(title, Some(description), cx)
-            .child(panel::row(
-                "Switch",
-                None,
+        panel::section("Switch", Some(description.into()), cx)
+            .child(scope_label("Changing switch for", scope, cx))
+            .child(panel::field(
+                "Model",
                 Select::new(&self.model_select)
-                    .w(px(SELECT_WIDTH))
-                    .placeholder("Mixed switches")
-                    .search_placeholder("Search for a switch")
+                    .w_full()
+                    .placeholder("Mixed")
+                    .search_placeholder("Search switches")
                     .menu_max_h(px(MENU_HEIGHT)),
                 cx,
             ))
-            .child(panel::row(
+            .child(panel::field(
                 "Total travel",
-                Some("The travel of the switch without spacers.".into()),
-                div().text_sm().child(travel),
-                cx,
-            ))
-            .child(reset)
-            .child(panel::note(
-                "Don't see your switch on the list? Select a supported switch from the same \
-                 brand, or one with the same total travel distance.",
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().foreground)
+                    .child(travel),
                 cx,
             ))
     }
 
-    fn spacer_section(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
-        let size = self.spacer.read(cx).value().end();
+    fn spacer_card(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
         let targets = targets(keyboard, &self.selection);
-        let label = if same(targets.iter().map(|switch| switch.travel_offset)).is_some() {
-            format!("Size: {size:.2} mm")
+        let size = if same(targets.iter().map(|switch| switch.travel_offset)).is_some() {
+            millimetres_text(self.spacer.read(cx).value().end())
         } else {
-            "Size: mixed".to_owned()
+            "Mixed".into()
         };
         let tuned = keyboard.switches.as_ref().map_or(0, tuned_pairs);
         panel::section(
             "Spacers",
-            Some(
-                "If you have spacers installed, select those keys and enter the exact size. With \
-                 no keys selected, the size applies to the default switch."
-                    .into(),
-            ),
+            Some("Enter the exact size of the spacers installed in these keys.".into()),
             cx,
         )
-        .child(panel::row(
-            label,
-            Some(
-                "Spacers shorten the travel in steps of 0.05 mm; the size stays below the travel \
-                 of the switch."
-                    .into(),
-            ),
-            div().w(px(SLIDER_WIDTH)).child(Slider::new(&self.spacer)),
+        .child(panel::field(
+            "Size",
+            h_flex()
+                .w_full()
+                .gap_3()
+                .items_center()
+                .child(div().flex_1().min_w_0().child(Slider::new(&self.spacer)))
+                .child(readout_text(size, cx)),
             cx,
         ))
-        .child(panel::row(
+        .child(panel::field(
             "Spacer combinations",
-            Some(
-                format!(
-                    "Every different pair of switch and spacer size counts once; the keyboard \
-                     holds at most {MAX_TUNED}."
-                )
-                .into(),
-            ),
-            div().text_sm().child(format!("{tuned} of {MAX_TUNED}")),
+            div()
+                .text_sm()
+                .text_color(cx.theme().foreground)
+                .child(format!("{tuned} of {MAX_TUNED} used")),
             cx,
         ))
         .when_some(self.problem.clone(), |this, problem| {
-            this.child(Alert::error("switch-problem", problem))
+            this.child(div().text_xs().text_color(cx.theme().danger).child(problem))
         })
     }
 }
 
 impl Render for SwitchesPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let page = panel::page(
-            "Switches",
-            "Assign the switches installed on your keyboard. This applies a calibrated analog \
-             curve and total travel distance to each switch, allowing the keyboard to detect the \
-             precise position of every key.",
-            cx,
-        );
+        let page = panel::page();
         let Some(keyboard) = self.store.read(cx).keyboard() else {
             return page;
         };
         if keyboard.switches.is_none() {
-            return page.child(panel::note(
-                "The keyboard does not report its switches, so they cannot be changed here.",
-                cx,
-            ));
+            return page.child(panel::note("Switches unavailable", cx));
         }
-        let width = window.viewport_size().width - px(KEYBOARD_MARGIN);
-        page.child(self.keyboard_section(keyboard, width, cx))
+        page.child(self.keyboard(keyboard, window, cx))
+            .child(self.heading(keyboard, cx))
             .child(
                 h_flex()
                     .w_full()
+                    .items_stretch()
                     .gap_4()
-                    .items_start()
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .child(self.switch_section(keyboard, cx)),
-                    )
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .child(self.spacer_section(keyboard, cx)),
-                    ),
+                    .child(self.switch_card(keyboard, cx).flex_1().min_w_0())
+                    .child(self.spacer_card(keyboard, cx).flex_1().min_w_0()),
             )
     }
 }
@@ -647,7 +540,7 @@ impl ModelChoice {
             variants: product
                 .filter(|product| !product.variants.is_empty())
                 .map(|product| product.variants.join(", ").into()),
-            travel: format!("{:.2} mm", millimetres(entry.travel)).into(),
+            travel: millimetres_text(millimetres(entry.travel)),
         }
     }
 }
@@ -736,39 +629,6 @@ fn choices(keyboard: &Keyboard) -> ModelChoices {
     ModelChoices::new(groups)
 }
 
-fn models_in_use(keyboard: &Keyboard, cx: &Context<SwitchesPage>) -> Div {
-    let mut counts = BTreeMap::<u8, usize>::new();
-    for key in (0..keyboard.key_count()).filter(|key| keyboard.has_key(*key)) {
-        *counts.entry(effective(keyboard, key).model).or_default() += 1;
-    }
-    let muted = cx.theme().muted_foreground;
-    v_flex()
-        .gap_1()
-        .children(counts.into_iter().map(|(model, count)| {
-            h_flex()
-                .id(SharedString::from(format!("switch-model-{model}")))
-                .gap_2()
-                .items_center()
-                .text_xs()
-                .cursor_pointer()
-                .child(
-                    div()
-                        .size(px(SWATCH_SIZE))
-                        .rounded(px(3.0))
-                        .bg(model_color(model)),
-                )
-                .child(product_name(model))
-                .child(div().text_color(muted).child(keys_text(count)))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.select_model(model, window, cx);
-                }))
-        }))
-        .child(div().text_xs().text_color(muted).child(
-            "Keys with their own switch are drawn solid, keys that use the default switch faded. \
-             Click a switch to select its keys.",
-        ))
-}
-
 fn face(keyboard: &Keyboard, labels: KeyLabels, key: usize) -> KeyFace {
     let legend = keyboard
         .legends
@@ -781,32 +641,52 @@ fn face(keyboard: &Keyboard, labels: KeyLabels, key: usize) -> KeyFace {
         };
     };
     let switch = effective(keyboard, key);
-    let own = switches.keys.get(key).copied().flatten().is_some();
     let detail = match labels {
-        KeyLabels::Switch => short_name(switch.model),
-        KeyLabels::Travel => keyboard.models.get(usize::from(switch.model)).map_or_else(
-            || "?".into(),
-            |model| {
-                format!(
-                    "{:.2}",
-                    millimetres(model.travel.saturating_sub(switch.travel_offset))
-                )
-                .into()
-            },
-        ),
+        KeyLabels::Switch => Some(short_name(switch.model)),
+        KeyLabels::Travel => keyboard.models.get(usize::from(switch.model)).map(|model| {
+            let travel = millimetres(model.travel.saturating_sub(switch.travel_offset));
+            SharedString::from(format!("{travel:.2}"))
+        }),
     };
-    let color = model_color(switch.model);
     KeyFace {
         legend,
-        detail: Some(detail),
-        fill: Some(if own {
-            color
-        } else {
-            color.opacity(INHERITED_OPACITY)
-        }),
+        detail,
+        fill: switches
+            .keys
+            .get(key)
+            .copied()
+            .flatten()
+            .map(|own| model_color(own.model)),
         travel: None,
         dimmed: false,
     }
+}
+
+fn scope_label(prefix: &'static str, value: SharedString, cx: &Context<SwitchesPage>) -> Div {
+    v_flex().gap_1().child(panel::label(prefix, cx)).child(
+        div()
+            .text_sm()
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(cx.theme().primary)
+            .child(value),
+    )
+}
+
+fn keys_text(count: usize) -> SharedString {
+    if count == 1 {
+        "1 key".into()
+    } else {
+        format!("{count} keys").into()
+    }
+}
+
+fn readout_text(text: SharedString, cx: &Context<SwitchesPage>) -> Div {
+    div()
+        .w(px(READOUT_WIDTH))
+        .text_right()
+        .text_sm()
+        .text_color(cx.theme().muted_foreground)
+        .child(text)
 }
 
 fn targets(keyboard: &Keyboard, selection: &Selection) -> Vec<Switch> {
@@ -897,6 +777,10 @@ fn millimetres(steps: u8) -> f32 {
     f32::from(steps) * MILLIMETRES_PER_STEP
 }
 
+fn millimetres_text(value: f32) -> SharedString {
+    format!("{value:.2} mm").into()
+}
+
 fn steps_of(millimetres: f32) -> u8 {
     let steps = (millimetres / MILLIMETRES_PER_STEP)
         .round()
@@ -908,14 +792,6 @@ fn steps_of(millimetres: f32) -> u8 {
     )]
     let steps = steps as u8;
     steps
-}
-
-fn keys_text(count: usize) -> String {
-    if count == 1 {
-        "1 key".to_owned()
-    } else {
-        format!("{count} keys")
-    }
 }
 
 #[cfg(test)]

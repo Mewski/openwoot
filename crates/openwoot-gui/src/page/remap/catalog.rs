@@ -53,14 +53,14 @@ impl Category {
     pub(crate) const fn title(self) -> &'static str {
         match self {
             Self::Basic => "Basic characters",
-            Self::Extended => "Extended characters",
+            Self::Extended => "Extended keys",
             Self::International => "International",
-            Self::OtherKeys => "Other key codes",
+            Self::OtherKeys => "Other keys",
             Self::Functions => "Functions",
             Self::Layers => "Fn layers",
             Self::Profiles => "Profiles",
-            Self::Media => "Media and audio",
-            Self::Applications => "Apps and browser",
+            Self::Media => "Media",
+            Self::Applications => "Applications",
             Self::System => "System",
             Self::Mouse => "Mouse",
             Self::Gamepad => "Gamepad",
@@ -132,12 +132,10 @@ pub(crate) fn search(entries: &[Entry], query: &str) -> Vec<Entry> {
 
 pub(crate) fn refusal(action: Action, layer: Layer) -> Option<&'static str> {
     match action {
-        Action::Layer(Layer::Base) => Some("The base layer cannot be a momentary layer"),
-        Action::Layer(opened) if opened == layer => {
-            Some("A Fn key cannot be added to the layer it activates")
-        }
+        Action::Layer(Layer::Base) => Some("The base layer can't be momentary"),
+        Action::Layer(opened) if opened == layer => Some("Can't go on the layer it opens"),
         Action::Function(Function::LayerLock) if layer == Layer::Base => {
-            Some("Fn layer lock cannot be added to the base layer")
+            Some("Only works on Fn layers")
         }
         _ => None,
     }

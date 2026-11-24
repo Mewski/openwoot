@@ -60,8 +60,8 @@ enum Template {
 pub(crate) const PRESETS: &[Preset] = &[
     Preset {
         kind: Kind::DynamicKeystroke,
-        title: "Key Response for Running in Games",
-        description: "Enable shift at the full press of W, A, S and D for running",
+        title: "Running (W, A, S, D)",
+        description: "Shift at the full press of W, A, S and D, for running in games",
         parts: &[
             running(KEY_W),
             running(KEY_A),
@@ -71,15 +71,14 @@ pub(crate) const PRESETS: &[Preset] = &[
     },
     Preset {
         kind: Kind::DynamicKeystroke,
-        title: "Key Response for Running in Games (W only)",
-        description: "Enable shift at the full press of W for running",
+        title: "Running (W)",
+        description: "Shift at the full press of W, for running in games",
         parts: &[running(KEY_W)],
     },
     Preset {
         kind: Kind::ModTap,
-        title: "Mod Tap Arrow Keys",
-        description: "Add arrow keys to the lower right modifiers in one click: tap for an \
-                      arrow, hold for the modifier",
+        title: "Arrow keys",
+        description: "Tap the lower right modifiers for arrows, hold them as before",
         parts: &[
             mod_tap(MENU, LEFT, MENU),
             mod_tap(RIGHT_SHIFT, UP, RIGHT_SHIFT),
@@ -89,26 +88,26 @@ pub(crate) const PRESETS: &[Preset] = &[
     },
     Preset {
         kind: Kind::ModTap,
-        title: "Mod Tap Fn 2 on Caps Lock",
-        description: "Add Fn 2 as a hold key on Caps Lock in one click",
+        title: "Fn 2 on Caps Lock",
+        description: "Hold Caps Lock for Fn 2, tap it for Caps Lock",
         parts: &[mod_tap(CAPS_LOCK, CAPS_LOCK, FN_2)],
     },
     Preset {
         kind: Kind::Toggle,
-        title: "Toggle Function Layer 1",
-        description: "Toggle Fn 1 on and off without holding the key",
+        title: "Toggle Fn 1",
+        description: "Tap Fn to keep Fn 1 on without holding it",
         parts: &[single(FN_1, Template::Toggle(FN_1))],
     },
     Preset {
         kind: Kind::Toggle,
-        title: "Toggle Function Layer 2 on Caps Lock",
-        description: "Swap between Fn 2 and Caps Lock in one click",
+        title: "Toggle Fn 2 on Caps Lock",
+        description: "Tap Caps Lock to switch Fn 2 on or off",
         parts: &[single(CAPS_LOCK, Template::Toggle(FN_2))],
     },
     Preset {
         kind: Kind::DepthPriority,
-        title: "Instant strafe switching",
-        description: "Switch between A and D instantly without the normal input delay.",
+        title: "Instant strafe (A, D)",
+        description: "Switch between A and D without the usual input delay",
         parts: &[pair(
             KEY_A,
             KEY_D,
@@ -117,15 +116,14 @@ pub(crate) const PRESETS: &[Preset] = &[
     },
     Preset {
         kind: Kind::DepthPriority,
-        title: "Instant strafe switching (arrows)",
-        description: "Switch between left and right instantly without the normal input delay.",
+        title: "Instant strafe (←, →)",
+        description: "Switch between left and right without the usual input delay",
         parts: &[pair(LEFT, RIGHT, Template::DepthPriority(Resolution::Both))],
     },
     Preset {
         kind: Kind::DepthPriority,
-        title: "Reduce accidental Alt + Tab",
-        description: "Alt+Tab only triggers when both keys are fully bottomed out, preventing \
-                      accidental window switches.",
+        title: "Reduce accidental Alt+Tab",
+        description: "Alt+Tab triggers only when both keys are fully pressed",
         parts: &[pair(
             TAB,
             LEFT_ALT,
@@ -134,8 +132,8 @@ pub(crate) const PRESETS: &[Preset] = &[
     },
     Preset {
         kind: Kind::Socd,
-        title: "Instant strafe switching",
-        description: "Switch between A and D instantly without the normal input delay.",
+        title: "Instant strafe (A, D)",
+        description: "Switch between A and D without the usual input delay",
         parts: &[pair(
             KEY_A,
             KEY_D,
@@ -144,8 +142,8 @@ pub(crate) const PRESETS: &[Preset] = &[
     },
     Preset {
         kind: Kind::Socd,
-        title: "Instant strafe switching (arrows)",
-        description: "Switch between left and right instantly without the normal input delay.",
+        title: "Instant strafe (←, →)",
+        description: "Switch between left and right without the usual input delay",
         parts: &[pair(
             LEFT,
             RIGHT,
@@ -154,9 +152,8 @@ pub(crate) const PRESETS: &[Preset] = &[
     },
     Preset {
         kind: Kind::Socd,
-        title: "Reduce accidental Alt + Tab",
-        description: "Alt+Tab only triggers when both keys are fully bottomed out, preventing \
-                      accidental window switches.",
+        title: "Reduce accidental Alt+Tab",
+        description: "Alt+Tab triggers only when both keys are fully pressed",
         parts: &[pair(
             TAB,
             LEFT_ALT,
@@ -373,10 +370,7 @@ mod tests {
     #[test]
     fn mod_tap_arrows_keep_the_modifier_on_hold() {
         let base = base();
-        let Some(preset) = PRESETS
-            .iter()
-            .find(|preset| preset.title == "Mod Tap Arrow Keys")
-        else {
+        let Some(preset) = PRESETS.iter().find(|preset| preset.title == "Arrow keys") else {
             unreachable!("the arrow preset is listed");
         };
         let entries = preset.entries(&base).unwrap_or_default();
@@ -403,7 +397,7 @@ mod tests {
         }
         let socd = PRESETS
             .iter()
-            .find(|preset| preset.kind == Kind::Socd && preset.title == "Instant strafe switching");
+            .find(|preset| preset.kind == Kind::Socd && preset.title == "Instant strafe (A, D)");
         assert_eq!(
             socd.map(|preset| preset.entries(&base)),
             Some(Err(vec![KEY_D]))

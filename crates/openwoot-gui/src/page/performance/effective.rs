@@ -38,17 +38,6 @@ impl RapidTriggerMode {
         }
     }
 
-    pub(super) const fn description(self) -> &'static str {
-        match self {
-            Self::Profile => {
-                "The keys follow the profile: Rapid Trigger is on when it is on for the profile."
-            }
-            Self::Off => "Rapid Trigger stays off for these keys, whatever the profile says.",
-            Self::On => "Rapid Trigger is on for these keys with the sensitivity of the profile.",
-            Self::Custom => "Rapid Trigger is on for these keys with their own sensitivity.",
-        }
-    }
-
     pub(super) const fn apply(
         self,
         current: RapidTriggerOverride,

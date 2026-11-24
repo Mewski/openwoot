@@ -1,24 +1,27 @@
-use std::{error::Error, path::PathBuf};
+use std::{
+    error::Error,
+    path::{Path, PathBuf},
+};
 
 use gpui_kit::{
-    Context, Div, Entity, FontWeight, IntoElement, ParentElement as _, PathPromptOptions, Render,
-    SharedString, Styled as _, Subscription, Window,
+    Context, Div, Entity, IntoElement, ParentElement as _, PathPromptOptions, Render, SharedString,
+    Styled as _, Subscription, Window,
     assets::IconName as Catalog,
     component::{
-        ActiveTheme as _, Disableable as _, Icon, WindowExt as _,
+        ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _,
         button::{Button, ButtonVariant, ButtonVariants as _},
         h_flex,
         progress::Progress,
         v_flex,
     },
     div,
-    prelude::FluentBuilder as _,
 };
 use openwoot_host::{
     flash::{self, Event, Plan},
     hid,
 };
 
+use super::Page;
 use crate::{
     panel,
     store::{Link, Store},
@@ -120,21 +123,18 @@ impl FirmwarePage {
         };
         let plan = plan.as_ref().clone();
         let page = cx.entity();
-        let title = format!("Install the firmware for `{}`?", plan.board);
+        let title = format!("Install firmware for “{}”?", plan.board);
         window.open_alert_dialog(cx, move |alert, _, _| {
             let page = page.clone();
             let plan = plan.clone();
             alert
                 .title(title.clone())
                 .description(
-                    "The keyboard restarts into update mode, receives the image and restarts with \
-                     the new firmware. It does not type until the update completes; keep it \
-                     plugged in. If the update is interrupted, the keyboard starts in update mode \
-                     and the image can be installed again from here. To return to the stock \
-                     firmware, use Wootility.",
+                    "The keyboard restarts and cannot type until the update finishes; keep it \
+                     plugged in. Wootility restores the stock firmware.",
                 )
                 .confirm()
-                .ok_text("Install firmware")
+                .ok_text("Install")
                 .ok_variant(ButtonVariant::Danger)
                 .on_ok(move |_, _, cx| {
                     let plan = plan.clone();
@@ -183,72 +183,45 @@ impl FirmwarePage {
         cx.notify();
     }
 
-    fn connected_section(&self, cx: &Context<Self>) -> Div {
+    fn installed_section(&self, cx: &Context<Self>) -> Div {
         let store = self.store.read(cx);
-        let section = panel::section("Connected keyboard", None, cx);
         let Some(keyboard) = store.keyboard() else {
             let reason = match store.link() {
                 Link::Unreachable(reason) => Some(reason.clone()),
                 Link::Searching | Link::Loading | Link::Connected => None,
             };
-            return section
-                .child(panel::note(
-                    "No keyboard with openwoot firmware is connected. A keyboard in update mode \
-                     or running the stock firmware can still receive an openwoot image.",
-                    cx,
-                ))
-                .children(reason.map(|reason| panel::note(reason, cx)));
+            return panel::section(
+                "Installed",
+                Some("No openwoot keyboard; update mode and stock firmware still work.".into()),
+                cx,
+            )
+            .children(reason.map(|reason| panel::note(reason, cx)));
         };
+        let section = panel::section("Installed", None, cx);
         section
-            .child(panel::row(
-                "Keyboard",
-                None,
-                div().text_sm().child(keyboard.name.clone()),
-                cx,
-            ))
-            .child(panel::row(
+            .child(value_row("Keyboard", keyboard.name.clone(), cx))
+            .child(value_row(
                 "Firmware",
-                None,
-                div()
-                    .text_sm()
-                    .child(format!("openwoot {}", keyboard.version.firmware)),
+                keyboard.version.firmware.to_string().into(),
                 cx,
             ))
-            .child(panel::row(
+            .child(value_row(
                 "Protocol",
-                None,
-                div()
-                    .text_sm()
-                    .child(format!("version {}", keyboard.version.protocol)),
+                keyboard.version.protocol.to_string().into(),
                 cx,
             ))
     }
 
-    fn image_section(&self, cx: &mut Context<Self>) -> Div {
-        let installing = self.installing();
+    fn update_section(&self, cx: &mut Context<Self>) -> Div {
         let mut section = panel::section(
-            "Flash firmware image",
-            Some(
-                "Choose an openwoot firmware image (.hex or .bin). It is checked before anything \
-                 is sent to the keyboard."
-                    .into(),
-            ),
+            "Update",
+            Some("Choose an openwoot image (.hex or .bin) to check and install.".into()),
             cx,
-        )
-        .child(
-            h_flex().child(
-                Button::new("choose-image")
-                    .outline()
-                    .icon(Icon::new(Catalog::FileUp))
-                    .label("Choose image…")
-                    .disabled(installing || matches!(self.image, Some(Image::Checking(_))))
-                    .on_click(cx.listener(|_, _, _, cx| Self::choose_image(cx))),
-            ),
         );
         match &self.image {
             None => {}
             Some(Image::Checking(path)) => {
-                section = section.child(panel::note(format!("Checking `{}`…", path.display()), cx));
+                section = section.child(value_row("File", file_name(path), cx));
             }
             Some(Image::Rejected(reason)) => {
                 section = section.child(
@@ -259,79 +232,89 @@ impl FirmwarePage {
                 );
             }
             Some(Image::Planned(plan)) => {
-                let writable = plan.update.is_some();
+                section = section.child(value_row("File", file_name(&plan.path), cx));
                 for (label, value) in plan_lines(plan) {
-                    section =
-                        section.child(panel::row(label, None, div().text_sm().child(value), cx));
+                    section = section.child(value_row(label, value.into(), cx));
                 }
-                section = section.child(
-                    h_flex().justify_end().child(
-                        Button::new("install")
-                            .danger()
-                            .icon(Icon::new(Catalog::Upload))
-                            .label("Install firmware")
-                            .disabled(!writable || installing)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.confirm_install(window, cx)),
-                            ),
-                    ),
-                );
+                if plan.update.is_none() {
+                    section = section.child(panel::note("This board has no update mode.", cx));
+                } else if self.installation.is_none() {
+                    section = section.child(
+                        h_flex().justify_end().child(
+                            Button::new("install")
+                                .primary()
+                                .small()
+                                .label("Install…")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.confirm_install(window, cx);
+                                })),
+                        ),
+                    );
+                }
             }
+        }
+        if let Some(installation) = &self.installation {
+            section = section.child(Self::progress(installation, cx));
         }
         section
     }
 
-    fn installation_section(installation: &Installation, cx: &Context<Self>) -> Div {
+    fn progress(installation: &Installation, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
-        let progress = installation.blocks.map(|blocks| {
-            v_flex()
-                .gap_1()
-                .child(Progress::new("upload-progress").value(blocks.percent()))
-                .child(panel::note(
-                    format!("{} of {} written", blocks.sent, block_count(blocks.total)),
-                    cx,
-                ))
-        });
+        let percent = installation.blocks.map_or(0.0, Blocks::percent);
         let outcome = installation.outcome.as_ref().map(|outcome| match outcome {
-            Ok(()) => h_flex()
-                .gap_2()
-                .text_sm()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.success)
-                .child(Icon::new(Catalog::ListChecks))
-                .child("The firmware is installed and running"),
-            Err(reason) => h_flex()
-                .gap_2()
+            Ok(()) => div().text_sm().text_color(theme.success).child("Installed"),
+            Err(reason) => div()
                 .text_sm()
                 .text_color(theme.danger)
                 .child(reason.clone()),
         });
-        panel::section("Update", None, cx)
+        let running = installation.outcome.is_none();
+        v_flex()
+            .gap_2()
+            .pt_2()
+            .border_t_1()
+            .border_color(theme.border)
             .child(
-                v_flex()
-                    .gap_1()
-                    .children(installation.steps.iter().enumerate().map(|(index, step)| {
-                        h_flex()
-                            .gap_2()
-                            .text_sm()
-                            .child(
-                                div()
-                                    .w_6()
-                                    .text_color(theme.muted_foreground)
-                                    .child(format!("{}.", index + 1)),
-                            )
-                            .child(step.clone())
-                    })),
+                Progress::new("upload-progress")
+                    .loading(running && installation.blocks.is_none())
+                    .value(if installation.outcome == Some(Ok(())) {
+                        100.0
+                    } else {
+                        percent
+                    }),
             )
-            .children(progress)
-            .when(installation.outcome.is_none(), |this| {
-                this.child(panel::note(
-                    "Keep the keyboard plugged in until the update completes.",
-                    cx,
-                ))
-            })
+            .child(
+                v_flex().gap_0p5().children(
+                    installation
+                        .steps
+                        .iter()
+                        .map(|step| panel::note(step.clone(), cx)),
+                ),
+            )
+            .children(running.then(|| panel::note("Keep the keyboard plugged in.", cx)))
             .children(outcome)
     }
+}
+
+fn value_row(label: &'static str, value: SharedString, cx: &Context<FirmwarePage>) -> Div {
+    let theme = cx.theme();
+    h_flex()
+        .w_full()
+        .gap_4()
+        .justify_between()
+        .text_sm()
+        .child(div().text_color(theme.foreground).child(label))
+        .child(div().text_color(theme.muted_foreground).child(value))
+}
+
+fn file_name(path: &Path) -> SharedString {
+    path.file_name()
+        .map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        )
+        .into()
 }
 
 impl Installation {
@@ -380,48 +363,26 @@ impl Blocks {
 
 impl Render for FirmwarePage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let connected = self.connected_section(cx);
-        let image = self.image_section(cx);
-        let installation = self
-            .installation
-            .as_ref()
-            .map(|installation| Self::installation_section(installation, cx));
-        panel::page(
-            "Firmware",
-            "Install openwoot firmware images through the keyboard's factory bootloader.",
-            cx,
-        )
-        .child(
-            v_flex()
-                .gap_4()
-                .max_w_full()
-                .child(connected)
-                .child(image)
-                .children(installation),
-        )
+        let installed = self.installed_section(cx);
+        let update = self.update_section(cx);
+        let choose = Button::new("choose-image")
+            .outline()
+            .small()
+            .icon(Catalog::FileUp)
+            .label("Choose image…")
+            .disabled(self.installing() || matches!(self.image, Some(Image::Checking(_))))
+            .on_click(cx.listener(|_, _, _, cx| Self::choose_image(cx)));
+        panel::page()
+            .child(panel::heading(Page::Firmware.title(), None, choose, cx))
+            .child(panel::columns(installed, update))
     }
 }
 
 fn plan_lines(plan: &Plan) -> Vec<(&'static str, String)> {
     let mut lines = vec![
-        ("Board", format!("`{}`", plan.board)),
-        (
-            "Image",
-            format!(
-                "`{}`, {} bytes at {}",
-                plan.path.display(),
-                plan.image_len,
-                hex(plan.area.start)
-            ),
-        ),
-        (
-            "Image area",
-            format!("{}-{}", hex(plan.area.start), hex(plan.area.end)),
-        ),
-        (
-            "RAM",
-            format!("{}-{}", hex(plan.ram.start), hex(plan.ram.end)),
-        ),
+        ("Board", plan.board.clone()),
+        ("Size", format!("{} bytes", plan.image_len)),
+        ("Address", hex(plan.area.start)),
         (
             "USB ids",
             format!(
@@ -430,26 +391,20 @@ fn plan_lines(plan: &Plan) -> Vec<(&'static str, String)> {
             ),
         ),
     ];
-    match &plan.update {
-        None => lines.push(("Update mode", "not supported by this board".to_owned())),
-        Some(update) => {
-            lines.push((
-                "Update mode",
-                format!(
-                    "{:04x}:{:04x}, {}",
-                    plan.usb.vendor_id, update.mode.product_id, update.mode.protocol
-                ),
-            ));
-            lines.push((
-                "Upload",
-                format!(
-                    "{} of {} bytes, CRC-24 {}",
-                    block_count(update.upload.block_count()),
-                    update.upload.block_size,
-                    hex(update.upload.crc)
-                ),
-            ));
-        }
+    if let Some(update) = &plan.update {
+        lines.push((
+            "Update mode",
+            format!("{:04x}:{:04x}", plan.usb.vendor_id, update.mode.product_id),
+        ));
+        lines.push((
+            "Upload",
+            format!(
+                "{} of {} bytes",
+                block_count(update.upload.block_count()),
+                update.upload.block_size
+            ),
+        ));
+        lines.push(("CRC-24", hex(update.upload.crc)));
     }
     lines
 }

@@ -32,7 +32,10 @@ use openwoot_protocol::{
 };
 
 use self::{entry::Matrix, number::Field, swatch::Swatch};
-use super::lighting::{hsla_of, level_of, opaque_of, percent_of};
+use super::{
+    Page,
+    lighting::{hsla_of, level_of, opaque_of, percent_of},
+};
 use crate::{
     panel,
     store::{Scope, Store, StoreEvent},
@@ -51,6 +54,7 @@ pub(crate) struct LightbarPage {
     host_sent: Vec<HostSignal>,
     problem: Option<SharedString>,
     brightness: Entity<SliderState>,
+    range: Option<RangeSlider>,
     swatches: Vec<(Swatch, Entity<ColorPickerState>)>,
     fields: Vec<(Field, Entity<InputState>)>,
     generation: u64,
@@ -77,6 +81,11 @@ struct Pending {
     timer: Option<Task<()>>,
 }
 
+struct RangeSlider {
+    state: Entity<SliderState>,
+    _subscription: Subscription,
+}
+
 impl LightbarPage {
     pub(crate) fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let brightness = cx.new(|_| {
@@ -93,7 +102,11 @@ impl LightbarPage {
         let fields: Vec<(Field, Entity<InputState>)> = Field::all()
             .into_iter()
             .map(|field| {
-                let state = cx.new(|cx| InputState::new(window, cx).step(field.step()));
+                let state = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .step(field.step())
+                        .placeholder(field.placeholder())
+                });
                 (field, state)
             })
             .collect();
@@ -110,6 +123,7 @@ impl LightbarPage {
             host_sent: Vec::new(),
             problem: None,
             brightness,
+            range: None,
             swatches,
             fields,
             generation: 0,
@@ -139,8 +153,9 @@ impl LightbarPage {
             cx.subscribe_in(
                 brightness,
                 window,
-                |this, _, event: &SliderEvent, window, cx| {
-                    if let SliderEvent::Release(value) = event {
+                |this, _, event: &SliderEvent, window, cx| match event {
+                    SliderEvent::Change(_) => cx.notify(),
+                    SliderEvent::Release(value) => {
                         let level = level_of(value.end());
                         this.edit_settings(
                             |settings| settings.brightness = Some(level),
@@ -191,7 +206,9 @@ impl LightbarPage {
         let generation = self.generation;
         let keyboard = self.store.read(cx).keyboard();
         let host_signals = keyboard.is_some_and(|keyboard| keyboard.capabilities.host_signals);
-        let has_bar = keyboard.is_some_and(|keyboard| keyboard.capabilities.lightbar_leds > 0);
+        let leds = keyboard.map_or(0, |keyboard| keyboard.capabilities.lightbar_leds);
+        let has_bar = leds > 0;
+        self.prepare_range(leds, window, cx);
         self.profile = self.store.read(cx).active();
         self.settings = None;
         self.global = None;
@@ -246,6 +263,51 @@ impl LightbarPage {
         self.host_ids = None;
         self.problem = None;
         cx.notify();
+    }
+
+    fn prepare_range(&mut self, leds: u8, window: &mut Window, cx: &mut Context<Self>) {
+        let last = leds.saturating_sub(1);
+        if last == 0 {
+            self.range = None;
+            return;
+        }
+        let maximum = f32::from(last);
+        if self
+            .range
+            .as_ref()
+            .is_some_and(|range| (range.state.read(cx).max_value() - maximum).abs() < f32::EPSILON)
+        {
+            return;
+        }
+        let state = cx.new(|_| {
+            SliderState::new()
+                .min(0.0)
+                .max(maximum)
+                .step(1.0)
+                .default_value((0.0, maximum))
+        });
+        let subscription = cx.subscribe_in(
+            &state,
+            window,
+            |this, _, event: &SliderEvent, window, cx| match event {
+                SliderEvent::Change(_) => cx.notify(),
+                SliderEvent::Release(value) => {
+                    let (first, last) = (led_of(value.start()), led_of(value.end()));
+                    this.edit_range(
+                        move |range| {
+                            range.first = first;
+                            range.last = last;
+                        },
+                        window,
+                        cx,
+                    );
+                }
+            },
+        );
+        self.range = Some(RangeSlider {
+            state,
+            _subscription: subscription,
+        });
     }
 
     fn capabilities(&self, cx: &Context<Self>) -> Option<Capabilities> {
@@ -344,6 +406,17 @@ impl LightbarPage {
                 .and_then(|entry| field.text(entry))
                 .unwrap_or_default();
             state.update(cx, |state, cx| state.set_value(text, window, cx));
+        }
+        if let (Some(range), Some(slider)) = (
+            entry
+                .as_ref()
+                .and_then(|entry| entry::lightbar_range(&entry.effect)),
+            &self.range,
+        ) {
+            let value = (f32::from(range.first), f32::from(range.last));
+            slider
+                .state
+                .update(cx, |state, cx| state.set_value(value, window, cx));
         }
     }
 
@@ -470,7 +543,7 @@ impl LightbarPage {
                 Err(invalid) => problem = Some(invalid),
             }
         }
-        self.problem = problem.map(|invalid| format!("Not sent to the keyboard: {invalid}").into());
+        self.problem = problem.map(|invalid| format!("Not sent: {invalid}").into());
         cx.notify();
         if sent.is_empty() {
             return;
@@ -492,30 +565,29 @@ impl LightbarPage {
 }
 
 impl Render for LightbarPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let loading = self.profile.is_some() && self.settings.is_none();
-        panel::page(
-            "Light bar",
-            "Effects of the light bar for the active profile and for every profile. Changes show \
-             on the keyboard at once; Save keeps them.",
-            cx,
-        )
-        .child(
-            v_flex()
-                .gap_4()
-                .max_w_full()
-                .when_some(self.problem.clone(), |this, problem| {
-                    this.child(div().text_sm().text_color(cx.theme().danger).child(problem))
-                })
-                .when(loading, |this| {
-                    this.child(panel::note("Reading the light bar…", cx))
-                })
-                .child(self.bar_section(cx))
-                .child(self.list_section(Owner::Profile, cx))
-                .child(self.list_section(Owner::Global, cx))
-                .child(self.editor_section(cx))
-                .child(self.host_section(cx)),
-        )
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        panel::page()
+            .children(self.preview(window, cx))
+            .child(panel::heading(
+                Page::Lightbar.title(),
+                Some("The LED strip along the top edge of the keyboard.".into()),
+                div(),
+                cx,
+            ))
+            .when_some(self.problem.clone(), |this, problem| {
+                this.child(div().text_xs().text_color(cx.theme().danger).child(problem))
+            })
+            .child(panel::columns(
+                v_flex()
+                    .gap_4()
+                    .children(self.bar_card(cx))
+                    .children(self.effects_card(cx)),
+                v_flex()
+                    .gap_4()
+                    .children(self.effect_card(cx))
+                    .children(self.condition_card(cx))
+                    .children(self.host_card(cx)),
+            ))
     }
 }
 
@@ -533,4 +605,15 @@ fn first_entry(settings: Option<&lightbar::Settings>, global: Option<&Entries>) 
     } else {
         None
     }
+}
+
+fn led_of(position: f32) -> u8 {
+    let clamped = position.round().clamp(0.0, f32::from(u8::MAX));
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the value is rounded and clamped to 0..=255"
+    )]
+    let led = clamped as u8;
+    led
 }

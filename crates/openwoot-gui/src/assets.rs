@@ -8,6 +8,7 @@ gpui_kit::assets::icon_assets!(
         Activity,
         ArrowUpDown,
         Blend,
+        CircleQuestionMark,
         Cable,
         ChartLine,
         Circle,

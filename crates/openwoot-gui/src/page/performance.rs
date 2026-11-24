@@ -10,14 +10,13 @@ use std::{
 
 use gpui_kit::{
     App, AppContext as _, Context, Entity, IntoElement, Modifiers, ParentElement as _, Render,
-    Styled as _, Subscription, Task, Window,
+    Subscription, Task, Window,
     component::{
-        WindowExt as _, h_flex,
+        WindowExt as _,
         notification::Notification,
         slider::{SliderEvent, SliderState},
-        v_flex,
     },
-    px,
+    prelude::FluentBuilder as _,
 };
 use openwoot_protocol::{
     configuration::{Rejection, Validate as _},
@@ -41,7 +40,6 @@ const MIN_DISTANCE_MM: f32 = 0.1;
 const DISTANCE_STEP_MM: f32 = 0.05;
 const SENSITIVITY_RANGE_MM: f32 = 2.5;
 const FALLBACK_TRAVEL_MM: f32 = 4.0;
-const KEYBOARD_MARGIN: f32 = 340.0;
 const POLL_INTERVAL: Duration = Duration::from_millis(33);
 const RETRY_INTERVAL: Duration = Duration::from_millis(500);
 const PRESSED_TRAVEL: u16 = 40;
@@ -267,19 +265,6 @@ impl PerformancePage {
     fn select_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(keyboard) = self.store.read(cx).keyboard() {
             self.selection.select_all(keyboard);
-        }
-        self.selection_changed(window, cx);
-    }
-
-    fn select_own(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(overrides) = &self.overrides {
-            self.selection.set(
-                overrides
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, entry)| effective::has_own_settings(entry))
-                    .map(|(key, _)| key),
-            );
         }
         self.selection_changed(window, cx);
     }
@@ -668,47 +653,18 @@ impl PerformancePage {
 impl Render for PerformancePage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.keep_polling(window, cx);
-        let page = panel::page(
-            "Performance",
-            "Actuation point, Rapid Trigger and scanning of the active profile. With no keys \
-             selected the settings apply to the whole profile; selected keys get their own.",
-            cx,
-        );
+        let page = panel::page();
         let Some(keyboard) = self.store.read(cx).keyboard() else {
             return page;
         };
         if self.settings.is_none() || self.overrides.is_none() {
-            let state = if self.profile.is_some() {
-                "The keyboard did not report the key settings of the active profile."
-            } else {
-                "Reading the key settings…"
-            };
-            return page.child(panel::note(state, cx));
+            return page.when(self.profile.is_some(), |page| {
+                page.child(panel::note("Key settings unavailable", cx))
+            });
         }
-        let width = window.viewport_size().width - px(KEYBOARD_MARGIN);
-        page.child(self.keyboard_section(keyboard, width, cx))
-            .child(
-                h_flex()
-                    .w_full()
-                    .gap_4()
-                    .items_start()
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap_4()
-                            .child(self.actuation_section(keyboard, cx))
-                            .child(self.rapid_trigger_section(keyboard, cx)),
-                    )
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap_4()
-                            .child(self.feedback_section(keyboard, cx))
-                            .child(self.profile_section(cx)),
-                    ),
-            )
+        page.child(self.keyboard(keyboard, window, cx))
+            .child(self.heading(cx))
+            .child(self.cards(keyboard, cx))
     }
 }
 

@@ -1,23 +1,22 @@
 use std::{collections::BTreeSet, rc::Rc};
 
 use gpui_kit::{
-    App, ClickEvent, ElementId, FontWeight, Hsla, InteractiveElement as _, IntoElement, Modifiers,
+    App, ClickEvent, Div, ElementId, Hsla, InteractiveElement as _, IntoElement, Modifiers,
     ParentElement as _, Pixels, RenderOnce, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Window,
-    component::{ActiveTheme as _, h_flex, v_flex},
-    div,
-    prelude::FluentBuilder as _,
-    px, relative,
+    Styled as _, Window, component::ActiveTheme as _, div, prelude::FluentBuilder as _, px,
+    relative,
 };
 use openwoot_protocol::geometry::{self, Shape};
 
-use crate::store::Keyboard;
+use crate::{store::Keyboard, theme};
 
 const UNIT: f32 = 100.0;
-const KEY_GAP: f32 = 3.0;
+const KEY_GAP: f32 = 4.0;
+const CASE_PADDING: u16 = 22;
+const FRAME_PIXELS: f32 = KEY_GAP + 2.0;
 const DEFAULT_KEY_PIXELS: f32 = 48.0;
 const MIN_KEY_PIXELS: f32 = 30.0;
-const MAX_KEY_PIXELS: f32 = 64.0;
+const MAX_KEY_PIXELS: f32 = 60.0;
 
 type KeyClick = Rc<dyn Fn(usize, &ClickEvent, &mut Window, &mut App)>;
 
@@ -133,8 +132,9 @@ impl KeyboardView {
 
     pub(crate) fn fit_width(mut self, available: Pixels) -> Self {
         if self.width > 0 {
-            let units = f32::from(self.width) / UNIT;
-            self.key_pixels = (f32::from(available) / units).clamp(MIN_KEY_PIXELS, MAX_KEY_PIXELS);
+            let units = f32::from(self.width + 2 * CASE_PADDING) / UNIT;
+            let room = f32::from(available) - FRAME_PIXELS;
+            self.key_pixels = (room / units).clamp(MIN_KEY_PIXELS, MAX_KEY_PIXELS);
         }
         self
     }
@@ -155,45 +155,36 @@ impl KeyboardView {
 impl RenderOnce for KeyboardView {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
-        let base_fill = theme.secondary;
-        let foreground = theme.foreground;
-        let muted = theme.muted_foreground;
+        let caps = theme::keycaps();
         let outline = theme.primary;
-        let travel_fill = theme.primary.opacity(0.35);
-        let width = self.scale(self.width);
-        let height = self.scale(self.height);
+        let hover = theme.secondary_hover;
+        let travel_fill = theme.primary.opacity(0.4);
         let gap = px(KEY_GAP);
-        let mut board = div()
-            .id(self.id.clone())
+        let legend_size = px((self.key_pixels * 0.24).clamp(9.0, 13.0));
+        let detail_size = px((self.key_pixels * 0.19).clamp(8.0, 11.0));
+        let mut plate = div()
             .relative()
-            .w(width)
-            .h(height)
+            .w(self.scale(self.width))
+            .h(self.scale(self.height))
             .flex_none();
         for (index, key, face) in &self.keys {
             let selected = self.selection.contains(*index);
-            let fill = face.fill.unwrap_or(base_fill);
-            let text = match face.fill {
-                _ if face.dimmed => muted,
+            let top = face.fill.unwrap_or(caps.top);
+            let legend = match face.fill {
+                _ if face.dimmed => caps.detail.opacity(0.6),
                 Some(fill) => readable_on(fill),
-                None => foreground,
+                None => caps.legend,
             };
-            let parts: Vec<(u16, u16, u16, u16)> = match key.shape {
-                Shape::Rectangle => vec![(key.x, key.y, key.width, key.height)],
-                Shape::IsoEnter => vec![
-                    (key.x, key.y, key.width, geometry::UNIT),
-                    (
-                        key.x.saturating_add(geometry::ISO_ENTER_STEP),
-                        key.y,
-                        key.width.saturating_sub(geometry::ISO_ENTER_STEP),
-                        key.height,
-                    ),
-                ],
+            let detail_color = if face.fill.is_some() {
+                legend.opacity(0.85)
+            } else {
+                caps.detail
             };
-            for (part, (x, y, part_width, part_height)) in parts.into_iter().enumerate() {
+            for (part, (x, y, part_width, part_height)) in key_parts(key).into_iter().enumerate() {
                 let labelled = part == 0;
                 let click = self.on_click.clone();
                 let key_index = *index;
-                board = board.child(
+                plate = plate.child(
                     div()
                         .id(SharedString::from(format!("key-{index}-{part}")))
                         .absolute()
@@ -201,13 +192,19 @@ impl RenderOnce for KeyboardView {
                         .top(self.scale(y) + gap / 2.0)
                         .w(self.scale(part_width) - gap)
                         .h(self.scale(part_height) - gap)
-                        .rounded(px(5.0))
-                        .bg(fill)
+                        .rounded(px(4.0))
+                        .bg(top)
                         .overflow_hidden()
                         .border_2()
-                        .border_color(if selected { outline } else { fill })
+                        .border_color(if selected { outline } else { top })
                         .cursor_pointer()
-                        .hover(|style| style.border_color(outline.opacity(0.6)))
+                        .hover(|style| {
+                            if selected {
+                                style
+                            } else {
+                                style.border_color(hover)
+                            }
+                        })
                         .when_some(face.travel, |this, travel| {
                             this.child(
                                 div()
@@ -220,23 +217,13 @@ impl RenderOnce for KeyboardView {
                             )
                         })
                         .when(labelled, |this| {
-                            this.child(
-                                v_flex()
-                                    .size_full()
-                                    .items_center()
-                                    .justify_center()
-                                    .gap_0p5()
-                                    .text_color(text)
-                                    .child(
-                                        h_flex()
-                                            .text_xs()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child(face.legend.clone()),
-                                    )
-                                    .when_some(face.detail.clone(), |this, detail| {
-                                        this.child(div().text_size(px(9.0)).child(detail))
-                                    }),
-                            )
+                            this.child(legend_layer(
+                                face,
+                                legend,
+                                detail_color,
+                                legend_size,
+                                detail_size,
+                            ))
                         })
                         .when_some(click, move |this, click| {
                             this.on_click(move |event, window, cx| {
@@ -246,8 +233,72 @@ impl RenderOnce for KeyboardView {
                 );
             }
         }
-        board
+        div()
+            .id(self.id.clone())
+            .flex_none()
+            .rounded(px(16.0))
+            .bg(caps.side)
+            .pb(px(10.0))
+            .shadow_lg()
+            .child(
+                div()
+                    .p(self.scale(CASE_PADDING))
+                    .rounded(px(16.0))
+                    .bg(caps.case)
+                    .border_1()
+                    .border_color(caps.plate)
+                    .child(div().p(px(KEY_GAP / 2.0)).child(plate)),
+            )
     }
+}
+
+fn key_parts(key: &geometry::Key) -> Vec<(u16, u16, u16, u16)> {
+    match key.shape {
+        Shape::Rectangle => vec![(key.x, key.y, key.width, key.height)],
+        Shape::IsoEnter => vec![
+            (key.x, key.y, key.width, geometry::UNIT),
+            (
+                key.x.saturating_add(geometry::ISO_ENTER_STEP),
+                key.y,
+                key.width.saturating_sub(geometry::ISO_ENTER_STEP),
+                key.height,
+            ),
+        ],
+    }
+}
+
+fn legend_layer(
+    face: &KeyFace,
+    legend: Hsla,
+    detail_color: Hsla,
+    legend_size: Pixels,
+    detail_size: Pixels,
+) -> Div {
+    div()
+        .absolute()
+        .inset_0()
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(legend_size)
+                .text_color(legend)
+                .child(face.legend.clone()),
+        )
+        .when_some(face.detail.clone(), |this, detail| {
+            this.child(
+                div()
+                    .absolute()
+                    .top(px(1.0))
+                    .left(px(3.0))
+                    .text_size(detail_size)
+                    .text_color(detail_color)
+                    .child(detail),
+            )
+        })
 }
 
 fn placements(keyboard: &Keyboard) -> Vec<(usize, geometry::Key)> {

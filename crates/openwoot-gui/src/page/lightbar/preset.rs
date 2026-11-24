@@ -9,49 +9,40 @@ const CAPS_LOCK_LEDS: u8 = 2;
 
 pub(super) struct Preset {
     pub(super) name: &'static str,
-    pub(super) description: &'static str,
     build: fn(Matrix) -> Entry,
 }
 
 pub(super) const PRESETS: [Preset; 8] = [
     Preset {
         name: "Solid",
-        description: "Lights the light bar in one colour.",
         build: |matrix| plain(Kind::Solid.effect(matrix)),
     },
     Preset {
         name: "Pulse",
-        description: "Fades a colour in and out.",
         build: |matrix| plain(Kind::Blink.effect(matrix)),
     },
     Preset {
-        name: "Sync with Keyboard",
-        description: "Matches the light bar with the colours of the number row.",
+        name: "Sync with keyboard",
         build: |matrix| plain(Kind::Mirror.effect(matrix)),
     },
     Preset {
-        name: "Profile Indicator",
-        description: "Shows the colour and slot of the active profile.",
+        name: "Profile indicator",
         build: |matrix| plain(Kind::ProfileIndicator.effect(matrix)),
     },
     Preset {
-        name: "Caps Lock Indicator",
-        description: "Lights the right end of the light bar while Caps Lock is on.",
+        name: "Caps Lock",
         build: caps_lock,
     },
     Preset {
-        name: "Brightness Change",
-        description: "Shows the brightness for a moment whenever it changes.",
+        name: "Brightness change",
         build: brightness,
     },
     Preset {
-        name: "Key Depth",
-        description: "Shows how deep the deepest key is pressed, as a bar.",
+        name: "Key depth",
         build: key_depth,
     },
     Preset {
-        name: "Typing Speed Meter (KPS)",
-        description: "More LEDs light up the more keys are pressed per second.",
+        name: "Typing speed",
         build: typing_speed,
     },
 ];

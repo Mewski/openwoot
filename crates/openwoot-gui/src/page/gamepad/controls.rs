@@ -61,7 +61,7 @@ pub(super) const GROUPS: [Group; 7] = [
         controls: &[Control::LeftTrigger, Control::RightTrigger],
     },
     Group {
-        title: "Further axes",
+        title: "Axes",
         controls: &[
             Control::Accelerator,
             Control::Rudder,
@@ -73,7 +73,7 @@ pub(super) const GROUPS: [Group; 7] = [
         ],
     },
     Group {
-        title: "Hat switch",
+        title: "Hat",
         controls: &[
             Control::HatUp,
             Control::HatDown,

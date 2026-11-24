@@ -1,25 +1,25 @@
 use gpui_kit::{
-    App, ClickEvent, Context, Div, FontWeight, InteractiveElement as _, IntoElement,
-    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
-    assets::IconName as Catalog,
+    App, ClickEvent, Context, Div, IntoElement, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window,
     component::{
-        ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _,
+        IconName, Sizable as _,
         button::{Button, ButtonVariants as _},
-        h_flex,
         menu::{DropdownMenu as _, PopupMenuItem},
         v_flex,
     },
-    div,
     prelude::FluentBuilder as _,
 };
 use openwoot_protocol::lightbar::{Entry, MAX_ENTRIES};
 
 use super::{
     Chosen, LightbarPage, Owner,
-    entry::{self, KINDS, Kind},
+    entry::{self, Kind},
     preset::PRESETS,
 };
-use crate::panel;
+use crate::{
+    page::lighting::{add_button, pill},
+    panel,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Move {
@@ -33,32 +33,8 @@ enum Move {
 impl Owner {
     const fn title(self) -> &'static str {
         match self {
-            Self::Profile => "Profile effects",
-            Self::Global => "Global effects",
-        }
-    }
-
-    const fn description(self) -> &'static str {
-        match self {
-            Self::Profile => "Shown while this profile is active.",
-            Self::Global => {
-                "Shared by every profile that inherits them, drawn below the profile's own \
-                 effects. Save keeps them for the whole keyboard."
-            }
-        }
-    }
-
-    const fn empty(self) -> &'static str {
-        match self {
-            Self::Profile => "No profile effects active",
-            Self::Global => "No global effects active",
-        }
-    }
-
-    const fn full(self) -> &'static str {
-        match self {
-            Self::Profile => "You've reached the maximum number of effects!",
-            Self::Global => "You've reached the maximum number of global effects!",
+            Self::Profile => "Profile",
+            Self::Global => "Global",
         }
     }
 
@@ -78,187 +54,131 @@ impl Owner {
 }
 
 impl Move {
-    const ALL: [Self; 5] = [
-        Self::Up,
-        Self::Down,
-        Self::Duplicate,
-        Self::Transfer,
-        Self::Delete,
-    ];
-
-    const fn key(self) -> &'static str {
-        match self {
-            Self::Up => "up",
-            Self::Down => "down",
-            Self::Duplicate => "duplicate",
-            Self::Transfer => "transfer",
-            Self::Delete => "delete",
-        }
-    }
-
-    const fn tooltip(self, owner: Owner) -> &'static str {
+    const fn label(self, owner: Owner) -> &'static str {
         match (self, owner) {
             (Self::Up, _) => "Move up",
             (Self::Down, _) => "Move down",
             (Self::Duplicate, _) => "Duplicate",
-            (Self::Transfer, Owner::Profile) => "Move to Global Effects",
-            (Self::Transfer, Owner::Global) => "Move to Profile Effects",
+            (Self::Transfer, Owner::Profile) => "Move to global",
+            (Self::Transfer, Owner::Global) => "Move to profile",
             (Self::Delete, _) => "Delete",
         }
     }
 }
 
 impl LightbarPage {
-    pub(super) fn list_section(&self, owner: Owner, cx: &Context<Self>) -> Div {
-        let entries = self.entries(owner);
-        let count = entries.map_or(0, |entries| entries.len());
-        let full = count >= MAX_ENTRIES;
-        panel::section(owner.title(), Some(owner.description().into()), cx)
-            .child(
-                v_flex().gap_1().children(
-                    entries
-                        .into_iter()
-                        .flat_map(|entries| entries.iter().enumerate())
-                        .map(|(index, entry)| self.entry_row(owner, index, entry, count, cx)),
-                ),
+    pub(super) fn effects_card(&self, cx: &Context<Self>) -> Option<Div> {
+        self.settings.as_ref()?;
+        Some(
+            panel::section(
+                "Effects",
+                Some("Global effects draw first; later effects draw on top.".into()),
+                cx,
             )
-            .when(entries.is_some() && count == 0, |this| {
-                this.child(panel::note(owner.empty(), cx))
-            })
-            .when(full, |this| this.child(panel::note(owner.full(), cx)))
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(self.add_menu(owner, true, entries.is_none() || full, cx))
-                    .child(self.add_menu(owner, false, entries.is_none() || full, cx)),
-            )
+            .children(self.effect_group(Owner::Profile, cx))
+            .children(self.effect_group(Owner::Global, cx)),
+        )
     }
 
-    fn entry_row(
+    fn effect_group(&self, owner: Owner, cx: &Context<Self>) -> Option<Div> {
+        let entries = self.entries(owner)?;
+        let count = entries.len();
+        Some(panel::field(
+            owner.title(),
+            v_flex()
+                .w_full()
+                .gap_2()
+                .children(
+                    entries
+                        .iter()
+                        .enumerate()
+                        .map(|(index, entry)| self.entry_pill(owner, index, entry, count, cx)),
+                )
+                .when(count < MAX_ENTRIES, |this| {
+                    this.child(self.add_menu(owner, cx))
+                }),
+            cx,
+        ))
+    }
+
+    fn entry_pill(
         &self,
         owner: Owner,
         index: usize,
         entry: &Entry,
         count: usize,
         cx: &Context<Self>,
-    ) -> Div {
-        let theme = cx.theme();
+    ) -> impl IntoElement {
         let chosen = Chosen { owner, index };
-        let selected = self.chosen == Some(chosen);
-        let condition = entry
-            .condition
-            .as_ref()
-            .map_or_else(|| "Always".to_owned(), entry::condition_summary);
-        let kind = Kind::of(&entry.effect);
-        h_flex()
-            .w_full()
-            .gap_2()
-            .items_center()
-            .px_3()
-            .py_1()
-            .rounded(theme.radius)
-            .border_1()
-            .border_color(if selected {
-                theme.primary
-            } else {
-                theme.border
-            })
-            .child(
-                h_flex()
-                    .id(SharedString::from(format!("{}-entry-{index}", owner.key())))
-                    .flex_1()
-                    .min_w_0()
-                    .gap_3()
-                    .items_center()
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.choose(chosen, window, cx);
-                    }))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(format!("{}", index + 1)),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(kind.name()),
-                    )
-                    .child(
-                        v_flex()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .truncate()
-                                    .child(entry::effect_summary(&entry.effect)),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .truncate()
-                                    .text_color(theme.muted_foreground)
-                                    .child(condition),
-                            ),
-                    ),
-            )
-            .children(Move::ALL.map(|step| {
-                let blocked = match step {
-                    Move::Up => index == 0,
-                    Move::Down => index + 1 == count,
-                    Move::Duplicate => count >= MAX_ENTRIES,
-                    Move::Transfer => self
-                        .entries(owner.other())
-                        .is_none_or(|other| other.len() >= MAX_ENTRIES),
-                    Move::Delete => false,
-                };
-                let icon: Icon = match step {
-                    Move::Up => IconName::ArrowUp.into(),
-                    Move::Down => IconName::ArrowDown.into(),
-                    Move::Duplicate => IconName::Copy.into(),
-                    Move::Transfer => Catalog::ArrowUpDown.into(),
-                    Move::Delete => IconName::Delete.into(),
-                };
-                Button::new(SharedString::from(format!(
-                    "{}-entry-{}-{index}",
-                    owner.key(),
-                    step.key()
-                )))
-                .icon(icon)
-                .xsmall()
-                .ghost()
-                .tooltip(step.tooltip(owner))
-                .disabled(blocked)
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.move_entry(owner, index, step, window, cx);
-                }))
-            }))
+        let mut summary = entry::effect_summary(&entry.effect);
+        if let Some(condition) = &entry.condition {
+            summary = format!("{summary} · {}", entry::condition_summary(condition));
+        }
+        pill(
+            format!("{}-entry-{index}", owner.key()),
+            Kind::of(&entry.effect).name(),
+            Some(summary.into()),
+            self.chosen == Some(chosen),
+            false,
+            cx,
+        )
+        .on_click(cx.listener(move |this, _, window, cx| {
+            this.choose(chosen, window, cx);
+        }))
+        .child(self.entry_menu(owner, index, count, cx))
     }
 
-    fn add_menu(
+    fn entry_menu(
         &self,
         owner: Owner,
-        presets: bool,
-        disabled: bool,
+        index: usize,
+        count: usize,
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
         let page = cx.entity().downgrade();
-        let matrix = self.matrix(cx);
-        let (id, label, icon) = if presets {
-            ("presets", "Effect presets", Catalog::Sparkles)
-        } else {
-            ("blank", "Add new effect", Catalog::Plus)
+        let other_full = self
+            .entries(owner.other())
+            .is_none_or(|other| other.len() >= MAX_ENTRIES);
+        let blocked = move |step: Move| match step {
+            Move::Up => index == 0,
+            Move::Down => index + 1 >= count,
+            Move::Duplicate => count >= MAX_ENTRIES,
+            Move::Transfer => other_full,
+            Move::Delete => false,
         };
-        Button::new(SharedString::from(format!("{}-add-{id}", owner.key())))
-            .icon(icon)
-            .label(label)
-            .small()
-            .outline()
-            .dropdown_caret(true)
-            .disabled(disabled)
-            .dropdown_menu(move |menu, _, _| {
+        Button::new(SharedString::from(format!(
+            "{}-entry-menu-{index}",
+            owner.key()
+        )))
+        .icon(IconName::EllipsisVertical)
+        .ghost()
+        .xsmall()
+        .dropdown_menu(move |menu, _, _| {
+            let item = |step: Move| {
+                let page = page.clone();
+                PopupMenuItem::new(step.label(owner))
+                    .disabled(blocked(step))
+                    .on_click(move |_, window, cx| {
+                        page.update(cx, |page, cx| {
+                            page.move_entry(owner, index, step, window, cx);
+                        })
+                        .ok();
+                    })
+            };
+            menu.item(item(Move::Up))
+                .item(item(Move::Down))
+                .item(item(Move::Duplicate))
+                .item(item(Move::Transfer))
+                .separator()
+                .item(item(Move::Delete))
+        })
+    }
+
+    fn add_menu(&self, owner: Owner, cx: &Context<Self>) -> impl IntoElement + use<> {
+        let page = cx.entity().downgrade();
+        let matrix = self.matrix(cx);
+        add_button(format!("{}-add", owner.key()), "Add effect", cx).dropdown_menu(
+            move |menu, _, _| {
                 let add = |entry: Entry| {
                     let page = page.clone();
                     move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
@@ -268,30 +188,20 @@ impl LightbarPage {
                         .ok();
                     }
                 };
-                if presets {
-                    PRESETS.iter().fold(menu, |menu, preset| {
-                        let (name, description) = (preset.name, preset.description);
+                PRESETS
+                    .iter()
+                    .fold(menu, |menu, preset| {
                         menu.item(
-                            PopupMenuItem::element(move |_, cx| {
-                                v_flex().py_0p5().child(div().text_sm().child(name)).child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(description),
-                                )
-                            })
-                            .on_click(add(preset.entry(matrix))),
+                            PopupMenuItem::new(preset.name).on_click(add(preset.entry(matrix))),
                         )
                     })
-                } else {
-                    KINDS.iter().fold(menu, |menu, kind| {
-                        menu.item(PopupMenuItem::new(kind.name()).on_click(add(Entry {
-                            condition: None,
-                            effect: kind.effect(matrix),
-                        })))
-                    })
-                }
-            })
+                    .separator()
+                    .item(PopupMenuItem::new(Kind::Custom.name()).on_click(add(Entry {
+                        condition: None,
+                        effect: Kind::Custom.effect(matrix),
+                    })))
+            },
+        )
     }
 
     pub(super) fn choose(&mut self, chosen: Chosen, window: &mut Window, cx: &mut Context<Self>) {

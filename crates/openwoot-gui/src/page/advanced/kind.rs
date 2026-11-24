@@ -42,10 +42,19 @@ impl Point {
 
     pub(crate) const fn title(self) -> &'static str {
         match self {
-            Self::Press => "Start of press",
-            Self::BottomOut => "Fully pressed",
-            Self::Lift => "Leaving full press",
-            Self::Release => "Fully released",
+            Self::Press => "Press",
+            Self::BottomOut => "Bottom",
+            Self::Lift => "Lift",
+            Self::Release => "Release",
+        }
+    }
+
+    pub(crate) const fn help(self) -> &'static str {
+        match self {
+            Self::Press => "The key passes its actuation point",
+            Self::BottomOut => "The key is fully pressed",
+            Self::Lift => "The key rises from full press",
+            Self::Release => "The key is released",
         }
     }
 
@@ -89,46 +98,31 @@ impl Kind {
 
     pub(crate) const fn title(self) -> &'static str {
         match self {
-            Self::DynamicKeystroke => "Dynamic Keystroke (DKS)",
-            Self::ModTap => "Mod Tap",
-            Self::Toggle => "Toggle Key",
+            Self::DynamicKeystroke => "Dynamic Keystroke",
+            Self::ModTap => "Mod-Tap",
+            Self::Toggle => "Toggle",
             Self::DepthPriority => "Rappy Snappy",
-            Self::Socd => "Snappy Tappy (SOCD)",
+            Self::Socd => "Snappy Tappy",
         }
     }
 
     pub(crate) const fn badge(self) -> &'static str {
         match self {
             Self::DynamicKeystroke => "DKS",
-            Self::ModTap => "Mod Tap",
-            Self::Toggle => "Toggle",
-            Self::DepthPriority => "Rappy",
+            Self::ModTap => "MT",
+            Self::Toggle => "TGL",
+            Self::DepthPriority => "RS",
             Self::Socd => "SOCD",
         }
     }
 
-    pub(crate) const fn description(self) -> &'static str {
+    pub(crate) const fn help(self) -> &'static str {
         match self {
-            Self::DynamicKeystroke => {
-                "4 different actions on a single key based on key position. Activate 1 up to 4 \
-                 bindings on 4 different parts of the key press."
-            }
-            Self::ModTap => {
-                "2 different actions on a single key based on press behaviour. Hold the key down \
-                 for the first action or tap the key for the second action."
-            }
-            Self::Toggle => {
-                "Lock an action between its on and off state by tapping the key. Activate the \
-                 normal key behaviour by holding down the key."
-            }
-            Self::DepthPriority => {
-                "Rappy Snappy monitors the 2 selected keys and activates whichever key is pressed \
-                 down further."
-            }
-            Self::Socd => {
-                "Snappy Tappy (SOCD Cleaning) monitors the 2 selected keys and activates them \
-                 based on your chosen settings."
-            }
+            Self::DynamicKeystroke => "Up to four actions at four points of one key press",
+            Self::ModTap => "One action on tap, another on hold",
+            Self::Toggle => "Tap to latch the action, hold for normal behaviour",
+            Self::DepthPriority => "Of two keys, the one pressed further registers",
+            Self::Socd => "Decides which of two keys registers when both are pressed",
         }
     }
 
@@ -196,12 +190,21 @@ pub(crate) const fn event_label(event: StrokeEvent) -> &'static str {
     }
 }
 
-pub(crate) const fn event_description(event: StrokeEvent) -> &'static str {
+pub(crate) const fn event_name(event: StrokeEvent) -> &'static str {
     match event {
-        StrokeEvent::Nothing => "Nothing: the action keeps its state",
-        StrokeEvent::Press => "Press: hold the action down until a later Release",
-        StrokeEvent::Release => "Release: let go of the action",
-        StrokeEvent::Tap => "Tap: press and release the action once",
+        StrokeEvent::Nothing => "None",
+        StrokeEvent::Press => "Press",
+        StrokeEvent::Release => "Release",
+        StrokeEvent::Tap => "Tap",
+    }
+}
+
+pub(crate) const fn event_help(event: StrokeEvent) -> &'static str {
+    match event {
+        StrokeEvent::Nothing => "Does nothing",
+        StrokeEvent::Press => "Holds the action down until a Release",
+        StrokeEvent::Release => "Lets go of the action",
+        StrokeEvent::Tap => "Presses and releases the action once",
     }
 }
 
@@ -239,89 +242,36 @@ pub(crate) fn interrupts() -> [Choice<Interrupt>; 4] {
     [
         choice(
             Interrupt::Auto,
-            "Hold Key, if it is a modifier",
-            "Uses the hold function when it's a modifier like Shift, Ctrl, or Alt, or a Fn layer.",
+            "Modifier",
+            "Hold when the hold action is a modifier or Fn layer",
         ),
         choice(
             Interrupt::Tap,
-            "Tap Key",
-            "Always uses the tap function. Use this if you're setting up home row modifiers.",
+            "Tap",
+            "Always tap; suits home row modifiers",
         ),
-        choice(
-            Interrupt::Hold,
-            "Hold Key",
-            "Always uses the hold function.",
-        ),
-        choice(
-            Interrupt::Ignore,
-            "Never",
-            "Disables Just-in-time. Your key waits for the full delay before activating.",
-        ),
+        choice(Interrupt::Hold, "Hold", "Always hold"),
+        choice(Interrupt::Ignore, "Never", "Wait for the full hold time"),
     ]
 }
 
-pub(crate) fn socd_resolutions(first: &str, second: &str) -> [Choice<Resolution>; 5] {
+pub(crate) fn socd_resolutions(first: &str, second: &str) -> [(Resolution, String); 5] {
     [
-        Choice {
-            value: Resolution::LastPressed,
-            title: "Last Input Priority".to_owned(),
-            description: "The last activated key overrides the previous.".to_owned(),
-        },
-        Choice {
-            value: Resolution::First,
-            title: format!("Absolute Priority ({first} Key)"),
-            description: format!(
-                "The {first} Key will always take priority over the {second} Key."
-            ),
-        },
-        Choice {
-            value: Resolution::Second,
-            title: format!("Absolute Priority ({second} Key)"),
-            description: format!(
-                "The {second} Key will always take priority over the {first} Key."
-            ),
-        },
-        Choice {
-            value: Resolution::Neither,
-            title: "Neutral".to_owned(),
-            description: "When both keys are activated, neither are registered.".to_owned(),
-        },
-        Choice {
-            value: Resolution::Both,
-            title: "No cleaning".to_owned(),
-            description: "When both keys are activated, both are registered.".to_owned(),
-        },
+        (Resolution::LastPressed, "Last input priority".to_owned()),
+        (Resolution::First, format!("{first} priority")),
+        (Resolution::Second, format!("{second} priority")),
+        (Resolution::Neither, "Neutral".to_owned()),
+        (Resolution::Both, "No cleaning".to_owned()),
     ]
 }
 
-pub(crate) fn bottomed_out_resolutions(first: &str, second: &str) -> [Choice<Resolution>; 5] {
+pub(crate) fn bottomed_out_resolutions(first: &str, second: &str) -> [(Resolution, String); 5] {
     [
-        Choice {
-            value: Resolution::Both,
-            title: "Both keys".to_owned(),
-            description: "When both keys are fully pressed, both will be activated.".to_owned(),
-        },
-        Choice {
-            value: Resolution::Neither,
-            title: "Neither key".to_owned(),
-            description: "When both keys are fully pressed, neither is activated.".to_owned(),
-        },
-        Choice {
-            value: Resolution::First,
-            title: format!("The {first} Key"),
-            description: format!("When both keys are fully pressed, only {first} is activated."),
-        },
-        Choice {
-            value: Resolution::Second,
-            title: format!("The {second} Key"),
-            description: format!("When both keys are fully pressed, only {second} is activated."),
-        },
-        Choice {
-            value: Resolution::LastPressed,
-            title: "Last Input Priority".to_owned(),
-            description: "When both keys are fully pressed, the one pressed last is activated."
-                .to_owned(),
-        },
+        (Resolution::Both, "Both".to_owned()),
+        (Resolution::Neither, "Neither".to_owned()),
+        (Resolution::First, first.to_owned()),
+        (Resolution::Second, second.to_owned()),
+        (Resolution::LastPressed, "Last pressed".to_owned()),
     ]
 }
 

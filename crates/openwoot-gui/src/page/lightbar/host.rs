@@ -1,7 +1,7 @@
 use gpui_kit::{
     Context, Div, ParentElement as _, SharedString, Styled as _, Window,
     component::{
-        Sizable as _,
+        IconName, Sizable as _,
         button::{Button, ButtonVariants as _},
         h_flex,
     },
@@ -20,21 +20,20 @@ use super::{
 use crate::{panel, store::Scope};
 
 impl LightbarPage {
-    pub(super) fn host_section(&self, cx: &Context<Self>) -> Div {
-        if !self
+    pub(super) fn host_card(&self, cx: &Context<Self>) -> Option<Div> {
+        let supported = self
             .capabilities(cx)
-            .is_some_and(|capabilities| capabilities.host_signals)
-        {
-            return div();
+            .is_some_and(|capabilities| capabilities.host_signals);
+        if !supported || self.settings.is_none() {
+            return None;
         }
         let bound = match &self.host_ids {
-            Some(ids) if ids.is_empty() => "none".to_owned(),
-            Some(ids) => ids
+            Some(ids) if !ids.is_empty() => ids
                 .iter()
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(", "),
-            None => "not read".to_owned(),
+            Some(_) | None => "None".to_owned(),
         };
         let sent = self
             .host_sent
@@ -42,59 +41,49 @@ impl LightbarPage {
             .map(|signal| format!("{} = {}", signal.id, signal.value))
             .collect::<Vec<_>>()
             .join(", ");
-        panel::section(
-            "Host signals",
-            Some(
-                "Values that programs on the computer send to the light bar by id, for progress \
-                 bars and conditions on host signals. Set one by hand here to try an effect; the \
-                 keyboard sets every host signal to 0 when it is plugged in again or the \
-                 computer restarts."
-                    .into(),
-            ),
-            cx,
-        )
-        .child(panel::row(
-            "Bound host signals",
-            Some("The ids the shown effects use, in the order they were bound.".into()),
-            h_flex()
-                .gap_3()
-                .items_center()
-                .child(div().text_sm().child(bound))
-                .child(
-                    Button::new("host-refresh")
-                        .label("Refresh")
-                        .xsmall()
-                        .ghost()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.refresh_host_ids(window, cx);
-                        })),
-                ),
-            cx,
-        ))
-        .child(panel::row(
-            "Set a value",
-            None,
-            h_flex()
-                .gap_2()
-                .items_center()
-                .child(div().text_sm().child("Id"))
-                .child(self.number(Field::HostId))
-                .child(div().text_sm().child("Value"))
-                .child(self.number(Field::HostValue))
-                .child(
-                    Button::new("host-send")
-                        .label("Send")
-                        .small()
-                        .primary()
-                        .on_click(cx.listener(|this, _, window, cx| {
+        Some(
+            panel::section(
+                "Host signals",
+                Some("Values programs send by id; cleared on restart.".into()),
+                cx,
+            )
+            .child(panel::toggle(
+                "Bound",
+                None,
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(div().text_sm().child(bound))
+                    .child(
+                        Button::new("host-refresh")
+                            .icon(IconName::RefreshCw)
+                            .ghost()
+                            .xsmall()
+                            .tooltip("Refresh")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.refresh_host_ids(window, cx);
+                            })),
+                    ),
+                cx,
+            ))
+            .child(panel::field(
+                "Set value",
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(self.number(Field::HostId, ""))
+                    .child(self.number(Field::HostValue, ""))
+                    .child(Button::new("host-send").label("Send").on_click(cx.listener(
+                        |this, _, window, cx| {
                             this.send_host_value(window, cx);
-                        })),
-                ),
-            cx,
-        ))
-        .when(!sent.is_empty(), |this| {
-            this.child(panel::note(SharedString::from(format!("Sent: {sent}")), cx))
-        })
+                        },
+                    ))),
+                cx,
+            ))
+            .when(!sent.is_empty(), |this| {
+                this.child(panel::note(SharedString::from(format!("Sent {sent}")), cx))
+            }),
+        )
     }
 
     pub(super) fn refresh_host_ids(&mut self, window: &mut Window, cx: &mut Context<Self>) {

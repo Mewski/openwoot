@@ -118,7 +118,7 @@ pub(super) fn chart(chart: Chart, cx: &App) -> Div {
         .child(
             h_flex()
                 .gap_2()
-                .child(axis_label("Analog value"))
+                .child(axis_label("Output"))
                 .child(div().flex_1())
                 .child(axis_label("100%")),
         )
@@ -136,7 +136,7 @@ pub(super) fn chart(chart: Chart, cx: &App) -> Div {
                 .gap_2()
                 .child(axis_label("0%"))
                 .child(div().flex_1())
-                .child(axis_label("How deep the key is pressed"))
+                .child(axis_label("Travel"))
                 .child(div().flex_1())
                 .child(axis_label("100%")),
         )

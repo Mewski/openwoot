@@ -1,10 +1,12 @@
 mod assets;
+mod connection;
 mod device;
 mod keyboard;
 mod page;
 mod panel;
 mod shell;
 mod store;
+mod theme;
 mod usage;
 
 use std::{
@@ -12,11 +14,7 @@ use std::{
     process::ExitCode,
 };
 
-use gpui_kit::{
-    AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOptions,
-    component::{Theme, ThemeMode},
-    px, size,
-};
+use gpui_kit::{AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 
 use crate::{device::Device, shell::Shell, store::Store};
 
@@ -36,7 +34,7 @@ fn main() -> ExitCode {
         .with_assets(assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            Theme::change(ThemeMode::Dark, None, cx);
+            theme::apply(cx);
             let store = cx.new(|cx| Store::new(device, presence, cx));
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(

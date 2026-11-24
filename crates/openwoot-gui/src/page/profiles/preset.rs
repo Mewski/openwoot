@@ -34,35 +34,6 @@ pub(super) struct Movement {
 impl Preset {
     pub(super) const ALL: [Self; 4] = [Self::Fps, Self::AnalogMovement, Self::Racing, Self::Custom];
 
-    pub(super) const fn title(self) -> &'static str {
-        match self {
-            Self::Fps => "FPS Game Profile",
-            Self::AnalogMovement => "Analog Movement Profile",
-            Self::Racing => "Racing Profile",
-            Self::Custom => "Custom Profile",
-        }
-    }
-
-    pub(super) const fn description(self) -> &'static str {
-        match self {
-            Self::Fps => {
-                "Optimized for first-person shooter games: keys actuate at 1.0 mm with Rapid \
-                 Trigger at 0.2 mm, W A S D at 0.4 mm and the Windows key only at 3.0 mm."
-            }
-            Self::AnalogMovement => {
-                "Designed for smooth, analog movement: W A S D drive the left stick of the \
-                 gamepad. Needs the XInput or gamepad mode on the Gamepad page."
-            }
-            Self::Racing => {
-                "Made for racing games: W and S drive the right and left triggers, A and D steer \
-                 with the left stick. Needs the XInput or gamepad mode on the Gamepad page."
-            }
-            Self::Custom => {
-                "A blank slate for customization: the keyboard's defaults for a new profile."
-            }
-        }
-    }
-
     pub(super) const fn name(self) -> &'static str {
         match self {
             Self::Fps => "FPS",

@@ -55,6 +55,14 @@ impl Field {
         }
     }
 
+    pub(super) const fn placeholder(self) -> &'static str {
+        match self {
+            Self::HostId | Self::MeterHost | Self::SignalHost(_) | Self::OperandHost(_) => "Id",
+            Self::HostValue => "Value",
+            Self::Maximum | Self::Period | Self::Time(_) | Self::Constant(_) => "",
+        }
+    }
+
     pub(super) fn parse(self, text: &str) -> Result<Number, String> {
         let text = text.trim();
         match self {

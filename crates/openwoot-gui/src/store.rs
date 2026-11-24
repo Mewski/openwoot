@@ -28,6 +28,7 @@ pub(crate) struct Store {
     device: Device,
     link: Link,
     keyboard: Option<Keyboard>,
+    searching: bool,
     _presence: Task<()>,
     _poll: Task<()>,
 }
@@ -105,6 +106,7 @@ impl Store {
             device,
             link: Link::Searching,
             keyboard: None,
+            searching: false,
             _presence: presence_task,
             _poll: poll,
         }
@@ -120,6 +122,16 @@ impl Store {
 
     pub(crate) fn device(&self) -> Device {
         self.device.clone()
+    }
+
+    pub(crate) const fn is_searching(&self) -> bool {
+        self.searching
+    }
+
+    pub(crate) fn search(&mut self, cx: &mut Context<Self>) {
+        self.searching = true;
+        self.device.search();
+        cx.notify();
     }
 
     pub(crate) fn active(&self) -> Option<Slot> {
@@ -341,6 +353,7 @@ impl Store {
     }
 
     fn on_presence(&mut self, presence: Presence, cx: &mut Context<Self>) {
+        self.searching = false;
         match presence {
             Presence::Connected { name, version } => {
                 self.link = Link::Loading;

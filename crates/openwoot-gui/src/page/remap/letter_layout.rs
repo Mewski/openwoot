@@ -33,6 +33,16 @@ impl LetterLayout {
         }
     }
 
+    pub(crate) const fn sample(self) -> &'static str {
+        match self {
+            Self::Qwerty => "QWERT",
+            Self::Dvorak => "AOEUI",
+            Self::Colemak => "ARSTD",
+            Self::Workman => "ASHTG",
+            Self::Alphabetical => "ABCDE",
+        }
+    }
+
     const fn keys(self) -> &'static str {
         match self {
             Self::Qwerty => QWERTY_KEYS,

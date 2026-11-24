@@ -306,15 +306,6 @@ pub(crate) fn name(action: Action) -> Cow<'static, str> {
     describe(action, Length::Long)
 }
 
-pub(crate) const fn layer_name(layer: Layer) -> &'static str {
-    match layer {
-        Layer::Base => "Base layer",
-        Layer::One => "Fn layer 1",
-        Layer::Two => "Fn layer 2",
-        Layer::Three => "Fn layer 3",
-    }
-}
-
 pub(crate) fn control(control: Control) -> (&'static str, &'static str) {
     GAMEPAD
         .iter()

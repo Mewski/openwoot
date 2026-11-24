@@ -120,6 +120,18 @@ impl Device {
             answer.recv().await.map_err(|_| Failure::Stopped)?
         }
     }
+
+    pub(crate) fn search(&self) {
+        let job: Job = Box::new(|link: &mut Link| {
+            Box::pin(async move {
+                if link.connection.is_none() {
+                    link.announced = Announced::Nothing;
+                    link.connect().await;
+                }
+            })
+        });
+        self.jobs.try_send(job).ok();
+    }
 }
 
 impl Link {

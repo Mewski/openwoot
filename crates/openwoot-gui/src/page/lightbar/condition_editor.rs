@@ -1,99 +1,130 @@
 use gpui_kit::{
-    Context, Div, FontWeight, IntoElement, ParentElement as _, SharedString, Styled as _, Window,
+    App, ClickEvent, Context, Div, IntoElement, ParentElement as _, SharedString, Styled as _,
+    Window,
     component::{
-        ActiveTheme as _, IconName, Selectable as _, Sizable as _,
+        Sizable as _,
         button::{Button, ButtonVariants as _},
         h_flex,
         menu::{DropdownMenu as _, PopupMenuItem},
-        switch::Switch,
-        v_flex,
     },
     div,
     prelude::FluentBuilder as _,
+    px,
 };
 use openwoot_protocol::lightbar::{
-    Builtin, Comparator, Comparison, Condition, Entry, Group, Logic, Operand, Signal, Term,
+    Comparator, Comparison, Condition, Group, Logic, Operand, Signal, Term,
 };
 
 use super::{
     LightbarPage,
-    entry::{self, COMPARATORS, LOGICS, Spot, TIMINGS, Timing},
+    entry::{self, COMPARATORS, Spot, TIMINGS, Timing},
     entry_editor::Socket,
     number::Field,
 };
-use crate::panel;
+use crate::{
+    page::lighting::{add_button, segmented, select},
+    panel,
+};
+
+const COMPARATOR_WIDTH: f32 = 64.0;
+
+const SHOW: [&str; 2] = ["Always", "Conditional"];
+const COMBINE: [(Logic, &str); 2] = [(Logic::All, "All"), (Logic::Any, "Any")];
 
 impl LightbarPage {
-    pub(super) fn condition_rows(&self, entry: &Entry, cx: &Context<Self>) -> Div {
-        let theme = cx.theme();
+    pub(super) fn condition_card(&self, cx: &Context<Self>) -> Option<Div> {
+        let entry = self.chosen_entry()?;
         let condition = entry.condition.as_ref();
-        v_flex()
-            .gap_2()
-            .pt_3()
-            .border_t_1()
-            .border_color(theme.border)
-            .child(
-                v_flex()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .text_base()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Conditions"),
-                    )
-                    .child(div().text_sm().text_color(theme.muted_foreground).child(
-                        "Set up the conditions that decide when the effect shows: while a \
-                                 data point matches, for a while after it starts to match, or for \
-                                 a while after it changes. Without a condition the effect always \
-                                 shows.",
-                    )),
-            )
-            .child(panel::row(
-                "Show only under a condition",
-                None,
-                Switch::new("condition-enabled")
-                    .checked(condition.is_some())
-                    .on_change(cx.listener(|this, enabled: &bool, window, cx| {
-                        let enabled = *enabled;
+        Some(
+            panel::section("Condition", None, cx)
+                .child(panel::toggle(
+                    "Show",
+                    None,
+                    segmented(
+                        "condition-show",
+                        SHOW,
+                        usize::from(condition.is_some()),
+                        cx.listener(|this, index: &usize, window, cx| {
+                            let conditional = *index == 1;
+                            this.edit_condition(
+                                |condition| {
+                                    if condition.is_some() != conditional {
+                                        *condition = conditional.then(entry::default_condition);
+                                    }
+                                },
+                                window,
+                                cx,
+                            );
+                        }),
+                    ),
+                    cx,
+                ))
+                .when_some(condition, |this, condition| {
+                    this.children(self.condition_rows(condition, cx))
+                }),
+        )
+    }
+
+    fn condition_rows(&self, condition: &Condition, cx: &Context<Self>) -> Vec<Div> {
+        let groups = condition.groups.len();
+        let mut rows = Vec::new();
+        if groups > 1 {
+            rows.push(combine_row("condition-logic", condition.logic, None, cx));
+        }
+        for (index, group) in condition.groups.iter().enumerate() {
+            if groups > 1 {
+                rows.push(sub_header(
+                    format!("Group {}", index + 1),
+                    format!("remove-group-{index}"),
+                    cx.listener(move |this, _, window, cx| {
                         this.edit_condition(
-                            |condition| *condition = enabled.then(entry::default_condition),
+                            |condition| {
+                                let kept = condition
+                                    .as_mut()
+                                    .is_none_or(|kept| entry::remove_group(kept, index));
+                                if !kept {
+                                    *condition = None;
+                                }
+                            },
                             window,
                             cx,
                         );
-                    })),
-                cx,
-            ))
-            .when_some(condition, |this, condition| {
-                this.child(self.condition_body(condition, cx))
-            })
-    }
-
-    fn condition_body(&self, condition: &Condition, cx: &Context<Self>) -> Div {
-        v_flex()
-            .gap_2()
-            .child(logic_row(
-                "Condition type",
-                "How the groups combine.",
-                condition.logic,
-                None,
-                cx,
-            ))
-            .children(
-                condition
-                    .groups
-                    .iter()
-                    .enumerate()
-                    .map(|(index, group)| self.group_box(index, group, cx)),
-            )
-            .when(entry::can_add_group(condition), |this| {
-                this.child(
-                    h_flex().child(
-                        Button::new("add-group")
-                            .icon(IconName::Plus)
-                            .label("Add group")
-                            .xsmall()
-                            .outline()
-                            .on_click(cx.listener(|this, _, window, cx| {
+                    }),
+                    cx,
+                ));
+            }
+            rows.extend(self.group_rows(index, group, cx));
+        }
+        let can_add_group = entry::can_add_group(condition);
+        let roomy = condition.groups.iter().rposition(entry::can_add_term);
+        rows.push(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .when_some(roomy, |this, roomy| {
+                    this.child(div().flex_1().child(
+                        add_button("add-term", "Add condition", cx).on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.edit_condition(
+                                    |condition| {
+                                        if let Some(group) = condition
+                                            .as_mut()
+                                            .and_then(|condition| condition.groups.get_mut(roomy))
+                                        {
+                                            entry::add_term(group);
+                                        }
+                                    },
+                                    window,
+                                    cx,
+                                );
+                            },
+                        )),
+                    ))
+                })
+                .when(can_add_group, |this| {
+                    this.child(div().flex_1().child(
+                        add_button("add-group", "Add group", cx).on_click(cx.listener(
+                            |this, _, window, cx| {
                                 this.edit_condition(
                                     |condition| {
                                         if let Some(condition) = condition {
@@ -103,213 +134,114 @@ impl LightbarPage {
                                     window,
                                     cx,
                                 );
-                            })),
-                    ),
-                )
-            })
-    }
-
-    fn group_box(&self, index: usize, group: &Group, cx: &Context<Self>) -> Div {
-        let theme = cx.theme();
-        v_flex()
-            .gap_2()
-            .p_3()
-            .rounded(theme.radius)
-            .border_1()
-            .border_color(theme.border)
-            .child(
-                h_flex()
-                    .justify_between()
-                    .items_center()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(format!("Group {}", index + 1)),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!("remove-group-{index}")))
-                            .icon(IconName::Delete)
-                            .xsmall()
-                            .ghost()
-                            .tooltip("Remove the group")
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.edit_condition(
-                                    |condition| {
-                                        let kept = condition
-                                            .as_mut()
-                                            .is_none_or(|kept| entry::remove_group(kept, index));
-                                        if !kept {
-                                            *condition = None;
-                                        }
-                                    },
-                                    window,
-                                    cx,
-                                );
-                            })),
-                    ),
-            )
-            .child(logic_row(
-                "Group type",
-                "How the conditions of the group combine.",
-                group.logic,
-                Some(index),
-                cx,
-            ))
-            .children(
-                group
-                    .terms
-                    .iter()
-                    .enumerate()
-                    .map(|(term, value)| self.term_box(Spot { group: index, term }, value, cx)),
-            )
-            .when(entry::can_add_term(group), |this| {
-                this.child(
-                    h_flex().child(
-                        Button::new(SharedString::from(format!("add-term-{index}")))
-                            .icon(IconName::Plus)
-                            .label("Add condition")
-                            .xsmall()
-                            .outline()
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.edit_condition(
-                                    |condition| {
-                                        if let Some(group) = condition
-                                            .as_mut()
-                                            .and_then(|condition| condition.groups.get_mut(index))
-                                        {
-                                            entry::add_term(group);
-                                        }
-                                    },
-                                    window,
-                                    cx,
-                                );
-                            })),
-                    ),
-                )
-            })
-    }
-
-    fn term_box(&self, spot: Spot, term: &Term, cx: &Context<Self>) -> Div {
-        let timing = Timing::of(term);
-        let ordinal = if spot.term == 0 {
-            "First Condition"
-        } else {
-            "Second Condition"
-        };
-        v_flex()
-            .gap_1()
-            .pt_1()
-            .child(
-                h_flex()
-                    .justify_between()
-                    .items_center()
-                    .child(div().text_sm().child(ordinal))
-                    .child(
-                        Button::new(SharedString::from(format!(
-                            "remove-term-{}-{}",
-                            spot.group, spot.term
-                        )))
-                        .icon(IconName::Close)
-                        .xsmall()
-                        .ghost()
-                        .tooltip("Remove the condition")
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                this.edit_condition(
-                                    |condition| {
-                                        let kept = condition.as_mut().is_none_or(|kept| {
-                                            entry::remove_term(kept, spot.group, spot.term)
-                                        });
-                                        if !kept {
-                                            *condition = None;
-                                        }
-                                    },
-                                    window,
-                                    cx,
-                                );
                             },
                         )),
-                    ),
-            )
-            .child(self.signal_row(
+                    ))
+                }),
+        );
+        rows
+    }
+
+    fn group_rows(&self, index: usize, group: &Group, cx: &Context<Self>) -> Vec<Div> {
+        let terms = group.terms.len();
+        let mut rows = Vec::new();
+        if terms > 1 {
+            rows.push(combine_row("group-logic", group.logic, Some(index), cx));
+        }
+        for (term, value) in group.terms.iter().enumerate() {
+            let spot = Spot { group: index, term };
+            if terms > 1 {
+                rows.push(sub_header(
+                    format!("Condition {}", term + 1),
+                    format!("remove-term-{index}-{term}"),
+                    cx.listener(move |this, _, window, cx| {
+                        this.edit_condition(
+                            |condition| {
+                                let kept = condition.as_mut().is_none_or(|kept| {
+                                    entry::remove_term(kept, spot.group, spot.term)
+                                });
+                                if !kept {
+                                    *condition = None;
+                                }
+                            },
+                            window,
+                            cx,
+                        );
+                    }),
+                    cx,
+                ));
+            }
+            rows.extend(self.term_rows(spot, value, cx));
+        }
+        rows
+    }
+
+    fn term_rows(&self, spot: Spot, term: &Term, cx: &Context<Self>) -> Vec<Div> {
+        let timing = Timing::of(term);
+        let mut rows = vec![
+            self.signal_field(
                 "Data point",
                 entry::term_signal(term),
                 Socket::Term(spot),
                 cx,
-            ))
-            .child(panel::row(
-                "Condition Trigger",
-                Some("Choose when the effect should be triggered.".into()),
-                h_flex().flex_wrap().gap_1().children(TIMINGS.map(|choice| {
-                    Button::new(SharedString::from(format!(
-                        "timing-{}-{}-{choice:?}",
-                        spot.group, spot.term
-                    )))
-                    .label(choice.label())
-                    .xsmall()
-                    .outline()
-                    .selected(timing == choice)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.edit_term(spot, |term| *term = choice.apply(term), window, cx);
-                    }))
-                })),
+            ),
+            panel::toggle(
+                "Trigger",
+                None,
+                segmented(
+                    SharedString::from(format!("timing-{}-{}", spot.group, spot.term)),
+                    TIMINGS.map(Timing::label),
+                    TIMINGS
+                        .iter()
+                        .position(|choice| *choice == timing)
+                        .unwrap_or(0),
+                    cx.listener(move |this, index: &usize, window, cx| {
+                        if let Some(choice) = TIMINGS.get(*index).copied() {
+                            this.edit_term(spot, |term| *term = choice.apply(term), window, cx);
+                        }
+                    }),
+                ),
                 cx,
-            ))
-            .when_some(comparison_of(term), |this, comparison| {
-                this.child(self.comparison_rows(spot, comparison, cx))
-            })
-            .when(timing != Timing::While, |this| {
-                this.child(panel::row(
-                    "Show for",
-                    Some("Milliseconds, from 1 to 60000.".into()),
-                    self.number(Field::Time(spot)),
-                    cx,
-                ))
-            })
+            ),
+        ];
+        if let Term::Compare(comparison) = term {
+            rows.push(self.comparison_row(spot, *comparison, cx));
+        }
+        if timing != Timing::While {
+            rows.push(panel::toggle(
+                "Duration",
+                None,
+                self.number(Field::Time(spot), "ms"),
+                cx,
+            ));
+        }
+        rows
     }
 
-    fn comparison_rows(&self, spot: Spot, comparison: Comparison, cx: &Context<Self>) -> Div {
-        let constant = matches!(comparison.operand, Operand::Constant(_));
+    fn comparison_row(&self, spot: Spot, comparison: Comparison, cx: &Context<Self>) -> Div {
         let operand = match comparison.operand {
-            Operand::Constant(_) => {
-                panel::row("Value", None, self.number(Field::Constant(spot)), cx)
-            }
-            Operand::Signal(signal) => {
-                self.signal_row("Compared with", signal, Socket::Operand(spot), cx)
-            }
+            Operand::Constant(_) => None,
+            Operand::Signal(signal) => Some(signal),
         };
-        v_flex()
-            .gap_1()
-            .child(panel::row(
-                "Comparison",
-                None,
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(comparator_menu(spot, comparison.comparator, cx))
-                    .children([("a value", true), ("a data point", false)].map(
-                        |(label, value)| {
-                            Button::new(SharedString::from(format!(
-                                "operand-{}-{}-{value}",
-                                spot.group, spot.term
-                            )))
-                            .label(label)
-                            .xsmall()
-                            .outline()
-                            .selected(constant == value)
-                            .on_click(cx.listener(
-                                move |this, _, window, cx| {
-                                    if constant != value {
-                                        this.set_operand_kind(spot, value, window, cx);
-                                    }
-                                },
-                            ))
-                        },
-                    )),
-                cx,
-            ))
-            .child(operand)
+        panel::field(
+            "Compare",
+            h_flex()
+                .w_full()
+                .gap_2()
+                .items_center()
+                .child(comparator_menu(spot, comparison.comparator, cx))
+                .child(div().flex_1().min_w_0().child(self.signal_menu(
+                    operand,
+                    Socket::Operand(spot),
+                    cx,
+                )))
+                .map(|this| match operand {
+                    None => this.child(self.number(Field::Constant(spot), "")),
+                    Some(Signal::Host(_)) => this.child(self.number(Field::OperandHost(spot), "")),
+                    Some(_) => this,
+                }),
+            cx,
+        )
     }
 
     fn edit_condition(
@@ -366,55 +298,54 @@ impl LightbarPage {
             cx,
         );
     }
-
-    fn set_operand_kind(
-        &mut self,
-        spot: Spot,
-        constant: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let operand = if constant {
-            Operand::Constant(1.0)
-        } else {
-            Operand::Signal(Signal::Builtin(Builtin::ActiveLayer))
-        };
-        self.edit_term(
-            spot,
-            |term| {
-                if let Term::Compare(comparison) = term {
-                    comparison.operand = operand;
-                }
-            },
-            window,
-            cx,
-        );
-    }
 }
 
-fn logic_row(
-    label: &'static str,
-    description: &'static str,
+fn combine_row(
+    id: &'static str,
     current: Logic,
     group: Option<usize>,
     cx: &Context<LightbarPage>,
 ) -> Div {
-    let scope = group.map_or_else(|| "condition".to_owned(), |index| format!("group-{index}"));
-    panel::row(
-        label,
-        Some(description.into()),
-        h_flex().flex_wrap().gap_1().children(LOGICS.map(|logic| {
-            Button::new(SharedString::from(format!("{scope}-logic-{logic:?}")))
-                .label(entry::logic_name(logic))
-                .xsmall()
-                .outline()
-                .selected(current == logic)
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.set_logic(group, logic, window, cx);
-                }))
-        })),
+    let scope = group.map_or_else(|| id.to_owned(), |index| format!("{id}-{index}"));
+    panel::toggle(
+        "Combine",
+        None,
+        segmented(
+            SharedString::from(scope),
+            COMBINE.map(|(_, label)| label),
+            COMBINE
+                .iter()
+                .position(|(logic, _)| *logic == current)
+                .unwrap_or(0),
+            cx.listener(move |this, index: &usize, window, cx| {
+                if let Some((logic, _)) = COMBINE.get(*index) {
+                    this.set_logic(group, *logic, window, cx);
+                }
+            }),
+        ),
         cx,
     )
+}
+
+fn sub_header(
+    title: String,
+    id: String,
+    on_remove: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &Context<LightbarPage>,
+) -> Div {
+    h_flex()
+        .w_full()
+        .pt_1()
+        .justify_between()
+        .items_center()
+        .child(panel::label(title, cx))
+        .child(
+            Button::new(SharedString::from(id))
+                .label("Remove")
+                .ghost()
+                .xsmall()
+                .on_click(on_remove),
+        )
 }
 
 fn comparator_menu(
@@ -423,14 +354,11 @@ fn comparator_menu(
     cx: &Context<LightbarPage>,
 ) -> impl IntoElement + use<> {
     let page = cx.entity().downgrade();
-    Button::new(SharedString::from(format!(
-        "comparator-{}-{}",
-        spot.group, spot.term
-    )))
-    .label(entry::comparator_symbol(current))
-    .small()
-    .outline()
-    .dropdown_caret(true)
+    select(
+        format!("comparator-{}-{}", spot.group, spot.term),
+        entry::comparator_symbol(current),
+    )
+    .w(px(COMPARATOR_WIDTH))
     .dropdown_menu(move |menu, _, _| {
         COMPARATORS.iter().fold(menu, |menu, comparator| {
             let page = page.clone();
@@ -456,13 +384,6 @@ fn comparator_menu(
             )
         })
     })
-}
-
-const fn comparison_of(term: &Term) -> Option<Comparison> {
-    match term {
-        Term::Compare(comparison) => Some(*comparison),
-        Term::Trigger { .. } => None,
-    }
 }
 
 const fn comparator_name(comparator: Comparator) -> &'static str {

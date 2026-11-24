@@ -1,222 +1,201 @@
 use gpui_kit::{
-    Context, Div, Entity, FontWeight, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, Pixels, SharedString, StatefulInteractiveElement as _, Styled as _,
+    App, Context, Div, Entity, FontWeight, Hsla, ParentElement as _, SharedString, Styled as _,
+    Window,
+    assets::IconName as Catalog,
     component::{
-        ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _,
-        button::{Button, ButtonGroup, ButtonVariants as _},
+        ActiveTheme as _, Disableable as _, Sizable as _,
+        button::{Button, ButtonVariants as _},
         h_flex,
         slider::{Slider, SliderState},
         switch::Switch,
-        tag::Tag,
-        tooltip::Tooltip,
+        tab::{Tab, TabBar},
         v_flex,
     },
     div,
     prelude::FluentBuilder as _,
     px, relative,
 };
-use openwoot_protocol::keys::{Action, RapidTrigger, ScanMode, TapDuration};
+use openwoot_protocol::keys::{RapidTrigger, ScanMode, TapDuration};
 
 use super::{
-    KeyLabels, MIN_DISTANCE_MM, PerformancePage,
+    KeyLabels, PerformancePage,
     effective::{self, RapidTriggerMode, Selected},
-    reference_key,
 };
 use crate::{
     keyboard::{KeyFace, KeyboardView},
+    page::Page,
     panel,
     store::Keyboard,
-    usage,
+    theme, usage,
 };
 
-const SLIDER_WIDTH: f32 = 240.0;
-const BAR_HEIGHT: f32 = 12.0;
-const OWN_SETTINGS_OPACITY: f32 = 0.45;
-const TRAVEL_OPACITY: f32 = 0.35;
-const TRAVEL_TOLERANCE_MM: f32 = 0.01;
+const READOUT_WIDTH: f32 = 60.0;
+const ACTION_WIDTH: f32 = 20.0;
+const BAR_HEIGHT: f32 = 6.0;
+const MARKER_HEIGHT: f32 = 14.0;
+const MARKER_WIDTH: f32 = 2.0;
+const CUSTOM_TINT: f32 = 0.28;
+const LABELS: [KeyLabels; 2] = [KeyLabels::Actuation, KeyLabels::RapidTrigger];
 const TAP_DURATIONS: [TapDuration; 3] = [
     TapDuration::OneMillisecond,
     TapDuration::TwentyMilliseconds,
     TapDuration::FortyMilliseconds,
 ];
-const MINIMUM_NOTE: &str = "The keyboard raises any distance below the switch's minimum of \
-                            0.1 mm to that minimum.";
 
 #[derive(Debug, Clone, Copy)]
 struct KeyColors {
-    own: Hsla,
+    custom: Hsla,
     actuated: Hsla,
 }
 
 impl PerformancePage {
-    pub(super) fn keyboard_section(
-        &self,
-        keyboard: &Keyboard,
-        width: Pixels,
-        cx: &Context<Self>,
-    ) -> Div {
-        let theme = cx.theme();
-        let colors = KeyColors {
-            own: theme.info.opacity(OWN_SETTINGS_OPACITY),
-            actuated: theme.warning,
-        };
-        let travel = theme.primary.opacity(TRAVEL_OPACITY);
+    pub(super) fn keyboard(&self, keyboard: &Keyboard, window: &Window, cx: &Context<Self>) -> Div {
+        let colors = KeyColors::new(cx);
         let page = cx.weak_entity();
         let view = KeyboardView::new("performance-keys", keyboard, |key| {
             self.face(keyboard, key, colors)
         })
         .selection(&self.selection)
-        .fit_width(width)
+        .fit_width(panel::content_width(window))
         .on_key_click(move |key, event, window, cx| {
             page.update(cx, |page, cx| {
                 page.click_key(key, event.modifiers(), window, cx);
             })
             .ok();
         });
-        let description: SharedString = if self.selection.is_empty() {
-            "No keys selected: the settings below apply to the whole profile. Click a key to \
-             select it; Shift-, ⌘- or Ctrl-click adds and removes keys."
-                .into()
-        } else {
-            format!(
-                "{} selected: the settings below apply to them only.",
-                keys_text(self.selection.len())
-            )
-            .into()
-        };
-        panel::section("Keyboard", Some(description), cx)
-            .child(self.selection_bar(cx))
-            .child(view)
-            .child(
-                h_flex()
-                    .gap_4()
-                    .flex_wrap()
-                    .child(swatch(colors.own, "Own settings", cx))
-                    .child(swatch(colors.actuated, "Past the actuation point", cx))
-                    .child(swatch(travel, "Key travel", cx))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(match self.labels {
-                                KeyLabels::Actuation => {
-                                    "Keys show their actuation point in mm; RT: Rapid Trigger on"
-                                }
-                                KeyLabels::RapidTrigger => {
-                                    "Keys show their Rapid Trigger sensitivity in mm, \
-                                     press/release when split"
-                                }
-                            }),
-                    ),
-            )
+        v_flex().w_full().gap_4().child(panel::stage(view)).when(
+            self.selection.is_empty(),
+            |this| {
+                this.child(h_flex().w_full().justify_center().child(panel::label(
+                    "Select keys to give them their own settings",
+                    cx,
+                )))
+            },
+        )
     }
 
-    pub(super) fn actuation_section(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
+    pub(super) fn heading(&self, cx: &Context<Self>) -> Div {
+        let selected_custom = self.overrides.as_ref().is_some_and(|overrides| {
+            self.selection
+                .iter()
+                .any(|key| overrides.get(key).is_some_and(effective::has_own_settings))
+        });
+        panel::heading(
+            Page::Performance.title(),
+            None,
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(
+                    TabBar::new("key-labels")
+                        .segmented()
+                        .small()
+                        .children([
+                            Tab::new().label("Actuation"),
+                            Tab::new().label("Rapid Trigger"),
+                        ])
+                        .when_some(
+                            LABELS.iter().position(|labels| *labels == self.labels),
+                            TabBar::selected_index,
+                        )
+                        .on_click(cx.listener(|this, index: &usize, _, cx| {
+                            if let Some(labels) = LABELS.get(*index) {
+                                this.show_labels(*labels, cx);
+                            }
+                        })),
+                )
+                .when(selected_custom, |this| {
+                    this.child(
+                        Button::new("reset-keys")
+                            .small()
+                            .label("Reset keys")
+                            .tooltip("Use the profile's settings for the selected keys")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.reset_keys(window, cx);
+                            })),
+                    )
+                })
+                .child(
+                    Button::new("select-all")
+                        .small()
+                        .label("Select all keys")
+                        .on_click(cx.listener(|this, _, window, cx| this.select_all(window, cx))),
+                )
+                .child(
+                    Button::new("clear-selection")
+                        .small()
+                        .label("Discard selection")
+                        .disabled(self.selection.is_empty())
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.clear_selection(window, cx);
+                        })),
+                ),
+            cx,
+        )
+    }
+
+    pub(super) fn cards(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
+        v_flex()
+            .w_full()
+            .gap_4()
+            .child(card_row([
+                self.actuation_card(cx),
+                self.rapid_trigger_card(keyboard, cx),
+                self.feedback_card(keyboard, cx),
+            ]))
+            .child(card_row([
+                self.tachyon_card(cx),
+                self.tap_duration_card(cx),
+                self.keyboard_keys_card(cx),
+            ]))
+    }
+
+    fn actuation_card(&self, cx: &Context<Self>) -> Div {
         let (Some(settings), Some(overrides)) = (&self.settings, &self.overrides) else {
             return div();
         };
-        let value = self.actuation.read(cx).value().end();
-        if self.selection.is_empty() {
-            let travel = keyboard.travel_mm(reference_key(keyboard));
-            let own = overrides
-                .iter()
-                .filter(|entry| entry.actuation.is_some())
-                .count();
-            return panel::section(
-                "Actuation point",
-                Some(
-                    "The distance a key must be pressed before it registers a keypress, for \
-                     every key without its own actuation point."
-                        .into(),
-                ),
-                cx,
-            )
-            .child(panel::row(
-                format!("Actuation point is {value:.2} mm"),
-                Some(
-                    format!(
-                        "{MIN_DISTANCE_MM:.1} mm reacts to the lightest touch, {travel:.2} mm \
-                         needs the key fully pressed."
-                    )
-                    .into(),
-                ),
-                slider_control(&self.actuation, None),
-                cx,
-            ))
-            .when(travels_differ(keyboard, travel), |this| {
-                this.child(panel::note(
-                    "Keys whose switch travels another distance actuate at the same share of \
-                     their travel.",
-                    cx,
-                ))
-            })
-            .when(own > 0, |this| {
-                this.child(panel::note(
-                    format!(
-                        "{} their own actuation point; select them to change it.",
-                        keys_have_text(own)
-                    ),
-                    cx,
-                ))
-            });
-        }
-        let entries = || {
-            self.selection
-                .iter()
-                .map(|key| overrides.get(key).copied().unwrap_or_default())
-        };
-        let own = Selected::of(entries().map(|entry| entry.actuation.is_some()));
-        let values = Selected::of(entries().map(|entry| effective::actuation(settings, &entry)));
-        let profile = keyboard.distance_mm(self.selection.first().unwrap_or(0), settings.actuation);
-        let status = match own {
-            Selected::Same(true) => "The selected keys have their own actuation point.",
-            Selected::Mixed(_) => "Some of the selected keys have their own actuation point.",
-            Selected::Same(false) | Selected::Nothing => {
-                "The selected keys use the actuation point of the profile."
-            }
-        };
-        let label = if values.is_mixed() {
-            "Actuation point".to_owned()
+        let value = millimetres(self.actuation.read(cx).value().end());
+        let (scope, readout, reset) = if self.selection.is_empty() {
+            ("Profile".into(), value, None)
         } else {
-            format!("Actuation point is {value:.2} mm")
+            let entries = || {
+                self.selection
+                    .iter()
+                    .map(|key| overrides.get(key).copied().unwrap_or_default())
+            };
+            let own = Selected::of(entries().map(|entry| entry.actuation.is_some()));
+            let values =
+                Selected::of(entries().map(|entry| effective::actuation(settings, &entry)));
+            let reset = (own != Selected::Same(false)).then(|| {
+                Button::new("reset-actuation")
+                    .ghost()
+                    .xsmall()
+                    .icon(Catalog::RotateCcw)
+                    .tooltip("Use the profile's actuation point")
+                    .on_click(cx.listener(|this, _, window, cx| this.reset_actuation(window, cx)))
+            });
+            let readout = if values.is_mixed() {
+                "Mixed".into()
+            } else {
+                value
+            };
+            (keys_text(self.selection.len()), readout, reset)
         };
         panel::section(
             "Actuation point",
-            Some(
-                format!(
-                    "Changing the actuation point for {}.",
-                    keys_text(self.selection.len())
-                )
-                .into(),
-            ),
+            Some("Set the point to activate a keypress.".into()),
             cx,
         )
-        .child(panel::row(
-            label,
-            Some(status.into()),
-            slider_control(
-                &self.actuation,
-                values.is_mixed().then_some("actuation-mixed"),
-            ),
-            cx,
-        ))
-        .child(panel::row(
-            "Use the profile's actuation point",
-            Some(format!("The profile actuates at {profile:.2} mm.").into()),
-            Button::new("reset-actuation")
-                .small()
-                .outline()
-                .label("Reset to profile")
-                .disabled(own == Selected::Same(false))
-                .on_click(cx.listener(|this, _, window, cx| this.reset_actuation(window, cx))),
-            cx,
-        ))
+        .child(scope_label("Changing actuation point for", scope, cx))
+        .child(slider_line(&self.actuation, readout, cx).child(action_lane(reset)))
     }
 
-    pub(super) fn rapid_trigger_section(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
+    fn rapid_trigger_card(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
         let (Some(settings), Some(overrides)) = (&self.settings, &self.overrides) else {
             return div();
         };
+        let description: Option<SharedString> =
+            Some("Actuates and resets keys by their direction of movement.".into());
         if self.selection.is_empty() {
             let enabled = overrides
                 .iter()
@@ -225,35 +204,18 @@ impl PerformancePage {
                     keyboard.has_key(*key) && effective::rapid_trigger(settings, entry).is_some()
                 })
                 .count();
-            return panel::section(
+            return panel::section_with(
                 "Rapid Trigger",
-                Some(
-                    "Rapid Trigger dynamically actuates and resets your key based on your \
-                     intention to press or release the key. Rapid Trigger starts and ends after \
-                     the actuation point."
-                        .into(),
-                ),
-                cx,
-            )
-            .child(panel::row(
-                "Enable Rapid Trigger",
-                Some(
-                    format!(
-                        "For every key without its own Rapid Trigger setting. Rapid Trigger is \
-                         on for {}.",
-                        keys_text(enabled)
-                    )
-                    .into(),
-                ),
+                description,
                 Switch::new("rapid-trigger")
                     .checked(settings.rapid_trigger_enabled)
                     .on_change(cx.listener(|this, enabled: &bool, window, cx| {
                         this.set_rapid_trigger_enabled(*enabled, window, cx);
                     })),
                 cx,
-            ))
-            .child(self.sensitivity_rows(settings.rapid_trigger, false, cx))
-            .child(panel::note(MINIMUM_NOTE, cx));
+            )
+            .child(count_label(enabled, cx))
+            .children(self.sensitivity_parts(settings.rapid_trigger, false, cx));
         }
         let entries = || {
             self.selection
@@ -261,366 +223,214 @@ impl PerformancePage {
                 .map(|key| overrides.get(key).copied().unwrap_or_default())
         };
         let mode = Selected::of(entries().map(|entry| RapidTriggerMode::of(entry.rapid_trigger)));
-        let description = match mode {
-            Selected::Same(mode) => mode.description(),
-            Selected::Mixed(_) | Selected::Nothing => {
-                "The selected keys have different Rapid Trigger settings."
-            }
-        };
-        let section = panel::section(
-            "Rapid Trigger",
-            Some(format!("Rapid Trigger for {}.", keys_text(self.selection.len())).into()),
-            cx,
-        )
-        .child(panel::row(
-            "Rapid Trigger",
-            Some(description.into()),
+        let card = panel::section("Rapid Trigger", description, cx).child(panel::field(
+            "Mode",
             h_flex()
-                .gap_2()
+                .gap_3()
                 .items_center()
-                .when(mode.is_mixed(), |this| {
-                    this.child(mixed_tag("rapid-trigger-mixed"))
-                })
-                .child(mode_buttons(mode.same(), cx)),
+                .child(mode_tabs(mode.same(), cx))
+                .when(mode.is_mixed(), |this| this.child(muted_text("Mixed", cx))),
             cx,
         ));
         if mode == Selected::Same(RapidTriggerMode::Custom) {
             let parameters =
                 Selected::of(entries().map(|entry| effective::parameters(settings, &entry)));
-            section
-                .child(self.sensitivity_rows(
-                    parameters.first().unwrap_or(settings.rapid_trigger),
-                    parameters.is_mixed(),
-                    cx,
-                ))
-                .child(panel::note(MINIMUM_NOTE, cx))
+            card.children(self.sensitivity_parts(
+                parameters.first().unwrap_or(settings.rapid_trigger),
+                parameters.is_mixed(),
+                cx,
+            ))
         } else {
-            section
+            card
         }
     }
 
-    pub(super) fn feedback_section(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
-        let section = panel::section(
-            "Visual feedback",
-            Some(
-                "Press a key to test the actuation point. The key lights up once it passes its \
-                 actuation point."
-                    .into(),
-            ),
-            cx,
-        );
-        let Some(key) = self.pressed else {
-            let waiting = if self.travel_unsupported {
-                "The keyboard does not report the travel of its keys."
-            } else if self.travel.is_empty() {
-                "Waiting for the key travel of the keyboard…"
-            } else {
-                "Press a key to see how far it travels."
-            };
-            return section.child(panel::note(waiting, cx));
-        };
-        let (Some(settings), Some(overrides)) = (&self.settings, &self.overrides) else {
-            return section;
-        };
+    fn feedback_card(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
+        if self.travel_unsupported {
+            return panel::section(
+                "Visual feedback",
+                Some("The keyboard does not report key travel.".into()),
+                cx,
+            );
+        }
         let theme = cx.theme();
-        let entry = overrides.get(key).copied().unwrap_or_default();
-        let actuation = effective::actuation(settings, &entry);
-        let travel = self.travel.get(key).copied().flatten().unwrap_or(0);
-        let fraction = effective::travel_fraction(travel);
-        let total = keyboard.travel_mm(key);
-        let name = match keyboard.legends.get(key) {
-            Some(action) if *action != Action::None => usage::name(*action).into_owned(),
-            _ => {
-                let columns = keyboard.columns().max(1);
-                format!("row {}, column {}", key / columns + 1, key % columns + 1)
-            }
-        };
-        let rapid_trigger = effective::rapid_trigger(settings, &entry).map_or_else(
-            || "Rapid Trigger off".to_owned(),
-            |own| format!("Rapid Trigger {} mm", sensitivity_text(keyboard, key, own)),
+        let pressed = self.pressed.and_then(|key| {
+            let settings = self.settings.as_ref()?;
+            let entry = self
+                .overrides
+                .as_ref()?
+                .get(key)
+                .copied()
+                .unwrap_or_default();
+            let travel = self.travel.get(key).copied().flatten().unwrap_or(0);
+            Some((key, effective::actuation(settings, &entry), travel))
+        });
+        let fraction = pressed.map_or(0.0, |(_, _, travel)| effective::travel_fraction(travel));
+        let reached =
+            pressed.is_some_and(|(_, actuation, travel)| effective::reaches(travel, actuation));
+        let readout = pressed.map_or_else(
+            || "–".into(),
+            |(key, _, _)| millimetres(fraction * keyboard.travel_mm(key)),
         );
-        section.child(
-            v_flex()
-                .gap_2()
-                .child(
-                    h_flex()
-                        .justify_between()
-                        .text_sm()
-                        .child(
-                            div()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(format!("Pressed key: {name}")),
-                        )
-                        .child(
-                            div()
-                                .text_color(theme.muted_foreground)
-                                .child(format!("{:.2} of {total:.2} mm", fraction * total)),
-                        ),
-                )
-                .child(
+        let name = pressed.map_or_else(
+            || "–".into(),
+            |(key, _, _)| {
+                keyboard
+                    .legends
+                    .get(key)
+                    .map_or_default(|action| SharedString::from(usage::name(*action)))
+            },
+        );
+        let bar = div()
+            .relative()
+            .flex_1()
+            .h(px(BAR_HEIGHT))
+            .rounded_full()
+            .bg(theme.secondary)
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .h_full()
+                    .w(relative(fraction))
+                    .rounded_full()
+                    .bg(if reached {
+                        theme.primary
+                    } else {
+                        theme.muted_foreground
+                    }),
+            )
+            .when_some(pressed, |this, (_, actuation, _)| {
+                this.child(
                     div()
-                        .relative()
-                        .w_full()
-                        .h(px(BAR_HEIGHT))
-                        .rounded(px(BAR_HEIGHT / 2.0))
-                        .overflow_hidden()
-                        .bg(theme.secondary)
-                        .child(
-                            div()
-                                .absolute()
-                                .top_0()
-                                .left_0()
-                                .h_full()
-                                .w(relative(fraction))
-                                .bg(if effective::reaches(travel, actuation) {
-                                    theme.warning
-                                } else {
-                                    theme.primary
-                                }),
-                        )
-                        .child(
-                            div()
-                                .absolute()
-                                .top_0()
-                                .h_full()
-                                .w(px(2.0))
-                                .left(relative(
-                                    f32::from(actuation.fraction()) / f32::from(u16::MAX),
-                                ))
-                                .bg(theme.foreground),
-                        ),
+                        .absolute()
+                        .top(px((BAR_HEIGHT - MARKER_HEIGHT) / 2.0))
+                        .h(px(MARKER_HEIGHT))
+                        .w(px(MARKER_WIDTH))
+                        .left(relative(
+                            f32::from(actuation.fraction()) / f32::from(u16::MAX),
+                        ))
+                        .bg(theme.foreground),
                 )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(format!(
-                            "Actuation point {:.2} mm · {rapid_trigger}",
-                            keyboard.distance_mm(key, actuation)
-                        )),
-                ),
+            });
+        panel::section(
+            "Visual feedback",
+            Some("Press a key to test the actuation point.".into()),
+            cx,
+        )
+        .child(panel::field(
+            "Pressed key",
+            div()
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.foreground)
+                .child(name),
+            cx,
+        ))
+        .child(
+            h_flex()
+                .w_full()
+                .gap_3()
+                .items_center()
+                .child(bar)
+                .child(readout_text(readout, cx)),
         )
     }
 
-    pub(super) fn profile_section(&self, cx: &Context<Self>) -> Div {
+    fn tachyon_card(&self, cx: &Context<Self>) -> Div {
         let Some(settings) = self.settings else {
             return div();
         };
-        panel::section(
-            "Profile settings",
-            Some("These settings always apply to every key of the profile.".into()),
-            cx,
-        )
-        .child(panel::row(
+        panel::section_with(
             "Tachyon mode",
-            Some(
-                "Scans the keys in parallel for the fastest response. While it is on, effect \
-                 layers and some light-bar entries pause and the brightness keys stop at 70 %."
-                    .into(),
-            ),
+            Some("Fastest key scanning; pauses RGB effects and caps brightness at 70 %.".into()),
             Switch::new("tachyon")
                 .checked(settings.scan_mode == ScanMode::Parallel)
                 .on_change(cx.listener(|this, tachyon: &bool, window, cx| {
                     this.set_tachyon(*tachyon, window, cx);
                 })),
             cx,
-        ))
-        .child(panel::row(
+        )
+    }
+
+    fn tap_duration_card(&self, cx: &Context<Self>) -> Div {
+        let Some(settings) = self.settings else {
+            return div();
+        };
+        panel::section(
             "Tap duration",
-            Some(
-                "How long Dynamic Keystroke and Mod-Tap hold a tapped key. Games that read input \
-                 once per tick can miss shorter taps: 20 ms suits 60-tick games, 40 ms 30-tick \
-                 games."
-                    .into(),
-            ),
-            tap_buttons(settings.tap_duration, cx),
+            Some("How long Dynamic Keystroke and Mod-Tap hold a tap.".into()),
             cx,
-        ))
-        .child(panel::row(
-            "Keyboard keys in gamepad mode",
-            Some(
-                "Keep sending keyboard keys for typing in the XInput and gamepad modes. Off, they \
-                 stay silent there so they cannot interfere with the controller; keep a profile \
-                 key on this profile to get back to typing."
-                    .into(),
-            ),
+        )
+        .child(tap_tabs(settings.tap_duration, cx))
+    }
+
+    fn keyboard_keys_card(&self, cx: &Context<Self>) -> Div {
+        let Some(settings) = self.settings else {
+            return div();
+        };
+        panel::section_with(
+            "Keyboard keys",
+            Some("Send keyboard keys while the keyboard runs in a gamepad mode.".into()),
             Switch::new("keyboard-in-gamepad-mode")
                 .checked(settings.keyboard_in_gamepad_mode)
                 .on_change(cx.listener(|this, enabled: &bool, window, cx| {
                     this.set_keyboard_in_gamepad_mode(*enabled, window, cx);
                 })),
             cx,
-        ))
+        )
     }
 
-    fn selection_bar(&self, cx: &Context<Self>) -> Div {
-        let (has_own, selected_own) = self.overrides.as_ref().map_or((false, false), |overrides| {
-            (
-                overrides.iter().any(effective::has_own_settings),
-                self.selection
-                    .iter()
-                    .any(|key| overrides.get(key).is_some_and(effective::has_own_settings)),
-            )
-        });
-        h_flex()
-            .w_full()
-            .gap_2()
-            .flex_wrap()
-            .justify_between()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .flex_wrap()
-                    .child(
-                        Button::new("select-all")
-                            .small()
-                            .outline()
-                            .label("Select all")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.select_all(window, cx)),
-                            ),
-                    )
-                    .child(
-                        Button::new("select-own")
-                            .small()
-                            .outline()
-                            .label("Select keys with own settings")
-                            .disabled(!has_own)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.select_own(window, cx)),
-                            ),
-                    )
-                    .child(
-                        Button::new("clear-selection")
-                            .small()
-                            .ghost()
-                            .label("Clear selection")
-                            .disabled(self.selection.is_empty())
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.clear_selection(window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("reset-keys")
-                            .small()
-                            .outline()
-                            .label("Reset selected keys")
-                            .tooltip("Drop the own settings of the selected keys")
-                            .disabled(!selected_own)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.reset_keys(window, cx);
-                            })),
-                    ),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Show on keys"),
-                    )
-                    .child(
-                        ButtonGroup::new("key-labels")
-                            .small()
-                            .outline()
-                            .child(
-                                Button::new("labels-actuation")
-                                    .label("Actuation point")
-                                    .selected(self.labels == KeyLabels::Actuation),
-                            )
-                            .child(
-                                Button::new("labels-rapid-trigger")
-                                    .label("Rapid Trigger")
-                                    .selected(self.labels == KeyLabels::RapidTrigger),
-                            )
-                            .on_click(cx.listener(|this, clicks: &Vec<usize>, _, cx| {
-                                let labels = if clicks.contains(&1) {
-                                    KeyLabels::RapidTrigger
-                                } else {
-                                    KeyLabels::Actuation
-                                };
-                                this.show_labels(labels, cx);
-                            })),
-                    ),
-            )
-    }
-
-    fn sensitivity_rows(
+    fn sensitivity_parts(
         &self,
         rapid_trigger: RapidTrigger,
         mixed: bool,
         cx: &Context<Self>,
-    ) -> Div {
-        let press = self.press.read(cx).value().end();
-        let release = self.release.read(cx).value().end();
+    ) -> Vec<Div> {
+        let readout = |state: &Entity<SliderState>| {
+            if mixed {
+                "Mixed".into()
+            } else {
+                millimetres(state.read(cx).value().end())
+            }
+        };
         let split = rapid_trigger.release.is_some();
-        let (press_label, press_description) = match (mixed, split) {
-            (true, _) => (
-                "Sensitivity".to_owned(),
-                "The selected keys have different values.",
-            ),
-            (false, true) => (
-                format!("Press sensitivity is {press:.2} mm"),
-                "How far a key moves down to press again after it passed the actuation point.",
-            ),
-            (false, false) => (
-                format!("Sensitivity is {press:.2} mm"),
-                "How far a key moves down to press again, and up to release, after it passed \
-                 the actuation point.",
-            ),
-        };
-        let release_label = if mixed {
-            "Release sensitivity".to_owned()
-        } else {
-            format!("Release sensitivity is {release:.2} mm")
-        };
-        v_flex()
-            .w_full()
-            .child(panel::row(
-                press_label,
-                Some(press_description.into()),
-                slider_control(&self.press, mixed.then_some("press-mixed")),
-                cx,
-            ))
-            .child(panel::row(
+        let mut parts = vec![
+            panel::toggle(
                 "Split sensitivity",
-                Some(
-                    "Separate distances for pressing and releasing, so a key can be released \
-                     quickly without the risk of pressing it again."
-                        .into(),
-                ),
+                Some("Use a separate distance for releasing.".into()),
                 Switch::new("split-sensitivity")
                     .checked(split)
                     .on_change(cx.listener(|this, split: &bool, window, cx| {
                         this.set_split(*split, window, cx);
                     })),
                 cx,
-            ))
-            .when(split, |this| {
-                this.child(panel::row(
-                    release_label,
-                    Some("How far a key moves up to release.".into()),
-                    slider_control(&self.release, mixed.then_some("release-mixed")),
-                    cx,
-                ))
-            })
-            .child(panel::row(
-                "Continuous Rapid Trigger",
-                Some(
-                    "When enabled, Rapid Trigger ends when the entire key is released. When \
-                     disabled, Rapid Trigger ends at the actuation point."
-                        .into(),
-                ),
-                Switch::new("continuous")
-                    .checked(rapid_trigger.continuous)
-                    .on_change(cx.listener(|this, continuous: &bool, window, cx| {
-                        this.set_continuous(*continuous, window, cx);
-                    })),
+            ),
+            panel::field(
+                "Sensitivity",
+                slider_line(&self.press, readout(&self.press), cx),
                 cx,
-            ))
+            ),
+        ];
+        if split {
+            parts.push(panel::field(
+                "Release sensitivity",
+                slider_line(&self.release, readout(&self.release), cx),
+                cx,
+            ));
+        }
+        parts.push(panel::toggle(
+            "Continuous",
+            Some("Rapid Trigger ends only when the key is fully released.".into()),
+            Switch::new("continuous")
+                .checked(rapid_trigger.continuous)
+                .on_change(cx.listener(|this, continuous: &bool, window, cx| {
+                    this.set_continuous(*continuous, window, cx);
+                })),
+            cx,
+        ));
+        parts
     }
 
     fn face(&self, keyboard: &Keyboard, key: usize, colors: KeyColors) -> KeyFace {
@@ -639,27 +449,19 @@ impl PerformancePage {
         let rapid_trigger = effective::rapid_trigger(settings, &entry);
         let travel = self.travel.get(key).copied().flatten();
         let detail = match self.labels {
-            KeyLabels::Actuation => {
-                let millimetres = keyboard.distance_mm(key, actuation);
-                if rapid_trigger.is_some() {
-                    format!("{millimetres:.2} RT")
-                } else {
-                    format!("{millimetres:.2}")
-                }
+            KeyLabels::Actuation => Some(compact_mm(keyboard.distance_mm(key, actuation))),
+            KeyLabels::RapidTrigger => {
+                rapid_trigger.map(|own| compact_mm(keyboard.distance_mm(key, own.press)))
             }
-            KeyLabels::RapidTrigger => rapid_trigger.map_or_else(
-                || "off".to_owned(),
-                |own| sensitivity_text(keyboard, key, own),
-            ),
         };
         let fill = if travel.is_some_and(|travel| effective::reaches(travel, actuation)) {
             Some(colors.actuated)
         } else {
-            effective::has_own_settings(&entry).then_some(colors.own)
+            effective::has_own_settings(&entry).then_some(colors.custom)
         };
         KeyFace {
             legend,
-            detail: Some(detail.into()),
+            detail: detail.map(SharedString::from),
             fill,
             travel: travel.map(effective::travel_fraction),
             dimmed: self.labels == KeyLabels::RapidTrigger && rapid_trigger.is_none(),
@@ -667,97 +469,152 @@ impl PerformancePage {
     }
 }
 
-fn slider_control(state: &Entity<SliderState>, mixed: Option<&'static str>) -> Div {
+impl KeyColors {
+    fn new(cx: &App) -> Self {
+        let theme = cx.theme();
+        Self {
+            custom: theme::keycaps().top.blend(theme.info.opacity(CUSTOM_TINT)),
+            actuated: theme.primary,
+        }
+    }
+}
+
+fn card_row<const CARDS: usize>(cards: [Div; CARDS]) -> Div {
     h_flex()
-        .gap_2()
+        .w_full()
+        .items_stretch()
+        .gap_4()
+        .children(cards.map(|card| card.flex_1().min_w_0()))
+}
+
+fn slider_line(
+    state: &Entity<SliderState>,
+    readout: SharedString,
+    cx: &Context<PerformancePage>,
+) -> Div {
+    h_flex()
+        .w_full()
+        .gap_3()
         .items_center()
-        .when_some(mixed, |this, id| this.child(mixed_tag(id)))
-        .child(div().w(px(SLIDER_WIDTH)).child(Slider::new(state)))
+        .child(div().flex_1().min_w_0().child(Slider::new(state)))
+        .child(readout_text(readout, cx))
 }
 
-fn mixed_tag(id: &'static str) -> impl IntoElement {
+fn action_lane(action: Option<Button>) -> Div {
+    h_flex().w(px(ACTION_WIDTH)).justify_end().children(action)
+}
+
+fn scope_label(prefix: &'static str, value: SharedString, cx: &Context<PerformancePage>) -> Div {
+    v_flex().gap_1().child(panel::label(prefix, cx)).child(
+        div()
+            .text_sm()
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(cx.theme().primary)
+            .child(value),
+    )
+}
+
+fn count_label(count: usize, cx: &Context<PerformancePage>) -> Div {
+    h_flex()
+        .gap_1()
+        .child(panel::label("Enabled on", cx))
+        .child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(cx.theme().primary)
+                .child(count.to_string()),
+        )
+        .child(panel::label(if count == 1 { "key" } else { "keys" }, cx))
+}
+
+fn readout_text(text: SharedString, cx: &Context<PerformancePage>) -> Div {
     div()
-        .id(id)
-        .child(Tag::secondary().small().child("mix"))
-        .tooltip(|window, cx| {
-            Tooltip::new("The selected keys have different values.").build(window, cx)
-        })
+        .w(px(READOUT_WIDTH))
+        .text_right()
+        .text_sm()
+        .text_color(cx.theme().muted_foreground)
+        .child(text)
 }
 
-fn mode_buttons(current: Option<RapidTriggerMode>, cx: &Context<PerformancePage>) -> ButtonGroup {
-    ButtonGroup::new("rapid-trigger-mode")
+fn muted_text(text: &'static str, cx: &Context<PerformancePage>) -> Div {
+    div()
+        .text_sm()
+        .text_color(cx.theme().muted_foreground)
+        .child(text)
+}
+
+fn mode_tabs(current: Option<RapidTriggerMode>, cx: &Context<PerformancePage>) -> TabBar {
+    TabBar::new("rapid-trigger-mode")
+        .segmented()
         .small()
-        .outline()
-        .children(RapidTriggerMode::ALL.map(|mode| {
-            Button::new(mode.label())
-                .label(mode.label())
-                .selected(current == Some(mode))
-        }))
-        .on_click(cx.listener(|this, clicks: &Vec<usize>, window, cx| {
-            if let Some(mode) = clicks
-                .first()
-                .and_then(|index| RapidTriggerMode::ALL.get(*index))
-            {
+        .children(RapidTriggerMode::ALL.map(|mode| Tab::new().label(mode.label())))
+        .when_some(
+            current.and_then(|current| {
+                RapidTriggerMode::ALL
+                    .iter()
+                    .position(|mode| *mode == current)
+            }),
+            TabBar::selected_index,
+        )
+        .on_click(cx.listener(|this, index: &usize, window, cx| {
+            if let Some(mode) = RapidTriggerMode::ALL.get(*index) {
                 this.set_rapid_trigger_mode(*mode, window, cx);
             }
         }))
 }
 
-fn tap_buttons(current: TapDuration, cx: &Context<PerformancePage>) -> ButtonGroup {
-    ButtonGroup::new("tap-duration")
+fn tap_tabs(current: TapDuration, cx: &Context<PerformancePage>) -> TabBar {
+    TabBar::new("tap-duration")
+        .segmented()
         .small()
-        .outline()
-        .children(TAP_DURATIONS.map(|duration| {
-            Button::new(SharedString::from(format!(
-                "tap-{}",
-                duration.milliseconds()
-            )))
-            .label(format!("{} ms", duration.milliseconds()))
-            .selected(duration == current)
-        }))
-        .on_click(cx.listener(|this, clicks: &Vec<usize>, window, cx| {
-            if let Some(duration) = clicks.first().and_then(|index| TAP_DURATIONS.get(*index)) {
+        .children(
+            TAP_DURATIONS
+                .map(|duration| Tab::new().label(format!("{} ms", duration.milliseconds()))),
+        )
+        .when_some(
+            TAP_DURATIONS
+                .iter()
+                .position(|duration| *duration == current),
+            TabBar::selected_index,
+        )
+        .on_click(cx.listener(|this, index: &usize, window, cx| {
+            if let Some(duration) = TAP_DURATIONS.get(*index) {
                 this.set_tap_duration(*duration, window, cx);
             }
         }))
 }
 
-fn swatch(color: Hsla, label: &'static str, cx: &Context<PerformancePage>) -> Div {
-    h_flex()
-        .gap_1p5()
-        .items_center()
-        .text_xs()
-        .text_color(cx.theme().muted_foreground)
-        .child(div().size(px(10.0)).rounded(px(3.0)).bg(color))
-        .child(label)
+fn millimetres(value: f32) -> SharedString {
+    format!("{value:.2} mm").into()
 }
 
-fn sensitivity_text(keyboard: &Keyboard, key: usize, rapid_trigger: RapidTrigger) -> String {
-    let press = keyboard.distance_mm(key, rapid_trigger.press);
-    match rapid_trigger.release {
-        Some(release) => format!("{press:.2}/{:.2}", keyboard.distance_mm(key, release)),
-        None => format!("{press:.2}"),
+fn keys_text(count: usize) -> SharedString {
+    if count == 1 {
+        "1 key".into()
+    } else {
+        format!("{count} keys").into()
     }
 }
 
-fn travels_differ(keyboard: &Keyboard, travel: f32) -> bool {
-    (0..keyboard.key_count())
-        .filter(|key| keyboard.has_key(*key))
-        .any(|key| (keyboard.travel_mm(key) - travel).abs() > TRAVEL_TOLERANCE_MM)
-}
-
-fn keys_text(count: usize) -> String {
-    if count == 1 {
-        "1 key".to_owned()
-    } else {
-        format!("{count} keys")
+fn compact_mm(millimetres: f32) -> String {
+    let text = format!("{millimetres:.2}");
+    match text.strip_suffix('0') {
+        Some(trimmed) if !trimmed.ends_with('.') => trimmed.to_owned(),
+        _ => text,
     }
 }
 
-fn keys_have_text(count: usize) -> String {
-    if count == 1 {
-        "1 key has".to_owned()
-    } else {
-        format!("{count} keys have")
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_values_keep_two_decimals_only_where_they_matter() {
+        assert_eq!(compact_mm(1.2), "1.2");
+        assert_eq!(compact_mm(0.15), "0.15");
+        assert_eq!(compact_mm(2.0), "2.0");
+        assert_eq!(compact_mm(0.996), "1.0");
+        assert_eq!(compact_mm(3.25), "3.25");
     }
 }

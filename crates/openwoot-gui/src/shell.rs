@@ -1,38 +1,39 @@
 use std::collections::HashMap;
 
 use gpui_kit::{
-    AnyView, Context, Div, Entity, FontWeight, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
-    Subscription, Window,
-    assets::IconName as Catalog,
+    AnyView, AppContext as _, BoxShadow, Context, Div, Entity, FontWeight, Hsla,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window,
     component::{
-        ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, WindowExt as _,
-        button::{Button, ButtonVariants},
+        ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, Theme, WindowExt as _,
+        button::{Button, ButtonVariants as _},
         h_flex,
+        menu::{DropdownMenu as _, PopupMenuItem},
         notification::Notification,
-        sidebar::{
-            Sidebar, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuItem,
-        },
         spinner::Spinner,
         v_flex,
     },
-    div,
+    div, point,
     prelude::FluentBuilder as _,
     px, rgb,
 };
 use openwoot_protocol::profile::Slot;
 
 use crate::{
+    connection::ConnectionPanel,
     page::{Group, Page},
-    store::{Link, Store, StoreEvent},
+    panel::{NAVIGATION_WIDTH, RAIL_WIDTH},
+    store::{Keyboard, Link, Store, StoreEvent},
 };
 
-const SIDEBAR_WIDTH: f32 = 232.0;
+const HEADER_HEIGHT: f32 = 64.0;
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub(crate) struct Shell {
     store: Entity<Store>,
     page: Page,
     pages: HashMap<Page, AnyView>,
+    connection: Entity<ConnectionPanel>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -44,10 +45,7 @@ impl Shell {
                     window.push_notification(Notification::error(message.clone()), cx);
                 }
                 StoreEvent::Disconnected => {
-                    window.push_notification(
-                        Notification::warning("The keyboard was disconnected"),
-                        cx,
-                    );
+                    window.push_notification(Notification::warning("Keyboard disconnected"), cx);
                 }
                 StoreEvent::Connected => {
                     if !this.page.is_available(this.store.read(cx).keyboard()) {
@@ -59,12 +57,40 @@ impl Shell {
             cx.notify();
         });
         let observation = cx.observe(&store, |_, _, cx| cx.notify());
+        let shell = cx.entity().downgrade();
+        let connection = cx.new(|cx| {
+            ConnectionPanel::new(
+                store.clone(),
+                move |window, cx| {
+                    shell
+                        .update(cx, |shell, cx| shell.show(Page::Firmware, cx))
+                        .ok();
+                    window.close_dialog(cx);
+                },
+                cx,
+            )
+        });
         Self {
             store,
             page: Page::Performance,
             pages: HashMap::new(),
+            connection,
             _subscriptions: vec![subscription, observation],
         }
+    }
+
+    fn open_connection(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let connected = self.store.read(cx).keyboard().is_some();
+        if !connected {
+            self.store.update(cx, Store::search);
+        }
+        let panel = self.connection.clone();
+        window.open_dialog(cx, move |dialog, _, _| {
+            dialog
+                .title(if connected { "Keyboard" } else { "Connection" })
+                .w(px(480.0))
+                .child(panel.clone())
+        });
     }
 
     fn show(&mut self, page: Page, cx: &mut Context<Self>) {
@@ -80,187 +106,391 @@ impl Shell {
             .clone()
     }
 
-    fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let store = self.store.read(cx);
-        let available: Vec<Page> = Page::ALL
+    fn rail(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let current = self.page.group();
+        let entries = [
+            (Group::Keyboard, Page::Remap, "Keyboard", Page::Performance),
+            (Group::Device, Page::Settings, "Settings", Page::Settings),
+        ];
+        v_flex()
+            .flex_none()
+            .w(px(RAIL_WIDTH))
+            .h_full()
+            .items_center()
+            .gap_2()
+            .pt_4()
+            .bg(theme.sidebar)
+            .child(
+                div()
+                    .mb_3()
+                    .size_10()
+                    .rounded(theme.radius)
+                    .border_2()
+                    .border_color(theme.foreground)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(div().text_sm().font_weight(FontWeight::BOLD).child("ow")),
+            )
+            .children(
+                entries
+                    .into_iter()
+                    .map(|(group, icon_page, label, landing)| {
+                        let selected = group == current;
+                        v_flex()
+                            .id(SharedString::from(format!("rail-{label}")))
+                            .w(px(RAIL_WIDTH - 12.0))
+                            .py_2()
+                            .gap_1()
+                            .items_center()
+                            .rounded(theme.radius)
+                            .cursor_pointer()
+                            .when(selected, |this| this.bg(theme.secondary))
+                            .hover(|style| style.bg(theme.secondary_hover))
+                            .child(icon_page.icon().small().text_color(if selected {
+                                theme.primary
+                            } else {
+                                theme.muted_foreground
+                            }))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(if selected {
+                                        theme.foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    })
+                                    .child(label),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if this.page.group() != group {
+                                    this.show(landing, cx);
+                                }
+                            }))
+                    }),
+            )
+    }
+
+    fn navigation(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let keyboard_available: Vec<Page> = Page::ALL
             .into_iter()
-            .filter(|page| page.is_available(store.keyboard()))
+            .filter(|page| page.is_available(self.store.read(cx).keyboard()))
             .collect();
-        let status = status_line(
-            store.link(),
-            store.keyboard().map(|keyboard| {
-                SharedString::from(format!(
-                    "{} · firmware {}",
-                    keyboard.name, keyboard.version.firmware
-                ))
-            }),
-        );
+        let group = self.page.group();
         let current = self.page;
-        let menu = |group: Group, cx: &mut Context<Self>| {
-            SidebarMenu::new().children(
-                available
+        let sections: Vec<(&str, Vec<Page>)> = match group {
+            Group::Keyboard => vec![
+                ("Profiles", vec![Page::Profiles]),
+                (
+                    "Configuration",
+                    keyboard_available
+                        .iter()
+                        .copied()
+                        .filter(|page| page.group() == Group::Keyboard && *page != Page::Profiles)
+                        .collect(),
+                ),
+            ],
+            Group::Device => vec![(
+                "Device",
+                keyboard_available
                     .iter()
                     .copied()
-                    .filter(|page| page.group() == group)
-                    .map(|page| {
-                        SidebarMenuItem::new(page.title())
-                            .icon(page.icon())
-                            .active(current == page)
-                            .on_click(cx.listener(move |this, _, _, cx| this.show(page, cx)))
-                    })
-                    .collect::<Vec<_>>(),
-            )
+                    .filter(|page| page.group() == Group::Device)
+                    .collect(),
+            )],
         };
-        let keyboard_menu = menu(Group::Keyboard, cx);
-        let device_menu = menu(Group::Device, cx);
-        Sidebar::new("navigation")
-            .w(px(SIDEBAR_WIDTH))
-            .header(
-                SidebarHeader::new().child(
-                    h_flex()
-                        .gap_2()
-                        .child(Icon::new(Catalog::Keyboard))
-                        .child(div().font_weight(FontWeight::SEMIBOLD).child("openwoot")),
-                ),
+        let title = match group {
+            Group::Keyboard => "Keyboard configuration",
+            Group::Device => "Settings",
+        };
+        let device = self.device(cx);
+        v_flex()
+            .flex_none()
+            .w(px(NAVIGATION_WIDTH))
+            .my_4()
+            .ml_4()
+            .p_3()
+            .gap_4()
+            .rounded(theme.radius_lg)
+            .bg(theme.group_box)
+            .child(
+                div()
+                    .px_1()
+                    .pt_1()
+                    .text_base()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title),
             )
-            .child(SidebarGroup::new("Keyboard").child(keyboard_menu))
-            .child(SidebarGroup::new("Device").child(device_menu))
-            .footer(SidebarFooter::new().child(status))
+            .child(device)
+            .child(
+                v_flex()
+                    .id("navigation")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .gap_4()
+                    .children(sections.into_iter().map(|(label, pages)| {
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .px_3()
+                                    .pb_1()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(label),
+                            )
+                            .children(pages.into_iter().map(|page| {
+                                let selected = current == page;
+                                nav_item(page, selected, &theme).on_click(
+                                    cx.listener(move |this, _, _, cx| this.show(page, cx)),
+                                )
+                            }))
+                    })),
+            )
+            .child(
+                div()
+                    .text_center()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("openwoot {VERSION}")),
+            )
     }
 
-    fn top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn device(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme().clone();
         let store = self.store.read(cx);
-        let Some(keyboard) = store.keyboard() else {
-            return h_flex()
-                .h(px(52.0))
-                .px_4()
-                .border_b_1()
-                .border_color(theme.border);
-        };
-        let active = keyboard.active;
-        let unsaved = keyboard.unsaved;
-        let profiles: Vec<(Slot, SharedString, gpui_kit::Hsla)> = keyboard
-            .profiles
-            .iter()
-            .enumerate()
-            .filter_map(|(index, info)| {
-                let slot = Slot::new(u8::try_from(index).ok()?);
-                let color = rgb(u32::from_be_bytes([
-                    0,
-                    info.color.red,
-                    info.color.green,
-                    info.color.blue,
-                ]));
-                Some((slot, info.name.as_str().to_owned().into(), color.into()))
-            })
-            .collect();
-        h_flex()
-            .h(px(52.0))
-            .px_4()
-            .gap_2()
-            .justify_between()
-            .border_b_1()
-            .border_color(theme.border)
-            .child(
-                h_flex().gap_1().children(profiles.into_iter().map(|(slot, name, color)| {
-                    Button::new(SharedString::from(format!("profile-{}", slot.get())))
-                        .small()
-                        .when(slot == active, ButtonVariants::primary)
-                        .when(slot != active, ButtonVariants::ghost)
+        let (caption, name, dot): (SharedString, SharedString, Hsla) =
+            match (store.keyboard(), store.link()) {
+                (Some(keyboard), _) => (
+                    format!("Firmware {}", keyboard.version.firmware).into(),
+                    keyboard.name.clone(),
+                    theme.success,
+                ),
+                (None, Link::Loading) => ("Connecting".into(), "Keyboard".into(), theme.warning),
+                (None, Link::Unreachable(_)) => {
+                    ("Unavailable".into(), "Keyboard".into(), theme.danger)
+                }
+                (None, Link::Searching | Link::Connected) => (
+                    "Not connected".into(),
+                    "No keyboard".into(),
+                    theme.muted_foreground,
+                ),
+            };
+        h_flex().child(
+            h_flex()
+                .id("device")
+                .w_full()
+                .gap_3()
+                .p_2()
+                .rounded(theme.radius)
+                .bg(theme.tab_active)
+                .cursor_pointer()
+                .hover(|style| style.bg(theme.secondary_hover))
+                .on_click(cx.listener(|this, _, window, cx| this.open_connection(window, cx)))
+                .child(
+                    div()
+                        .relative()
+                        .flex_none()
+                        .size_12()
+                        .rounded(theme.radius)
+                        .bg(theme.sidebar)
+                        .flex()
+                        .items_center()
+                        .justify_center()
                         .child(
-                            h_flex()
-                                .gap_1p5()
-                                .child(div().size(px(9.0)).rounded_full().bg(color))
-                                .child(name),
+                            Page::Remap
+                                .icon()
+                                .small()
+                                .text_color(theme.muted_foreground),
                         )
-                        .tooltip(if slot == active {
-                            "Active profile"
-                        } else {
-                            "Activate this profile; unsaved changes of the active profile are saved first"
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if slot != active {
-                                this.store.update(cx, |store, cx| store.activate(slot, cx)).detach();
-                            }
-                        }))
-                })),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .when(unsaved, |this| {
-                        this.child(
+                        .child(
                             div()
-                                .text_sm()
-                                .text_color(theme.warning)
-                                .child("Unsaved changes"),
+                                .absolute()
+                                .bottom(px(3.0))
+                                .right(px(3.0))
+                                .size(px(8.0))
+                                .rounded_full()
+                                .bg(dot),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .truncate()
+                                .child(caption),
                         )
-                    })
-                    .child(
-                        Button::new("revert")
-                            .small()
-                            .ghost()
-                            .label("Discard")
-                            .disabled(!unsaved)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.store.update(cx, |store, cx| store.revert(cx)).detach();
-                            })),
-                    )
-                    .child(
-                        Button::new("save")
-                            .small()
-                            .primary()
-                            .icon(IconName::Check)
-                            .label("Save to keyboard")
-                            .disabled(!unsaved)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                let saved = this.store.update(cx, |store, cx| store.save(cx));
-                                cx.spawn_in(window, async move |_, cx| {
-                                    if saved.await.is_ok() {
-                                        cx.update(|window, cx| {
-                                            window.push_notification(Notification::success("Saved to the keyboard"), cx);
-                                        })
-                                        .ok();
-                                    }
-                                })
-                                .detach();
-                            })),
-                    ),
-            )
+                        .child(
+                            div()
+                                .text_base()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .truncate()
+                                .child(name),
+                        ),
+                )
+                .child(
+                    Icon::new(IconName::ChevronDown)
+                        .small()
+                        .text_color(theme.foreground),
+                ),
+        )
     }
 
-    fn waiting(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let (title, detail): (SharedString, SharedString) = match self.store.read(cx).link() {
-            Link::Searching => (
-                "Connect an openwoot keyboard".into(),
-                "Plug in a keyboard running openwoot. Keyboards with the stock firmware need openwoot flashed first (see Firmware).".into(),
+    fn header(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let store = self.store.read(cx);
+        let keyboard = store.keyboard();
+        let unsaved = keyboard.is_some_and(|keyboard| keyboard.unsaved);
+        let profiles = profile_entries(keyboard);
+        let active = keyboard.map(|keyboard| keyboard.active);
+        let current = profiles
+            .iter()
+            .find(|(slot, _, _)| Some(*slot) == active)
+            .cloned();
+        let shell = cx.entity();
+        let switcher = current.map(|(_, name, color)| {
+            Button::new("profile-switcher")
+                .ghost()
+                .h(px(48.0))
+                .px_2()
+                .child(
+                    h_flex()
+                        .gap_3()
+                        .child(profile_badge(color, &theme))
+                        .child(
+                            div()
+                                .text_base()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(name),
+                        )
+                        .child(
+                            Icon::new(IconName::ChevronDown)
+                                .small()
+                                .text_color(theme.muted_foreground),
+                        ),
+                )
+                .dropdown_menu(move |mut menu, window, _| {
+                    for (slot, name, _) in &profiles {
+                        let slot = *slot;
+                        menu = menu.item(
+                            PopupMenuItem::new(name.clone())
+                                .checked(Some(slot) == active)
+                                .on_click(window.listener_for(&shell, move |this, _, _, cx| {
+                                    if Some(slot) != active {
+                                        this.store
+                                            .update(cx, |store, cx| store.activate(slot, cx))
+                                            .detach();
+                                    }
+                                })),
+                        );
+                    }
+                    menu.separator()
+                        .item(
+                            PopupMenuItem::new("Manage profiles").on_click(window.listener_for(
+                                &shell,
+                                |this, _, _, cx| {
+                                    this.show(Page::Profiles, cx);
+                                },
+                            )),
+                        )
+                })
+        });
+        h_flex()
+            .flex_none()
+            .h(px(HEADER_HEIGHT))
+            .mx_4()
+            .mt_4()
+            .px_3()
+            .gap_2()
+            .justify_between()
+            .rounded(theme.radius_lg)
+            .bg(theme.group_box)
+            .child(h_flex().children(switcher))
+            .when(keyboard.is_some(), |this| {
+                this.child(
+                    h_flex()
+                        .gap_2()
+                        .when(unsaved, |this| {
+                            this.child(Button::new("revert").ghost().label("Discard").on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.store.update(cx, |store, cx| store.revert(cx)).detach();
+                                }),
+                            ))
+                        })
+                        .child(
+                            Button::new("save")
+                                .primary()
+                                .label("Save")
+                                .disabled(!unsaved)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.store.update(cx, |store, cx| store.save(cx)).detach();
+                                })),
+                        ),
+                )
+            })
+    }
+
+    fn waiting(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme().clone();
+        let store = self.store.read(cx);
+        let (title, detail): (&str, SharedString) = match store.link() {
+            Link::Loading => ("Connecting", SharedString::default()),
+            Link::Unreachable(reason) => ("Keyboard unavailable", reason.clone()),
+            Link::Searching | Link::Connected => (
+                "No keyboard connected",
+                "Plug in a keyboard running openwoot.".into(),
             ),
-            Link::Loading => ("Reading the keyboard".into(), "One moment…".into()),
-            Link::Connected => ("Connected".into(), SharedString::default()),
-            Link::Unreachable(reason) => ("Cannot use the keyboard".into(), reason.clone()),
         };
+        let loading = matches!(store.link(), Link::Loading);
         v_flex()
             .size_full()
             .items_center()
             .justify_center()
-            .gap_3()
-            .child(Spinner::new().large())
+            .gap_2()
+            .when(loading, |this| this.child(Spinner::new()))
             .child(
                 div()
                     .text_xl()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(title),
             )
-            .child(
-                div()
-                    .max_w(px(520.0))
-                    .text_center()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child(detail),
-            )
+            .when(!detail.is_empty(), |this| {
+                this.child(
+                    div()
+                        .max_w(px(420.0))
+                        .text_center()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .child(detail),
+                )
+            })
+            .when(!loading, |this| {
+                this.child(
+                    h_flex()
+                        .mt_4()
+                        .gap_2()
+                        .child(Button::new("waiting-help").label("Troubleshoot").on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.open_connection(window, cx);
+                            }),
+                        ))
+                        .child(
+                            Button::new("waiting-firmware")
+                                .primary()
+                                .label("Install firmware")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.show(Page::Firmware, cx);
+                                })),
+                        ),
+                )
+            })
     }
 }
 
@@ -278,34 +508,85 @@ impl Render for Shell {
         } else {
             self.waiting(cx).into_any_element()
         };
-        h_flex()
+        div()
+            .flex()
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .child(self.sidebar(cx))
+            .child(self.rail(cx))
+            .child(self.navigation(cx))
             .child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .child(self.top_bar(cx))
+                    .child(self.header(cx))
                     .child(content),
             )
     }
 }
 
-fn status_line(link: &Link, connected: Option<SharedString>) -> Div {
-    let (icon, text): (IconName, SharedString) = match (link, connected) {
-        (_, Some(description)) => (IconName::CircleCheck, description),
-        (Link::Loading, None) => (IconName::Loader, "Reading the keyboard".into()),
-        (Link::Unreachable(_), None) => (IconName::TriangleAlert, "Keyboard unreachable".into()),
-        (Link::Searching | Link::Connected, None) => {
-            (IconName::Search, "Looking for a keyboard".into())
-        }
-    };
+fn nav_item(page: Page, selected: bool, theme: &Theme) -> Stateful<Div> {
+    let hover = theme.secondary;
     h_flex()
-        .gap_2()
-        .text_xs()
-        .child(Icon::new(icon).small())
-        .child(div().flex_1().min_w_0().child(text))
+        .id(SharedString::from(format!("page-{}", page.title())))
+        .h_10()
+        .px_3()
+        .gap_3()
+        .rounded(theme.radius)
+        .text_sm()
+        .cursor_pointer()
+        .text_color(if selected {
+            theme.foreground
+        } else {
+            theme.sidebar_foreground
+        })
+        .when(selected, |this| this.bg(theme.secondary_hover))
+        .hover(move |style| style.bg(hover))
+        .child(page.icon().small().text_color(if selected {
+            theme.primary
+        } else {
+            theme.muted_foreground
+        }))
+        .child(page.title())
+}
+
+fn profile_entries(keyboard: Option<&Keyboard>) -> Vec<(Slot, SharedString, Hsla)> {
+    keyboard.map_or_else(Vec::new, |keyboard| {
+        keyboard
+            .profiles
+            .iter()
+            .enumerate()
+            .filter_map(|(index, info)| {
+                let slot = Slot::new(u8::try_from(index).ok()?);
+                let color = rgb(u32::from_be_bytes([
+                    0,
+                    info.color.red,
+                    info.color.green,
+                    info.color.blue,
+                ]));
+                Some((slot, info.name.as_str().to_owned().into(), color.into()))
+            })
+            .collect()
+    })
+}
+
+fn profile_badge(color: Hsla, theme: &Theme) -> Div {
+    div()
+        .size_9()
+        .rounded_full()
+        .border_2()
+        .border_color(color)
+        .bg(theme.sidebar)
+        .shadow(vec![BoxShadow {
+            color: color.opacity(0.55),
+            offset: point(px(0.0), px(0.0)),
+            blur_radius: px(14.0),
+            spread_radius: px(1.0),
+            inset: false,
+        }])
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(div().size_3().rounded_full().bg(color))
 }

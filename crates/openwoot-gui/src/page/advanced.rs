@@ -7,9 +7,9 @@ mod tester;
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
-    AppContext as _, Context, Div, Entity, FocusHandle, FontWeight, Hsla, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Window,
+    App, AppContext as _, Context, Div, Entity, FocusHandle, FontWeight, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window,
     assets::IconName as Catalog,
     component::{
         ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _,
@@ -17,7 +17,6 @@ use gpui_kit::{
         h_flex,
         notification::Notification,
         slider::{SliderEvent, SliderState},
-        tab::{Tab, TabBar},
         v_flex,
     },
     div,
@@ -33,7 +32,10 @@ use openwoot_protocol::{
 
 pub(super) use self::kind::Kind;
 use self::preset::{PRESETS, Preset};
-use super::remap::{ActionPicker, PickerEvent, Target};
+use super::{
+    Page,
+    remap::{ActionPicker, PickerEvent, Target, caption, layer_label, layer_pill, layers_column},
+};
 use crate::{
     keyboard::{KeyFace, KeyboardView, Selection},
     panel,
@@ -41,7 +43,6 @@ use crate::{
     usage,
 };
 
-const KEYBOARD_MARGIN: f32 = 340.0;
 const HOLD_TIME_MIN_MS: f32 = 10.0;
 const HOLD_TIME_MAX_MS: f32 = 1000.0;
 const HOLD_TIME_STEP_MS: f32 = 10.0;
@@ -50,6 +51,16 @@ const BOTTOM_OUT_MAX_MM: f32 = 4.0;
 const BOTTOM_OUT_STEP_MM: f32 = 0.05;
 const DEFAULT_BOTTOM_OUT_SHARE: f32 = 0.9;
 const STALE_AFTER: Duration = Duration::from_secs(2);
+const ROW_HEIGHT: f32 = 40.0;
+const GLYPH_SIZE: f32 = 44.0;
+const UNAVAILABLE_OPACITY: f32 = 0.5;
+const ADD_ORDER: [Kind; 5] = [
+    Kind::DepthPriority,
+    Kind::Socd,
+    Kind::DynamicKeystroke,
+    Kind::ModTap,
+    Kind::Toggle,
+];
 
 pub(crate) struct AdvancedPage {
     store: Entity<Store>,
@@ -85,14 +96,7 @@ enum ActionSlot {
 
 impl AdvancedPage {
     pub(crate) fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let picker = cx.new(|cx| {
-            ActionPicker::new(
-                "Choose an action slot of the advanced key to bind an action to it",
-                "No action",
-                window,
-                cx,
-            )
-        });
+        let picker = cx.new(|cx| ActionPicker::new("None", window, cx));
         let hold_time = cx.new(|_| {
             SliderState::new()
                 .min(HOLD_TIME_MIN_MS)
@@ -133,8 +137,9 @@ impl AdvancedPage {
             cx.subscribe_in(
                 &hold_time,
                 window,
-                |this, _, event: &SliderEvent, window, cx| {
-                    if let SliderEvent::Release(value) = event {
+                |this, _, event: &SliderEvent, window, cx| match event {
+                    SliderEvent::Change(_) => cx.notify(),
+                    SliderEvent::Release(value) => {
                         let milliseconds = milliseconds_of(value.end());
                         this.change_selected(
                             |entry| {
@@ -151,8 +156,9 @@ impl AdvancedPage {
             cx.subscribe_in(
                 &bottom_out,
                 window,
-                |this, _, event: &SliderEvent, window, cx| {
-                    if let SliderEvent::Release(value) = event {
+                |this, _, event: &SliderEvent, window, cx| match event {
+                    SliderEvent::Change(_) => cx.notify(),
+                    SliderEvent::Release(value) => {
                         this.set_bottom_out(Some(value.end()), window, cx);
                     }
                 },
@@ -309,6 +315,13 @@ impl AdvancedPage {
         self.key_name(usize::from(index.get()))
     }
 
+    fn keys_name(&self, entry: &advanced::Key) -> String {
+        let names: Vec<String> = rules::bindings(entry)
+            .map(|(key, _)| self.index_name(key))
+            .collect();
+        names.join(" + ")
+    }
+
     fn sync_picker(&self, cx: &mut Context<Self>) {
         let target = self
             .selected_entry()
@@ -385,6 +398,13 @@ impl AdvancedPage {
         cx.notify();
     }
 
+    fn close_editor(&mut self, cx: &mut Context<Self>) {
+        self.deselect();
+        self.draft = None;
+        self.sync_picker(cx);
+        cx.notify();
+    }
+
     fn choose_slot(&mut self, slot: ActionSlot, cx: &mut Context<Self>) {
         self.slot = Some(slot);
         self.sync_picker(cx);
@@ -401,10 +421,10 @@ impl AdvancedPage {
             if draft.keys.contains(&key) {
                 draft.keys.retain(|chosen| *chosen != key);
             } else if holder.is_some() {
+                let name = self.key_name(key);
                 window.push_notification(
                     Notification::warning(format!(
-                        "This key already has an advanced key on {}",
-                        layer_phrase(layer)
+                        "{name} already has an advanced key on this layer"
                     )),
                     cx,
                 );
@@ -423,9 +443,7 @@ impl AdvancedPage {
         {
             self.select(primary, layer, window, cx);
         } else {
-            self.deselect();
-            self.sync_picker(cx);
-            cx.notify();
+            self.close_editor(cx);
         }
     }
 
@@ -436,11 +454,6 @@ impl AdvancedPage {
         });
         self.deselect();
         self.sync_picker(cx);
-        cx.notify();
-    }
-
-    fn cancel_draft(&mut self, cx: &mut Context<Self>) {
-        self.draft = None;
         cx.notify();
     }
 
@@ -586,16 +599,19 @@ impl AdvancedPage {
         self.write(&entries, window, cx);
     }
 
-    fn confirm_delete(entry: advanced::Key, window: &mut Window, cx: &mut Context<Self>) {
+    fn confirm_delete(&self, entry: advanced::Key, window: &mut Window, cx: &mut Context<Self>) {
         let page = cx.entity().downgrade();
-        let title = Kind::of(&entry.behaviour).title();
+        let title = format!(
+            "Delete {} on {}?",
+            Kind::of(&entry.behaviour).title(),
+            self.keys_name(&entry)
+        );
         window.open_alert_dialog(cx, move |alert, _, _| {
             let page = page.clone();
             alert
-                .title(format!("Remove this {title} binding?"))
-                .description("Are you sure you want to remove this advanced key?")
+                .title(title.clone())
                 .confirm()
-                .ok_text("Remove")
+                .ok_text("Delete")
                 .ok_variant(ButtonVariant::Danger)
                 .on_ok(move |_, window, cx| {
                     page.update(cx, |page, cx| {
@@ -607,23 +623,9 @@ impl AdvancedPage {
         });
     }
 
-    fn preset_plan(
-        &self,
-        preset: &Preset,
-    ) -> Result<(Vec<advanced::Key>, Vec<advanced::Key>), String> {
-        let Some(base) = self.keymaps.first().and_then(Option::as_ref) else {
-            return Err("Reading the base layer…".to_owned());
-        };
-        let added = preset.entries(base).map_err(|missing| {
-            let names: Vec<String> = missing
-                .iter()
-                .map(|action| usage::name(*action).into_owned())
-                .collect();
-            format!(
-                "Needs a key bound to {} on the base layer",
-                names.join(", ")
-            )
-        })?;
+    fn preset_plan(&self, preset: &Preset) -> Option<(Vec<advanced::Key>, Vec<advanced::Key>)> {
+        let base = self.keymaps.first().and_then(Option::as_ref)?;
+        let added = preset.entries(base).ok()?;
         let replaced: Vec<advanced::Key> = self
             .entries()
             .iter()
@@ -637,22 +639,12 @@ impl AdvancedPage {
             .copied()
             .collect();
         let total = self.entries().len() - replaced.len() + added.len();
-        if total > MAX_ENTRIES {
-            return Err(format!(
-                "This preset would exceed your Advanced Keys limit. Remove {} binding(s) to apply.",
-                total - MAX_ENTRIES
-            ));
-        }
-        Ok((added, replaced))
+        (total <= MAX_ENTRIES).then_some((added, replaced))
     }
 
     fn apply_preset(&mut self, preset: &Preset, window: &mut Window, cx: &mut Context<Self>) {
-        let (added, replaced) = match self.preset_plan(preset) {
-            Ok(plan) => plan,
-            Err(reason) => {
-                window.push_notification(Notification::warning(reason), cx);
-                return;
-            }
+        let Some((added, replaced)) = self.preset_plan(preset) else {
+            return;
         };
         let mut entries: Vec<advanced::Key> = self
             .entries()
@@ -674,45 +666,36 @@ impl AdvancedPage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (added, replaced) = match self.preset_plan(preset) {
-            Ok(plan) => plan,
-            Err(reason) => {
-                window.push_notification(Notification::warning(reason), cx);
-                return;
-            }
+        let Some((_, replaced)) = self.preset_plan(preset) else {
+            return;
         };
         if replaced.is_empty() {
             self.apply_preset(preset, window, cx);
             return;
         }
         let page = cx.entity().downgrade();
-        let describe = |entry: &advanced::Key| {
-            let keys: Vec<String> = rules::bindings(entry)
-                .map(|(key, _)| self.index_name(key))
-                .collect();
-            format!(
-                "{} on {}",
-                Kind::of(&entry.behaviour).title(),
-                keys.join(" + ")
-            )
-        };
-        let current: Vec<String> = replaced.iter().map(describe).collect();
-        let new: Vec<String> = added.iter().map(describe).collect();
+        let current: Vec<String> = replaced
+            .iter()
+            .map(|entry| {
+                format!(
+                    "{} on {}",
+                    Kind::of(&entry.behaviour).title(),
+                    self.keys_name(entry)
+                )
+            })
+            .collect();
         let count = replaced.len();
         window.open_alert_dialog(cx, move |alert, _, _| {
             let page = page.clone();
             alert
-                .title(format!(
-                    "This preset will replace {count} existing Advanced Key{}",
-                    if count == 1 { "" } else { "s" }
-                ))
-                .description(format!(
-                    "Current: {}. New: {}.",
-                    current.join("; "),
-                    new.join("; ")
-                ))
+                .title(if count == 1 {
+                    "Replace 1 advanced key?".to_owned()
+                } else {
+                    format!("Replace {count} advanced keys?")
+                })
+                .description(format!("{}.", current.join(", ")))
                 .confirm()
-                .ok_text("Apply preset")
+                .ok_text("Replace")
                 .ok_variant(ButtonVariant::Danger)
                 .on_ok(move |_, window, cx| {
                     page.update(cx, |page, cx| page.apply_preset(preset, window, cx))
@@ -722,7 +705,7 @@ impl AdvancedPage {
         });
     }
 
-    fn face(&self, keyboard: &Keyboard, key: usize, look: Look) -> KeyFace {
+    fn face(&self, keyboard: &Keyboard, key: usize) -> KeyFace {
         let layer = self.layer;
         let on = |layer: Layer| {
             self.keymaps
@@ -753,12 +736,7 @@ impl AdvancedPage {
             .and_then(|position| self.entries().get(position));
         if let Some(entry) = holder {
             face.detail = Some(Kind::of(&entry.behaviour).badge().into());
-            face.fill = Some(if self.draft.is_some() {
-                look.taken
-            } else {
-                look.bound
-            });
-            face.dimmed = false;
+            face.dimmed = self.draft.is_some();
         }
         face.travel = self.tested_travel(key);
         face
@@ -774,155 +752,47 @@ impl AdvancedPage {
         selection
     }
 
-    fn layer_bar(&self, cx: &mut Context<Self>) -> Div {
-        let used = self.entries().len();
-        h_flex()
-            .w_full()
-            .gap_3()
-            .items_center()
-            .child(
-                TabBar::new("advanced-layers")
-                    .segmented()
-                    .selected_index(usize::from(self.layer.number()))
-                    .on_click(cx.listener(|this, index: &usize, _, cx| {
-                        if let Some(layer) = Layer::ALL.get(*index) {
-                            this.choose_layer(*layer, cx);
-                        }
-                    }))
-                    .children(Layer::ALL.map(|layer| {
-                        let count = self
-                            .entries()
-                            .iter()
-                            .filter(|entry| entry.layer == layer)
-                            .count();
-                        let title = if count == 0 {
-                            usage::layer_name(layer).to_owned()
-                        } else {
-                            format!("{} ({count})", usage::layer_name(layer))
-                        };
-                        Tab::new().label(title)
-                    })),
-            )
-            .child(div().flex_1())
-            .child(
+    fn layers(&self, cx: &mut Context<Self>) -> Div {
+        let pills: Vec<Stateful<Div>> = Layer::ALL
+            .into_iter()
+            .map(|layer| {
+                layer_pill("advanced", layer, self.layer == layer, None, cx)
+                    .on_click(cx.listener(move |this, _, _, cx| this.choose_layer(layer, cx)))
+            })
+            .collect();
+        layers_column(pills, cx)
+    }
+
+    fn active_card(&self, cx: &mut Context<Self>) -> Div {
+        let theme = cx.theme();
+        let count = div()
+            .absolute()
+            .top_6()
+            .right_6()
+            .px_2()
+            .py_0p5()
+            .rounded(theme.radius)
+            .bg(theme.secondary)
+            .text_xs()
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(SharedString::from(format!(
+                "{} / {MAX_ENTRIES}",
+                self.entries().len()
+            )));
+        let card = panel::section("Active advanced keys", None, cx)
+            .relative()
+            .child(count);
+        if self.entries().is_empty() {
+            return card.child(
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child(SharedString::from(format!(
-                        "{used} of {MAX_ENTRIES} advanced keys used"
-                    ))),
-            )
-    }
-
-    fn keyboard_section(
-        &self,
-        keyboard: &Keyboard,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let theme = cx.theme();
-        let look = Look {
-            bound: theme.primary.opacity(0.3),
-            taken: theme.danger.opacity(0.3),
-        };
-        let page = cx.entity().downgrade();
-        let board = KeyboardView::new("advanced-keyboard", keyboard, |key| {
-            self.face(keyboard, key, look)
-        })
-        .selection(&self.view_selection())
-        .fit_width(window.viewport_size().width - px(KEYBOARD_MARGIN))
-        .on_key_click(move |key, _, window, cx| {
-            page.update(cx, |page, cx| page.click_key(key, window, cx))
-                .ok();
-        });
-        let section = panel::section(
-            usage::layer_name(self.layer),
-            Some(
-                "Keys with an advanced key on this layer are highlighted. Click one to edit it."
-                    .into(),
-            ),
-            cx,
-        )
-        .child(div().w_full().overflow_hidden().child(board));
-        match &self.draft {
-            Some(draft) => section.child(self.draft_bar(draft, cx)),
-            None => section,
+                    .child("No advanced keys yet"),
+            );
         }
-    }
-
-    fn draft_bar(&self, draft: &Draft, cx: &mut Context<Self>) -> Div {
-        let needed = draft.kind.key_count();
-        let prompt = if needed == 1 {
-            format!(
-                "Select a key from your keyboard to assign to {}",
-                draft.kind.title()
-            )
-        } else {
-            format!(
-                "Select {needed} keys from your keyboard to assign {} ({} of {needed} selected)",
-                draft.kind.title(),
-                draft.keys.len()
-            )
-        };
-        let chosen: Vec<String> = draft.keys.iter().map(|key| self.key_name(*key)).collect();
-        h_flex()
-            .gap_2()
-            .flex_wrap()
-            .items_center()
-            .p_3()
-            .rounded(cx.theme().radius)
-            .border_1()
-            .border_color(cx.theme().primary)
-            .child(
-                v_flex()
-                    .flex_1()
-                    .gap_0p5()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(prompt),
-                    )
-                    .when(!chosen.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(SharedString::from(chosen.join(" + "))),
-                        )
-                    }),
-            )
-            .child(
-                Button::new("draft-cancel")
-                    .small()
-                    .ghost()
-                    .label("Cancel")
-                    .on_click(cx.listener(|this, _, _, cx| this.cancel_draft(cx))),
-            )
-            .child(
-                Button::new("draft-assign")
-                    .small()
-                    .primary()
-                    .label("Assign")
-                    .disabled(draft.keys.len() != needed)
-                    .on_click(cx.listener(|this, _, window, cx| this.assign_draft(window, cx))),
-            )
-    }
-
-    fn list_section(&self, cx: &mut Context<Self>) -> Div {
-        let mut section = panel::section(
-            "Active Advanced Keys",
-            Some("There are a limited number of slots per profile.".into()),
-            cx,
-        );
-        if self.entries().is_empty() {
-            return section.child(panel::note(
-                "No Advanced Keys configured yet. Select one from the list to add it.",
-                cx,
-            ));
-        }
+        let mut groups = v_flex().gap_4();
         for layer in Layer::ALL {
-            let rows: Vec<Div> = self
+            let rows: Vec<Stateful<Div>> = self
                 .entries()
                 .iter()
                 .filter(|entry| entry.layer == layer)
@@ -931,262 +801,235 @@ impl AdvancedPage {
             if rows.is_empty() {
                 continue;
             }
-            section = section.child(
+            groups = groups.child(
                 v_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(cx.theme().muted_foreground)
-                            .child(usage::layer_name(layer)),
-                    )
+                    .gap_2()
+                    .child(panel::label(layer_label(layer), cx))
                     .children(rows),
             );
         }
-        section
+        card.child(groups)
     }
 
-    fn entry_row(&self, entry: advanced::Key, cx: &mut Context<Self>) -> Div {
+    fn entry_row(&self, entry: advanced::Key, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = cx.theme();
-        let kind = Kind::of(&entry.behaviour);
+        let (muted, fill, hover, accent, radius) = (
+            theme.muted_foreground,
+            theme.accent,
+            theme.secondary,
+            theme.primary,
+            theme.radius,
+        );
         let selected = self.selected == Some((entry.key, entry.layer));
-        let keys: Vec<String> = rules::bindings(&entry)
-            .map(|(key, _)| self.index_name(key))
-            .collect();
         let id = format!("entry-{}-{}", entry.layer.number(), entry.key.get());
         h_flex()
-            .gap_2()
+            .id(SharedString::from(format!("{id}-row")))
+            .w_full()
+            .h(px(ROW_HEIGHT))
+            .pl_3()
+            .pr_1()
+            .gap_3()
             .items_center()
+            .rounded(radius)
+            .border_1()
+            .border_color(if selected { accent } else { fill })
+            .bg(fill)
+            .cursor_pointer()
+            .hover(move |style| style.bg(hover))
             .child(
-                h_flex()
-                    .id(SharedString::from(format!("{id}-row")))
+                div()
                     .flex_1()
                     .min_w_0()
-                    .gap_3()
-                    .px_3()
-                    .py_2()
-                    .rounded(theme.radius)
-                    .border_1()
-                    .border_color(if selected {
-                        theme.primary
-                    } else {
-                        theme.border
-                    })
-                    .cursor_pointer()
-                    .hover(|style| style.bg(theme.secondary))
-                    .child(
-                        div()
-                            .w_32()
-                            .text_sm()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(SharedString::from(keys.join(" + "))),
-                    )
-                    .child(div().w_40().text_sm().child(kind.title()))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(SharedString::from(self.summary(&entry))),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.select(entry.key, entry.layer, window, cx);
-                    })),
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(SharedString::from(self.keys_name(&entry))),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(muted)
+                    .child(Kind::of(&entry.behaviour).title()),
             )
             .child(
                 Button::new(SharedString::from(format!("{id}-delete")))
-                    .small()
                     .ghost()
+                    .xsmall()
                     .icon(Catalog::Trash)
                     .tooltip("Delete")
-                    .on_click(cx.listener(move |_, _, window, cx| {
-                        Self::confirm_delete(entry, window, cx);
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.confirm_delete(entry, window, cx);
                     })),
             )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.select(entry.key, entry.layer, window, cx);
+            }))
     }
 
-    fn summary(&self, entry: &advanced::Key) -> String {
-        match entry.behaviour {
-            Behaviour::DynamicKeystroke(keystroke) => {
-                let bound: Vec<String> = keystroke
-                    .strokes
-                    .iter()
-                    .filter(|stroke| stroke.action != Action::None)
-                    .map(|stroke| usage::name(stroke.action).into_owned())
-                    .collect();
-                if bound.is_empty() {
-                    "No bindings yet".to_owned()
-                } else {
-                    bound.join(", ")
-                }
-            }
-            Behaviour::ModTap(mod_tap) => format!(
-                "Tap: {} · Hold: {} · {} ms",
-                usage::name(mod_tap.tap),
-                usage::name(mod_tap.hold),
-                mod_tap.hold_time_ms
-            ),
-            Behaviour::Toggle(action) => usage::name(action).into_owned(),
-            Behaviour::DepthPriority(pair) => {
-                let first = self.index_name(entry.key);
-                let second = self.index_name(pair.other);
-                kind::bottomed_out_resolutions(&first, &second)
-                    .into_iter()
-                    .find(|choice| choice.value == pair.both_bottomed_out)
-                    .map_or_else(String::new, |choice| {
-                        format!("Both fully pressed: {}", choice.title)
-                    })
-            }
-            Behaviour::Socd(pair) => {
-                let first = self.index_name(entry.key);
-                let second = self.index_name(pair.other);
-                let title = kind::socd_resolutions(&first, &second)
-                    .into_iter()
-                    .find(|choice| choice.value == pair.resolution)
-                    .map_or_else(String::new, |choice| choice.title);
-                if pair.both_when_bottomed_out {
-                    format!("{title} · both when fully pressed")
-                } else {
-                    title
-                }
-            }
+    fn presets_card(&self, cx: &mut Context<Self>) -> Option<Div> {
+        if self.layer != Layer::Base || self.selected.is_some() || self.draft.is_some() {
+            return None;
         }
-    }
-
-    fn create_section(&self, cx: &mut Context<Self>) -> Div {
-        let full = self.entries().len() >= MAX_ENTRIES;
-        let loaded = self.entries.is_some() && self.keymaps.iter().all(Option::is_some);
-        let theme = cx.theme();
-        let cards = Kind::ALL.map(|kind| {
-            let drafting = self.draft.as_ref().is_some_and(|draft| draft.kind == kind);
-            v_flex()
-                .w(px(260.0))
-                .gap_2()
-                .p_3()
-                .rounded(theme.radius)
-                .border_1()
-                .border_color(if drafting {
-                    theme.primary
-                } else {
-                    theme.border
+        let muted = cx.theme().muted_foreground;
+        let mut groups = v_flex().gap_4();
+        let mut any = false;
+        for kind in Kind::ALL {
+            let rows: Vec<Div> = PRESETS
+                .iter()
+                .enumerate()
+                .filter(|(_, preset)| preset.kind == kind)
+                .filter_map(|(position, preset)| {
+                    let (added, replaced) = self.preset_plan(preset)?;
+                    let applied = added.iter().all(|entry| replaced.contains(entry));
+                    let control = if applied {
+                        div().text_sm().text_color(muted).child("Applied")
+                    } else {
+                        div().child(
+                            Button::new(SharedString::from(format!("preset-{position}")))
+                                .small()
+                                .label("Apply")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    if let Some(preset) = PRESETS.get(position) {
+                                        this.confirm_preset(preset, window, cx);
+                                    }
+                                })),
+                        )
+                    };
+                    Some(panel::row(
+                        preset.title,
+                        Some(preset.description.into()),
+                        control,
+                        cx,
+                    ))
                 })
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(kind.title()),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(kind.description()),
-                )
-                .child(
-                    Button::new(SharedString::from(format!("create-{kind:?}")))
-                        .small()
-                        .outline()
-                        .icon(Catalog::Plus)
-                        .label("Add")
-                        .disabled(full || !loaded)
-                        .on_click(cx.listener(move |this, _, _, cx| this.start_draft(kind, cx))),
-                )
-        });
-        let description: SharedString = if full {
-            "You have reached the maximum amount of Advanced Keys for this profile.".into()
-        } else {
-            format!(
-                "To create a binding, first select a type of advanced key below, then select its \
-                 keys on the keyboard. It goes on {}.",
-                usage::layer_name(self.layer)
-            )
-            .into()
-        };
-        panel::section("Add Advanced Key", Some(description), cx)
-            .child(h_flex().gap_3().flex_wrap().items_start().children(cards))
+                .collect();
+            if rows.is_empty() {
+                continue;
+            }
+            any = true;
+            groups = groups.child(
+                v_flex()
+                    .gap_1()
+                    .child(panel::label(kind.title(), cx))
+                    .children(rows),
+            );
+        }
+        any.then(|| panel::section("Presets", None, cx).child(groups))
     }
 
-    fn presets_section(&self, cx: &mut Context<Self>) -> Div {
-        let section = panel::section(
-            "Preset bindings",
-            Some(
-                "Select a preset to instantly apply common advanced key configurations. You can \
-                 always customise it afterwards."
-                    .into(),
-            ),
+    fn add_card(&self, cx: &mut Context<Self>) -> Div {
+        let available = self.entries().len() < MAX_ENTRIES
+            && self.entries.is_some()
+            && self.keymaps.iter().all(Option::is_some);
+        let tiles: Vec<Stateful<Div>> = ADD_ORDER
+            .into_iter()
+            .map(|kind| Self::kind_tile(kind, available, cx))
+            .collect();
+        panel::section(
+            "Add advanced key",
+            Some("Choose a type, then the keys it applies to".into()),
             cx,
-        );
-        if self.layer != Layer::Base {
-            return section.child(panel::note(
-                "Only available on the base layer. Switch layers to apply.",
-                cx,
-            ));
-        }
+        )
+        .child(v_flex().gap_2().children(tiles))
+    }
+
+    fn kind_tile(kind: Kind, available: bool, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = cx.theme();
-        let rows: Vec<Div> = PRESETS
-            .iter()
-            .enumerate()
-            .map(|(position, preset)| {
-                let plan = self.preset_plan(preset);
-                let unavailable = plan.as_ref().err().cloned();
+        let (fill, hover, border, muted, radius) = (
+            theme.accent,
+            theme.secondary,
+            theme.border,
+            theme.muted_foreground,
+            theme.radius,
+        );
+        let tile = h_flex()
+            .id(SharedString::from(format!("add-{kind:?}")))
+            .w_full()
+            .gap_4()
+            .px_4()
+            .py_3()
+            .items_center()
+            .rounded(radius)
+            .bg(fill)
+            .child(
                 h_flex()
-                    .gap_3()
+                    .flex_none()
+                    .size(px(GLYPH_SIZE))
                     .items_center()
-                    .py_1()
+                    .justify_center()
+                    .rounded(radius)
+                    .border_1()
+                    .border_color(border)
+                    .text_xs()
+                    .font_weight(FontWeight::BOLD)
+                    .child(kind.badge()),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_0p5()
                     .child(
                         div()
-                            .w_32()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(preset.kind.title()),
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(kind.title()),
                     )
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child(preset.title),
-                            )
-                            .child(
-                                div().text_xs().text_color(theme.muted_foreground).child(
-                                    unavailable
-                                        .clone()
-                                        .unwrap_or_else(|| preset.description.to_owned()),
-                                ),
-                            ),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!("preset-{position}")))
-                            .small()
-                            .outline()
-                            .label("Apply")
-                            .disabled(unavailable.is_some())
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                if let Some(preset) = PRESETS.get(position) {
-                                    this.confirm_preset(preset, window, cx);
-                                }
-                            })),
-                    )
+                    .child(div().text_sm().text_color(muted).child(kind.help())),
+            );
+        if available {
+            tile.cursor_pointer()
+                .hover(move |style| style.bg(hover))
+                .on_click(cx.listener(move |this, _, _, cx| this.start_draft(kind, cx)))
+        } else {
+            tile.opacity(UNAVAILABLE_OPACITY)
+        }
+    }
+
+    fn draft_card(&self, draft: &Draft, cx: &mut Context<Self>) -> Div {
+        let needed = draft.kind.key_count();
+        let fields: Vec<Div> = (0..needed)
+            .map(|position| {
+                let label = match (needed, position) {
+                    (1, _) => "Key",
+                    (_, 0) => "First key",
+                    _ => "Second key",
+                };
+                let chosen = draft.keys.get(position).map(|key| self.key_name(*key));
+                div()
+                    .flex_1()
+                    .child(panel::field(label, value_box(chosen, cx), cx))
             })
             .collect();
-        section.children(rows)
+        panel::section(draft.kind.title(), Some(draft.kind.help().into()), cx)
+            .child(h_flex().w_full().gap_4().children(fields))
+            .child(
+                h_flex()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        Button::new("draft-cancel")
+                            .ghost()
+                            .small()
+                            .label("Cancel")
+                            .on_click(cx.listener(|this, _, _, cx| this.close_editor(cx))),
+                    )
+                    .child(
+                        Button::new("draft-create")
+                            .primary()
+                            .small()
+                            .label("Create")
+                            .disabled(draft.keys.len() != needed)
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.assign_draft(window, cx)),
+                            ),
+                    ),
+            )
     }
 }
 
 impl Render for AdvancedPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let page = panel::page(
-            "Advanced keys",
-            "Advanced keys change the way your keyboard processes a keypress. They are powerful \
-             tools that can enhance gameplay and improve productivity.",
-            cx,
-        );
+        let page = panel::page();
         let Some(keyboard) = self.store.read(cx).keyboard().cloned() else {
             return page;
         };
@@ -1194,20 +1037,75 @@ impl Render for AdvancedPage {
             self.refresh_keymaps(cx);
         }
         self.seen = Instant::now();
-        let editor = self.editor_section(&keyboard, cx);
-        page.child(self.layer_bar(cx))
-            .child(self.keyboard_section(&keyboard, window, cx))
-            .children(editor)
-            .child(self.list_section(cx))
-            .child(self.create_section(cx))
-            .child(self.presets_section(cx))
+        let weak = cx.entity().downgrade();
+        let view = KeyboardView::new("advanced-keyboard", &keyboard, |key| {
+            self.face(&keyboard, key)
+        })
+        .selection(&self.view_selection())
+        .fit_width(panel::content_width_beside_side(window))
+        .on_key_click(move |key, _, window, cx| {
+            weak.update(cx, |page, cx| page.click_key(key, window, cx))
+                .ok();
+        });
+        let caption = self
+            .draft
+            .as_ref()
+            .filter(|draft| draft.keys.len() < draft.kind.key_count())
+            .map(|draft| {
+                caption(
+                    if draft.kind.key_count() == 1 {
+                        "Select a key"
+                    } else {
+                        "Select two keys"
+                    },
+                    cx,
+                )
+            });
+        let (left, right) = if let Some(draft) = &self.draft {
+            (self.draft_card(draft, cx), self.active_card(cx))
+        } else if let Some(editor) = self.editor_card(&keyboard, cx) {
+            let picks = self
+                .selected_entry()
+                .is_some_and(|entry| Kind::of(&entry.behaviour).owns_actions());
+            let right = if picks {
+                panel::section("Actions", None, cx).child(self.picker.clone())
+            } else {
+                self.active_card(cx)
+            };
+            (editor, right)
+        } else {
+            let right = v_flex()
+                .gap_4()
+                .child(self.active_card(cx))
+                .children(self.presets_card(cx));
+            (self.add_card(cx), right)
+        };
+        page.child(panel::stage_with_side(self.layers(cx), view))
+            .children(caption)
+            .child(panel::heading(
+                Page::Advanced.title(),
+                Some("Give keys extra behaviour, such as tap and hold or several actions".into()),
+                div(),
+                cx,
+            ))
+            .child(panel::columns(left, right))
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Look {
-    bound: Hsla,
-    taken: Hsla,
+fn value_box(value: Option<String>, cx: &App) -> Div {
+    let theme = cx.theme();
+    let empty = value.is_none();
+    h_flex()
+        .w_full()
+        .h(px(ROW_HEIGHT))
+        .px_3()
+        .items_center()
+        .rounded(theme.radius)
+        .border_1()
+        .border_color(theme.input)
+        .text_sm()
+        .when(empty, |this| this.text_color(theme.muted_foreground))
+        .child(SharedString::from(value.unwrap_or_else(|| "—".to_owned())))
 }
 
 const fn first_slot(behaviour: &Behaviour) -> Option<ActionSlot> {

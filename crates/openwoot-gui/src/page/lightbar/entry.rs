@@ -1,3 +1,4 @@
+use gpui_kit::assets::IconName as Catalog;
 use openwoot_protocol::{
     heapless,
     keys::Position,
@@ -39,7 +40,6 @@ pub(super) const COMPARATORS: [Comparator; 6] = [
     Comparator::Less,
     Comparator::LessOrEqual,
 ];
-pub(super) const LOGICS: [Logic; 3] = [Logic::Single, Logic::All, Logic::Any];
 pub(super) const TIMINGS: [Timing; 3] = [Timing::While, Timing::Matched, Timing::Changed];
 
 const RED: Color = color(255, 0, 0);
@@ -113,6 +113,17 @@ impl Kind {
         }
     }
 
+    pub(super) const fn icon(self) -> Catalog {
+        match self {
+            Self::Meter => Catalog::Gauge,
+            Self::ProfileIndicator => Catalog::Layers,
+            Self::Mirror => Catalog::Keyboard,
+            Self::Blink => Catalog::Repeat,
+            Self::Solid => Catalog::Lightbulb,
+            Self::Custom => Catalog::Palette,
+        }
+    }
+
     pub(super) fn effect(self, matrix: Matrix) -> Effect {
         let range = full_range(matrix.leds);
         match self {
@@ -160,9 +171,9 @@ impl Timing {
 
     pub(super) const fn label(self) -> &'static str {
         match self {
-            Self::While => "While it matches",
-            Self::Matched => "When it starts to match",
-            Self::Changed => "When it changes",
+            Self::While => "While",
+            Self::Matched => "On match",
+            Self::Changed => "On change",
         }
     }
 
@@ -386,17 +397,17 @@ pub(super) fn signal_name(signal: Signal) -> String {
 
 pub(super) const fn builtin_name(builtin: Builtin) -> &'static str {
     match builtin {
-        Builtin::ActiveProfile => "Active Profile",
-        Builtin::AnalogLevel => "Max Analog Value",
-        Builtin::KeyPressed => "Any Key Actuated",
-        Builtin::CapsLock => "Caps Lock State",
-        Builtin::ScrollLock => "Scroll Lock State",
-        Builtin::NumLock => "Num Lock State",
-        Builtin::ProfileCount => "Profile Count",
-        Builtin::ActiveLayer => "Active Fn Layer",
+        Builtin::ActiveProfile => "Active profile",
+        Builtin::AnalogLevel => "Max analog value",
+        Builtin::KeyPressed => "Any key actuated",
+        Builtin::CapsLock => "Caps Lock state",
+        Builtin::ScrollLock => "Scroll Lock state",
+        Builtin::NumLock => "Num Lock state",
+        Builtin::ProfileCount => "Profile count",
+        Builtin::ActiveLayer => "Active Fn layer",
         Builtin::Brightness => "Brightness",
-        Builtin::KeyRate => "Keystrokes Per Second",
-        Builtin::ProfileColor => "Profile Colour",
+        Builtin::KeyRate => "Keystrokes per second",
+        Builtin::ProfileColor => "Profile colour",
     }
 }
 
@@ -427,11 +438,21 @@ pub(super) const fn comparator_symbol(comparator: Comparator) -> &'static str {
     }
 }
 
-pub(super) const fn logic_name(logic: Logic) -> &'static str {
-    match logic {
-        Logic::Single => "Single condition",
-        Logic::All => "All conditions required",
-        Logic::Any => "Any condition required",
+pub(super) const fn lightbar_range(effect: &Effect) -> Option<Range> {
+    match effect {
+        Effect::Meter(Meter { range, .. })
+        | Effect::ProfileIndicator(ProfileIndicator { range, .. })
+        | Effect::Mirror(Mirror { range, .. })
+        | Effect::Custom(Custom { range, .. })
+        | Effect::Blink(Blink {
+            target: Target::Lightbar(range),
+            ..
+        })
+        | Effect::Solid(Solid {
+            target: Target::Lightbar(range),
+            ..
+        }) => Some(*range),
+        Effect::Blink(_) | Effect::Solid(_) => None,
     }
 }
 
@@ -463,14 +484,21 @@ pub(super) fn effect_summary(effect: &Effect) -> String {
     }
 }
 
-pub(super) fn keys(rect: KeyRect) -> String {
-    format!(
-        "keys row {} column {} to row {} column {}",
-        u16::from(rect.first.row) + 1,
-        u16::from(rect.first.column) + 1,
-        u16::from(rect.last.row) + 1,
-        u16::from(rect.last.column) + 1
-    )
+fn keys(rect: KeyRect) -> String {
+    let span = |first: u8, last: u8| {
+        if first == last {
+            format!("{}", u16::from(first) + 1)
+        } else {
+            format!("{}–{}", u16::from(first) + 1, u16::from(last) + 1)
+        }
+    };
+    let rows = span(rect.first.row, rect.last.row);
+    let columns = span(rect.first.column, rect.last.column);
+    if rect.first.row == rect.last.row {
+        format!("Row {rows}, keys {columns}")
+    } else {
+        format!("Rows {rows}, keys {columns}")
+    }
 }
 
 pub(super) fn term(entry: &Entry, spot: Spot) -> Option<&Term> {
@@ -698,16 +726,20 @@ mod tests {
             Comparator::Equal,
             1.0,
         ));
-        assert_eq!(condition_summary(&condition), "Caps Lock State = 1");
+        assert_eq!(condition_summary(&condition), "Caps Lock state = 1");
         add_group(&mut condition);
         condition.logic = Logic::Any;
         assert_eq!(
             condition_summary(&condition),
-            "Caps Lock State = 1 or Any Key Actuated = 1"
+            "Caps Lock state = 1 or Any key actuated = 1"
         );
         assert_eq!(
             effect_summary(&Kind::Meter.effect(MATRIX)),
-            "Max Analog Value · LEDs 1–10"
+            "Max analog value · LEDs 1–10"
+        );
+        assert_eq!(
+            effect_summary(&Kind::Mirror.effect(MATRIX)),
+            "Row 2, keys 2–11 · LEDs 1–10"
         );
     }
 }
