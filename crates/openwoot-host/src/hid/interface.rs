@@ -40,7 +40,8 @@ impl OpenError {
 impl Interface {
     pub async fn open(device: &Device) -> Result<Self, OpenError> {
         let handles = async {
-            let (reader, writer) = device.open().await?;
+            let reader = device.open_readable().await?;
+            let writer = device.open_writeable().await?;
             let feature = device.open_feature_handle().await?;
             Ok::<_, HidError>((reader, writer, feature))
         };
