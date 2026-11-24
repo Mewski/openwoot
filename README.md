@@ -33,6 +33,7 @@ cargo xtask build wooting-80he          # build/wooting-80he/openwoot-wooting-80
 cargo xtask flash wooting-80he          # enters update mode by itself and writes the image
 cargo run -p openwoot-cli -- version    # firmware and protocol version
 cargo run -p openwoot-cli -- status     # diagnostics of every subsystem
+cargo run -p openwoot-gui               # desktop configurator: profiles, keys, lighting, firmware
 ```
 
 **Back to stock:** open the official Wootility; it reports a required update and installs the stock

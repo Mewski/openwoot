@@ -16,14 +16,17 @@ openwoot flash --dry-run build/wooting-80he/openwoot-wooting-80he.hex
 [`docs/flashing.md`](../../docs/flashing.md) describes flashing, recovery and the way back to the
 stock firmware.
 
-Device access uses `async-hid` (pure Rust: hidraw, IOHIDManager, Win32) driven by `async-io`'s
-`block_on` and timers (`hid`). The configuration channel (`channel`) and the stock feature
-commands (`stock`) run over the `transfer::Reports` trait, the bootloader protocol (`bootloader`)
-over its `Port` trait; `tests/it/firmware.rs` and `tests/it/bootloader.rs` run them against fakes
-on the host. `image` reads Intel HEX files and flat binaries; `keyboard` finds the keyboard,
-identifies its firmware and switches it into update mode; `status` formats the diagnostics;
-`escape` makes text from files and devices safe to print; `report` writes raw reports as hex for
-error messages; the binary (`src/main.rs`) holds the command line and the output.
+Keyboard access lives in [`openwoot-host`](../openwoot-host), which the GUI shares. Device access
+uses `async-hid` (pure Rust: hidraw, IOHIDManager, Win32) driven by `async-io`'s `block_on` and
+timers (`hid`). The configuration channel (`channel`, `Connection`) and the stock feature commands
+(`stock`) run over the `transfer::Reports` trait, the bootloader protocol (`bootloader`) over its
+`Port` trait; the host crate's `tests/it/firmware.rs` and `tests/it/bootloader.rs` run them
+against fakes on the host. `image` reads Intel HEX files and flat binaries; `keyboard` finds the
+keyboard, identifies its firmware and switches it into update mode; `flash` checks an image
+(`flash::plan`) and writes it (`flash::install`), reporting each step as an `Event`; `escape`
+makes text from files and devices safe to print; `report` writes raw reports as hex for error
+messages. This crate's binary holds the command line and the output: `src/main.rs` shows the plan
+and the events, `status` formats the diagnostics.
 
 ## Linux
 

@@ -1,0 +1,21 @@
+[package]
+name = "openwoot-host"
+version = "0.0.0"
+edition.workspace = true
+description = "Host-side access to openwoot keyboards: configuration channel, image checks and flashing"
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-hid = { workspace = true }
+async-io = { workspace = true }
+futures-lite = { workspace = true }
+ihex = { workspace = true }
+openwoot-image = { workspace = true }
+openwoot-protocol = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

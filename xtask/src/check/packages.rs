@@ -15,7 +15,9 @@ pub(super) enum Kind {
     Pac,
     ChipHal,
     Board,
+    Host,
     Cli,
+    Gui,
     Xtask,
 }
 
@@ -40,7 +42,8 @@ impl Kind {
                 Self::ChipHal,
                 Self::Pac,
             ],
-            Self::Cli => &[Self::Protocol, Self::Image],
+            Self::Host => &[Self::Protocol, Self::Image],
+            Self::Cli | Self::Gui => &[Self::Protocol, Self::Image, Self::Host],
             Self::Xtask => &[Self::Image],
         }
     }
@@ -56,7 +59,9 @@ impl fmt::Display for Kind {
             Self::Pac => "PAC",
             Self::ChipHal => "chip HAL",
             Self::Board => "board",
+            Self::Host => "host",
             Self::Cli => "CLI",
+            Self::Gui => "GUI",
             Self::Xtask => "xtask",
         })
     }
@@ -77,7 +82,9 @@ pub(super) fn classify(workspace: &Workspace) -> Result<Vec<Member<'_>>> {
                 "openwoot-protocol" => Kind::Protocol,
                 "openwoot-drivers" => Kind::Drivers,
                 "openwoot-image" => Kind::Image,
+                "openwoot-host" => Kind::Host,
                 "openwoot-cli" => Kind::Cli,
+                "openwoot-gui" => Kind::Gui,
                 "xtask" => Kind::Xtask,
                 _ if workspace.is_pac(package) => Kind::Pac,
                 _ if workspace.is_board(package) => Kind::Board,
@@ -239,6 +246,22 @@ mod tests {
         );
         assert!(!Kind::Board.allowed_dependencies().contains(&Kind::Cli));
         assert!(!Kind::Cli.allowed_dependencies().contains(&Kind::Firmware));
+        assert!(!Kind::Board.allowed_dependencies().contains(&Kind::Host));
+        assert!(!Kind::Host.allowed_dependencies().contains(&Kind::Cli));
+        assert!(!Kind::Host.allowed_dependencies().contains(&Kind::Firmware));
+        assert!(!Kind::Gui.allowed_dependencies().contains(&Kind::Cli));
+        assert_eq!(
+            Kind::Host.allowed_dependencies(),
+            [Kind::Protocol, Kind::Image]
+        );
+        assert_eq!(
+            Kind::Cli.allowed_dependencies(),
+            [Kind::Protocol, Kind::Image, Kind::Host]
+        );
+        assert_eq!(
+            Kind::Gui.allowed_dependencies(),
+            [Kind::Protocol, Kind::Image, Kind::Host]
+        );
         assert_eq!(Kind::Drivers.allowed_dependencies(), []);
         assert_eq!(Kind::Xtask.allowed_dependencies(), [Kind::Image]);
     }
@@ -248,5 +271,7 @@ mod tests {
         assert_eq!(Kind::ChipHal.to_string(), "chip HAL");
         assert_eq!(Kind::Board.to_string(), "board");
         assert_eq!(Kind::Pac.to_string(), "PAC");
+        assert_eq!(Kind::Host.to_string(), "host");
+        assert_eq!(Kind::Gui.to_string(), "GUI");
     }
 }
