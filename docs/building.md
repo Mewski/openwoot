@@ -9,6 +9,11 @@ named in `OPENWOOT_NIGHTLY`, which CI sets to the dated nightly it installs. `ca
 also needs `taplo` and `cargo-sort` (`cargo install taplo-cli@0.10.0 cargo-sort@2.1.5`, the
 versions CI installs).
 
+On Linux, `openwoot-gui` (built by `cargo test --workspace` and `cargo xtask check` too) needs the
+development files of fontconfig, Wayland and xkbcommon; on Debian and Ubuntu
+`apt install libfontconfig-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev`, the packages
+CI installs. macOS needs nothing beyond the Xcode command line tools.
+
 ## Commands
 
 | Command | Does |

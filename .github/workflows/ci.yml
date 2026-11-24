@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libfontconfig-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev
       - run: rustup toolchain install
       - run: rustup toolchain install "$OPENWOOT_NIGHTLY" --profile minimal --component rustfmt
       - uses: taiki-e/install-action@v2
@@ -28,6 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libfontconfig-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev
       - run: rustup toolchain install
       - run: cargo test --workspace --locked
 
