@@ -201,8 +201,7 @@ impl Background {
 }
 
 fn tray_picture(cx: &App) -> Option<Picture> {
-    let template = cfg!(target_os = "macos");
-    let colour = if template {
+    let colour = if cfg!(target_os = "macos") {
         TEMPLATE_COLOUR.to_owned()
     } else {
         hex(cx.theme().primary)
@@ -225,7 +224,6 @@ fn tray_picture(cx: &App) -> Option<Picture> {
     Some(Picture {
         rgba,
         side: ICON_SIDE,
-        template,
     })
 }
 

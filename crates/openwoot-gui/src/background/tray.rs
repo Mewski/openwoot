@@ -31,7 +31,6 @@ pub(crate) enum TrayError {
 pub(crate) struct Picture {
     pub(crate) rgba: Vec<u8>,
     pub(crate) side: u32,
-    pub(crate) template: bool,
 }
 
 impl Tray {
@@ -65,14 +64,12 @@ impl Tray {
         }));
         let icon =
             Icon::from_rgba(picture.rgba, picture.side, picture.side).map_err(TrayError::Icon)?;
-        let builder = TrayIconBuilder::new()
-            .with_tooltip(TOOLTIP)
-            .with_menu(Box::new(menu));
-        let builder = if picture.template {
-            builder.with_icon_templated(icon)
-        } else {
-            builder.with_icon(icon)
-        };
+        let builder = with_picture(
+            TrayIconBuilder::new()
+                .with_tooltip(TOOLTIP)
+                .with_menu(Box::new(menu)),
+            icon,
+        );
         let tray = builder.build().map_err(TrayError::Build)?;
         Ok(Self { _icon: tray })
     }
@@ -83,4 +80,14 @@ impl Drop for Tray {
         MenuEvent::set_event_handler(None::<fn(MenuEvent)>);
         TrayIconEvent::set_event_handler(None::<fn(TrayIconEvent)>);
     }
+}
+
+#[cfg(target_os = "macos")]
+fn with_picture(builder: TrayIconBuilder, icon: Icon) -> TrayIconBuilder {
+    builder.with_icon_templated(icon)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn with_picture(builder: TrayIconBuilder, icon: Icon) -> TrayIconBuilder {
+    builder.with_icon(icon)
 }
