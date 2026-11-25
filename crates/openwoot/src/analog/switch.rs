@@ -1,4 +1,4 @@
-use super::{Curve, SwitchModel};
+use super::{Curve, Points, SwitchModel};
 
 const TRAVEL_MAX: u16 = 4095;
 const MIN_BOTTOM_DISTANCE: u32 = 50;
@@ -28,7 +28,7 @@ impl Switch {
         let target = (Curve::VALUE_MAX * remaining / travel) & 0xFFFF;
         Self {
             travel_offset,
-            curve_end: kind.curve().end_of_travel(target),
+            curve_end: kind.curve().compact().end_of_travel(target),
             learn_strength: (strength * remaining / travel) as u8,
             ..Self::untuned(kind)
         }
@@ -89,6 +89,32 @@ impl Switch {
 
     #[must_use]
     pub fn travel(&self, value: u16, rest_level: u16, bottom_level: u16) -> u16 {
+        self.travel_over(self.curve.compact(), value, rest_level, bottom_level)
+    }
+
+    #[must_use]
+    pub fn travel_per_tenth_millimetre(&self) -> u32 {
+        let travel = self.kind.travel();
+        let offset = self.travel_offset.unwrap_or(0);
+        let remaining = travel.saturating_sub(offset);
+        TRAVEL_PER_TENTH_MILLIMETRE_UNITS
+            .checked_div(u32::from(remaining))
+            .unwrap_or(0)
+    }
+
+    #[must_use]
+    pub(super) const fn curve(&self) -> Curve {
+        self.curve
+    }
+
+    #[must_use]
+    pub(super) fn travel_over(
+        &self,
+        points: &impl Points,
+        value: u16,
+        rest_level: u16,
+        bottom_level: u16,
+    ) -> u16 {
         if value <= rest_level.wrapping_add(Self::REST_MARGIN) {
             return 0;
         }
@@ -101,25 +127,15 @@ impl Switch {
         .checked_div(range)
         .unwrap_or(0)
         .min(self.curve_end);
-        let mut travel = u32::from(self.curve.interpolate(index_q8));
+        let mut travel = u32::from(points.interpolate(index_q8));
         if self.travel_offset.is_some() {
-            let end_value = u32::from(self.curve.interpolate(self.curve_end));
+            let end_value = u32::from(points.interpolate(self.curve_end));
             travel = (Curve::VALUE_MAX * travel)
                 .checked_div(end_value)
                 .unwrap_or(0)
                 .min(Curve::VALUE_MAX);
         }
         (u32::from(TRAVEL_MAX) * travel / Curve::VALUE_MAX) as u16
-    }
-
-    #[must_use]
-    pub fn travel_per_tenth_millimetre(&self) -> u32 {
-        let travel = self.kind.travel();
-        let offset = self.travel_offset.unwrap_or(0);
-        let remaining = travel.saturating_sub(offset);
-        TRAVEL_PER_TENTH_MILLIMETRE_UNITS
-            .checked_div(u32::from(remaining))
-            .unwrap_or(0)
     }
 }
 

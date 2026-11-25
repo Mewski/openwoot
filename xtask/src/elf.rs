@@ -1,7 +1,9 @@
+mod compile_units;
 mod relocation;
 mod symbol;
 
 use anyhow::{Context, Result, anyhow, bail};
+pub(crate) use compile_units::CompileUnits;
 use object::{
     LittleEndian,
     elf::{
@@ -105,6 +107,16 @@ impl<'a> Elf<'a> {
         })
     }
 
+    pub(crate) fn section_data(&self, name: &str) -> Result<Option<&'a [u8]>> {
+        let sections = self.header.sections(self.endian, self.file)?;
+        for header in sections.iter() {
+            if sections.section_name(self.endian, header)? == name.as_bytes() {
+                return Ok(Some(header.data(self.endian, self.file)?));
+            }
+        }
+        Ok(None)
+    }
+
     pub(crate) fn allocated_sections(&self) -> &[Allocated<'a>] {
         &self.allocated
     }
@@ -154,7 +166,6 @@ impl<'a> Elf<'a> {
             }
             symbols.push(Symbol {
                 name: format!("{:#}", demangle(&name)),
-                link_name: name.into_owned(),
                 address,
                 size: entry.st_size(self.endian),
                 kind,

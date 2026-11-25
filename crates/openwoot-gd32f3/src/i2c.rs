@@ -37,6 +37,8 @@ use crate::{
 const MAX_TRANSFER: usize = 443;
 const MAX_WRITES: usize = 4;
 const RELEASE_SPINS: u32 = 10_000;
+const STAGING_LEN: usize = 16;
+const SRAM_BASE: usize = 0x2000_0000;
 
 static TRANSFERS: Transfers = Transfers::new();
 
@@ -45,6 +47,7 @@ pub struct I2c {
     peripheral: pac::I2c0,
     timing: Timing,
     pins: Pins,
+    staging: [u8; STAGING_LEN],
 }
 
 impl I2c {
@@ -68,6 +71,7 @@ impl I2c {
             peripheral: i2c,
             timing: timing(clocks.apb1),
             pins: Pins::new(clock.into_line(), data.into_line(), clocks.system),
+            staging: [0; STAGING_LEN],
         };
         bus.pins.release();
         bus.configure();
@@ -108,7 +112,7 @@ impl I2c {
         self.configure();
     }
 
-    async fn write_all(&self, address: SevenBitAddress, chunks: &[&[u8]]) -> Result<(), Error> {
+    async fn write_all(&mut self, address: SevenBitAddress, chunks: &[&[u8]]) -> Result<(), Error> {
         let i2c = &self.peripheral;
         step(self.released()).await?;
         modify_bits(i2c.stat0(), |bits| bits & !error::STAT0_ERRORS);
@@ -122,7 +126,15 @@ impl I2c {
         if chunks.iter().any(|chunk| !chunk.is_empty()) {
             critical_section::with(|section| modify_ctl1(section, i2c, |bits| bits | CTL1_DMAON));
             for chunk in chunks.iter().filter(|chunk| !chunk.is_empty()) {
-                step(transfer.send(chunk)).await?;
+                if lies_in_sram(chunk.as_ptr().addr()) {
+                    step(transfer.send(chunk)).await?;
+                    continue;
+                }
+                let mut rest = *chunk;
+                while !rest.is_empty() {
+                    let staged = stage(&mut self.staging, &mut rest);
+                    step(transfer.send(staged)).await?;
+                }
             }
             step(transfer.event(STAT0_BTC, NoAcknowledgeSource::Data)).await?;
         }
@@ -209,6 +221,20 @@ fn writes<'w>(operations: &'w [Operation<'_>]) -> Result<[&'w [u8]; MAX_WRITES],
     Ok(chunks)
 }
 
+const fn lies_in_sram(address: usize) -> bool {
+    address >= SRAM_BASE
+}
+
+fn stage<'a>(staging: &'a mut [u8; STAGING_LEN], rest: &mut &[u8]) -> &'a [u8] {
+    let whole = *rest;
+    let (piece, later) = whole.split_at_checked(STAGING_LEN).unwrap_or((whole, &[]));
+    *rest = later;
+    for (staged, byte) in staging.iter_mut().zip(piece) {
+        *staged = *byte;
+    }
+    staging.get(..piece.len()).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{step::STEP_TIMEOUT, *};
@@ -266,5 +292,44 @@ mod tests {
             ]),
             Err(Error::TooManyWrites)
         );
+    }
+
+    #[test]
+    fn only_addresses_from_the_sram_up_are_read_by_the_dma_without_staging() {
+        for address in [
+            0x0000_0000,
+            0x0800_0000,
+            0x0805_5BF0,
+            0x1000_0000,
+            0x1FFF_FFFF,
+        ] {
+            assert!(!lies_in_sram(address), "{address:#010x}");
+        }
+        for address in [0x2000_0000, 0x2000_F560, 0x2001_7FFF] {
+            assert!(lies_in_sram(address), "{address:#010x}");
+        }
+    }
+
+    #[test]
+    fn bytes_outside_the_sram_are_staged_in_order_a_buffer_at_a_time() {
+        let mut source = [0_u8; 2 * STAGING_LEN + 5];
+        for (byte, value) in source.iter_mut().zip(1_u8..) {
+            *byte = value;
+        }
+        let mut staging = [0; STAGING_LEN];
+        let mut rest = &source[..];
+        let mut sent = [0_u8; 2 * STAGING_LEN + 5];
+        let mut lengths = [0_usize; 3];
+        let mut written = 0;
+        for length in &mut lengths {
+            let staged = stage(&mut staging, &mut rest);
+            *length = staged.len();
+            sent[written..written + staged.len()].copy_from_slice(staged);
+            written += staged.len();
+        }
+        assert_eq!(lengths, [STAGING_LEN, STAGING_LEN, 5]);
+        assert_eq!(sent, source);
+        assert_eq!(rest, b"");
+        assert_eq!(stage(&mut staging, &mut rest), b"");
     }
 }

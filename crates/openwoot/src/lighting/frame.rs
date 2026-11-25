@@ -48,13 +48,13 @@ impl<const PAGES: usize, const LENGTH: usize> Frame<PAGES, LENGTH> {
         let Some(channels) = self
             .pages
             .get_mut(usize::from(position.page))
-            .and_then(|page| page.get_mut(offset..offset + 3))
+            .and_then(|page| page.get_mut(offset..)?.first_chunk_mut::<3>())
         else {
             return false;
         };
         let stored = [color.red, color.green, color.blue];
         let changed = *channels != stored;
-        channels.copy_from_slice(&stored);
+        *channels = stored;
         changed
     }
 
@@ -77,7 +77,9 @@ impl<const PAGES: usize, const LENGTH: usize> Frame<PAGES, LENGTH> {
                 continue;
             };
             if target != source {
-                target.copy_from_slice(source);
+                for (target, source) in target.iter_mut().zip(source) {
+                    *target = *source;
+                }
                 dirty.push(index);
             }
         }

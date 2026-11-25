@@ -29,7 +29,9 @@ mod version;
 
 pub use error::Error;
 pub use heapless;
-pub use message::{Message, decode_message, decode_response, encode_message, encode_request};
+pub use message::{
+    Body, Message, decode_message, decode_response, encode_frame, encode_message, encode_request,
+};
 pub use postcard_rpc::{
     Endpoint, Key,
     header::{VarHeader, VarKey, VarSeq},

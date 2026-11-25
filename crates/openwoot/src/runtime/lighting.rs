@@ -1,5 +1,5 @@
 use embassy_futures::select::select4;
-use embassy_sync::{blocking_mutex::raw::RawMutex, mutex::Mutex};
+use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_time::{Duration, Instant, Timer};
 
 use super::KeyNotices;
@@ -23,7 +23,7 @@ pub struct Lighting<
     const PAGES: usize,
     const LENGTH: usize,
 > {
-    pub lighting: &'d Mutex<M, lighting::Lighting<H, ROWS, COLUMNS, PAGES, LENGTH>>,
+    pub lighting: &'d mut lighting::Lighting<H, ROWS, COLUMNS, PAGES, LENGTH>,
     pub events: &'d KeyEvents,
     pub notices: &'d KeyNotices,
     pub host: &'d HostState,
@@ -41,7 +41,7 @@ where
     const FAILED_STEPS_BEFORE_INITIALIZE: u8 = 3;
     const POLL_INTERVAL: Duration = Duration::from_millis(4);
 
-    pub async fn run(&self, matrix: &mut impl LedMatrix, input: &impl KeyTravel) -> ! {
+    pub async fn run(&mut self, matrix: &mut impl LedMatrix, input: &impl KeyTravel) -> ! {
         let mut initialized = false;
         let mut failed_steps = 0_u8;
         loop {
@@ -75,27 +75,27 @@ where
         }
     }
 
-    pub async fn initialize(&self, matrix: &mut impl LedMatrix) -> bool {
+    pub async fn initialize(&mut self, matrix: &mut impl LedMatrix) -> bool {
         let initialized = matrix.initialize().await.is_ok();
         if initialized {
-            self.lighting.lock().await.set_output(false);
+            self.lighting.set_output(false);
         }
         self.diagnostics.set_lighting_initialized(initialized);
         initialized
     }
 
     pub async fn step(
-        &self,
+        &mut self,
         matrix: &mut impl LedMatrix,
         input: &impl KeyTravel,
         now_ms: u32,
         usb_active: bool,
     ) -> bool {
-        let mut lighting = self.lighting.lock().await;
-        if self.host_control.take_session_end() {
+        let lighting = &mut *self.lighting;
+        if self.host_control.take_session_end() && H::PRESENT {
             self.profile.host_signals().end_session();
         }
-        self.profile.apply(&mut lighting, now_ms);
+        self.profile.apply(lighting, now_ms);
         while let Ok(activity) = self.events.try_receive() {
             lighting.key_event(activity.key, activity.event, activity.at_ms);
             lighting.hooks_mut().key_event(activity.key, activity.event);
@@ -103,8 +103,8 @@ where
                 lighting.reset_idle_timer(now_ms);
             }
         }
-        self.notices.apply(&mut lighting, now_ms);
-        self.host_control.apply(&mut lighting, now_ms);
+        self.notices.apply(lighting, now_ms);
+        self.host_control.apply(lighting, now_ms);
         let deepest = deepest_travel::<ROWS, COLUMNS>(input);
         lighting.hold_idle_timer(deepest, now_ms);
         let hooks = lighting.hooks_mut();

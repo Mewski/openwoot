@@ -32,22 +32,20 @@ impl<M: RawMutex> HostExchange<M> {
 
     #[must_use]
     pub fn ids(&self) -> HostSignalIds {
-        self.state.lock(|state| {
-            let mut state = state.borrow_mut();
+        self.update(|state| {
             state.activated = true;
             state.ids.clone()
         })
     }
 
     pub fn set(&self, values: &[HostSignal]) {
-        self.state.lock(|state| {
-            let mut state = state.borrow_mut();
+        self.update(|state| {
             let Exchanged {
                 ids,
                 pending,
                 activated,
                 ..
-            } = &mut *state;
+            } = state;
             *activated = true;
             for value in values {
                 if let Some(queued) = pending.iter_mut().find(|queued| queued.id == value.id) {
@@ -64,8 +62,7 @@ impl<M: RawMutex> HostExchange<M> {
     }
 
     pub fn end_session(&self) {
-        self.state.lock(|state| {
-            let mut state = state.borrow_mut();
+        self.update(|state| {
             state.pending.clear();
             state.activated = false;
             state.zero_before_next_values = true;
@@ -73,8 +70,7 @@ impl<M: RawMutex> HostExchange<M> {
     }
 
     pub fn sync(&self, signals: &mut impl Signals) {
-        let (pending, activated, zero_first) = self.state.lock(|state| {
-            let mut state = state.borrow_mut();
+        let (pending, activated, zero_first) = self.update(|state| {
             (
                 core::mem::take(&mut state.pending),
                 core::mem::take(&mut state.activated),
@@ -91,7 +87,14 @@ impl<M: RawMutex> HostExchange<M> {
             signals.set_host_signals(&pending);
         }
         let ids = signals.host_signal_ids();
-        self.state.lock(|state| state.borrow_mut().ids = ids);
+        self.update(|state| state.ids = ids);
+    }
+
+    fn update<R: Default>(&self, update: impl FnOnce(&mut Exchanged) -> R) -> R {
+        self.state.lock(|state| match state.try_borrow_mut() {
+            Ok(mut state) => update(&mut state),
+            Err(_) => R::default(),
+        })
     }
 }
 
@@ -103,12 +106,10 @@ impl<M: RawMutex> Default for HostExchange<M> {
 
 impl<M: RawMutex> core::fmt::Debug for HostExchange<M> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        self.state.lock(|state| {
-            formatter
-                .debug_struct("HostExchange")
-                .field("ids", &state.borrow().ids)
-                .finish_non_exhaustive()
-        })
+        formatter
+            .debug_struct("HostExchange")
+            .field("ids", &self.update(|state| state.ids.clone()))
+            .finish_non_exhaustive()
     }
 }
 

@@ -26,18 +26,17 @@ pub struct OptionBit {
 pub struct LayoutOverride(pub u8);
 
 impl LayoutOverride {
-    pub async fn stored<F: MultiwriteNorFlash>(settings: &mut Settings<F>) -> Option<u8> {
+    pub fn stored<F: MultiwriteNorFlash>(settings: &mut Settings<F>) -> Option<u8> {
         settings
             .load::<Self>(Scope::Global)
-            .await
             .ok()
             .flatten()
             .map(|stored| stored.0)
             .filter(|variant| usize::from(*variant) < LAYOUTS)
     }
 
-    pub async fn variant_or<F: MultiwriteNorFlash>(settings: &mut Settings<F>, factory: u8) -> u8 {
-        Self::stored(settings).await.unwrap_or(factory)
+    pub fn variant_or<F: MultiwriteNorFlash>(settings: &mut Settings<F>, factory: u8) -> u8 {
+        Self::stored(settings).unwrap_or(factory)
     }
 }
 

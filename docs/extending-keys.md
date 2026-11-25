@@ -10,7 +10,7 @@ How a key press becomes a report, and where a new key feature goes.
 | key task | `runtime::KeyTask` on the key executor | after every cycle: takes configuration changes (`keys::Shared`), refreshes each key's switch facts, runs one pass, publishes the reports (`runtime::KeyReports`), forwards key events and notices to lighting, sets `hold_events`, and fills a pending sensor readout (`GetSensorValues`); it awaits nothing but the scan cycle (hand-offs to storage, lighting and USB never wait), and a cycle that does not end within 50 ms is restarted (`scan::Shared::recover`, `scan::Converter::recover`) |
 | pass | `keys::Keys::pass` | per event: binding layer, press decision or advanced-key input stage (a press that decides a waiting mod-tap is decided again on the layer it ends up on), press/release edge, output (advanced-key output stage or keymap action, then the key's gamepad binding); then the two-key resolvers, the gamepad report and the release of special actions; while key reports are off every key takes the plain press decision and advanced keys rest |
 | sink | `keys::Keys::apply_action` | one action into the key-state report and the keyboard (6KRO in the boot format of the descriptor or of the host's boot protocol, NKRO otherwise), system, consumer, mouse report, a special action (`keys::Functions`) or the gamepad input |
-| reports | `runtime::Reports` on the USB executor | writes every report that changed since it was last sent |
+| reports | `runtime::Reports` on the device executor | writes every report that changed since it was last sent |
 
 A key press reaches its report at the end of the scan cycle that sampled it (one cycle of latency); `tests/it/keys/pipeline.rs` checks this through a simulated converter.
 

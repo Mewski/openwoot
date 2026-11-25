@@ -46,7 +46,8 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
             }
         }
 
-        let update = sensor.map(|sensor| sensor.update(&self.converter, context, magnitude, value));
+        let update = sensor
+            .map(|sensor| sensor.update(&self.converter, &self.curves, context, magnitude, value));
         self.pending = Some(next);
         if let (Some(position), Some(update)) = (converted, update) {
             self.finish_key(position, update, travel);

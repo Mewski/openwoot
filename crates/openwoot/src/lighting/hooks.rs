@@ -9,6 +9,8 @@ use super::{
 use crate::keys::Key;
 
 pub trait Lightbar {
+    const PRESENT: bool = true;
+
     fn needs_render(&self, since_render_ms: u16) -> bool {
         let _ = since_render_ms;
         false
@@ -118,6 +120,8 @@ pub trait Signals {
     }
 }
 
-impl Lightbar for () {}
+impl Lightbar for () {
+    const PRESENT: bool = false;
+}
 
 impl Signals for () {}

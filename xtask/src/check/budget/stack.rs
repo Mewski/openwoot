@@ -1,23 +1,40 @@
 mod components;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt};
 
 use anyhow::{Result, bail};
 use components::Components;
 
-use crate::{call_graph::CallGraph, entry_points::EntryPoints};
+use crate::{
+    call_graph::CallGraph,
+    entry_points::{EntryPoints, Executor},
+};
 
 const EXCEPTION_FRAME: u32 = 108;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::check) struct StackBound {
     pub(in crate::check) thread: u32,
-    pub(in crate::check) interrupts: u32,
+    pub(in crate::check) executors: [(Executor, u32); Executor::ALL.len()],
+    pub(in crate::check) handlers: u32,
 }
 
 impl StackBound {
-    pub(in crate::check) const fn total(self) -> u32 {
-        self.thread.saturating_add(self.interrupts)
+    pub(in crate::check) fn total(self) -> u32 {
+        self.executors.iter().fold(
+            self.thread.saturating_add(self.handlers),
+            |total, &(_, depth)| total.saturating_add(depth),
+        )
+    }
+}
+
+impl fmt::Display for StackBound {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{} thread", self.thread)?;
+        for (executor, depth) in self.executors {
+            write!(formatter, ", {depth} {}", executor.name())?;
+        }
+        write!(formatter, ", {} interrupts", self.handlers)
     }
 }
 
@@ -40,7 +57,10 @@ pub(super) fn bound(graph: &CallGraph<'_>, entry_points: &EntryPoints) -> Result
     });
     let mut depths = Depths::new(&components, |node| graph.frame(node));
     let thread_tasks = depths.deepest(&entry_points.thread_tasks)?;
-    let key_tasks = depths.deepest(&entry_points.key_tasks)?;
+    let mut executors = Executor::ALL.map(|executor| (executor, 0));
+    for (executor, depth) in &mut executors {
+        *depth = depths.deepest(entry_points.tasks_of(*executor))?;
+    }
     let start_up = depths.depth(entry_points.reset)?;
     let executor = entry_points
         .thread_executors
@@ -54,15 +74,16 @@ pub(super) fn bound(graph: &CallGraph<'_>, entry_points: &EntryPoints) -> Result
             })
         })?
         .unwrap_or(start_up);
-    let mut interrupts = key_tasks;
+    let mut handlers = 0_u32;
     for &handler in &entry_points.handlers {
-        interrupts = interrupts
+        handlers = handlers
             .saturating_add(depths.depth(handler)?)
             .saturating_add(EXCEPTION_FRAME);
     }
     Ok(StackBound {
         thread: start_up.max(executor.saturating_add(thread_tasks)),
-        interrupts,
+        executors,
+        handlers,
     })
 }
 

@@ -6,13 +6,15 @@ use openwoot_image::{Descriptor, Hex, Image, MemoryLayout};
 use super::{
     budget::Budget,
     panic_paths::{self, Findings},
-    scan_interrupt, zero_wait,
+    scan_interrupt,
+    speed::{self, OptLevels},
+    zero_wait,
 };
 use crate::{
     call_graph::CallGraph,
-    elf::Elf,
+    elf::{CompileUnits, Elf},
     entry_points::EntryPoints,
-    firmware,
+    firmware, link_map,
     workspace::{Board, Workspace},
 };
 
@@ -23,9 +25,10 @@ pub(super) struct Analysis {
     pub(super) panics: Findings,
     pub(super) critical_sections: Vec<String>,
     pub(super) code_beyond_zero_wait: Vec<String>,
+    pub(super) size_compiled_hot_code: Vec<String>,
 }
 
-pub(super) fn check(workspace: &Workspace, board: &Board) -> Result<Analysis> {
+pub(super) fn check(workspace: &Workspace, board: &Board, levels: &OptLevels) -> Result<Analysis> {
     let images = firmware::build(workspace, board)?;
     let memory_x_path = board.directory.join("memory.x");
     let memory_x = fs::read_to_string(&memory_x_path)
@@ -103,13 +106,19 @@ pub(super) fn check(workspace: &Workspace, board: &Board) -> Result<Analysis> {
         bail!("the descriptor found in the binary differs from the ELF section");
     }
 
-    let graph = CallGraph::new(&elf)?;
+    let link_map = fs::read_to_string(&images.map)
+        .with_context(|| format!("could not read `{}`", images.map.display()))?;
+    let input_sections = link_map::input_sections(&link_map)
+        .with_context(|| format!("could not read `{}`", images.map.display()))?;
+    let graph = CallGraph::new(&elf, &input_sections)?;
     let entry_points = EntryPoints::find(&elf, &graph)?;
+    let units = CompileUnits::read(&elf)?;
     Ok(Analysis {
         budget: Budget::measure(&elf, &layout, &graph, &entry_points)?,
         panics: panic_paths::find(&elf, &graph, &entry_points),
         critical_sections: scan_interrupt::critical_sections(&graph, &entry_points)?,
-        code_beyond_zero_wait: zero_wait::code_beyond(&graph, &entry_points, layout.zero_wait),
+        code_beyond_zero_wait: zero_wait::code_beyond(&elf, layout.zero_wait),
+        size_compiled_hot_code: speed::size_compiled(&graph, &entry_points, &units, levels),
     })
 }
 

@@ -5,7 +5,8 @@ The microcontrollers, peripherals, pins, interrupts and DMA channels of each boa
 ## Crates
 
 ```
-boards/<board>          board support crate: board facts, memory.x, the firmware binary
+boards/<board>          board support crate (compiled for size): board facts, memory.x, start-up, configuration side, lighting task
+   ├── firmware/        the firmware binary (compiled for speed): interrupt bindings, key and USB tasks
    ├── openwoot-gd32f*  chip HAL on the generated PAC (crates/gd32f*-pac)
    ├── openwoot-drivers chip drivers (LED matrix, NOR flash), generic over embedded-hal-async
    └── openwoot         the firmware: generic over the traits it defines (`protocol::UpdateMode`, `scan::Sensing`, ...), no hardware access
@@ -28,7 +29,7 @@ xtask (host)         ── openwoot-image
 | `crates/openwoot-host` | host-side keyboard access: `Connection` (one request and response at a time on the configuration channel of the running keyboard), `keyboard` (finds the keyboard, identifies its firmware, switches it into update mode), `flash` (`plan` checks an image, `install` writes it through the factory bootloader and reports `Event`s), `bootloader` (factory bootloader session with CRC-24 verification), `channel`, `stock`, `image` (Intel HEX and flat binaries), `hid` |
 | `crates/openwoot-cli` | binary `openwoot` over `openwoot-host`: `version` and `status` over the configuration channel, `flash [--dry-run]` through the factory bootloader |
 | `crates/openwoot-gui` | binary `openwoot-gui`, a desktop configurator on GPUI (`gpui-kit`): `device` (a worker thread that owns the `openwoot-host` connection, reconnects, and runs requests and flashing), `store` (the connected keyboard: capabilities, geometry, profiles, switches, unsaved changes; `fetch`/`apply` for every part), `keyboard` (draws the keys from `GetKeyGeometry`, selection), `usage` (names of actions), `shell` (navigation, profile bar, Save/Discard), `page/*` (one page per area of the configuration model) |
-| `boards/<board>` | board facts as constants (`NAME`, `MANUFACTURER`, `FACE`, USB ids, flash areas), `Board` with the configured drivers by board function (`usb`, `storage`, `leds`, `bootloader`, the serial number from the serial page) built by `Board::new`, per-area data modules (`scan`, `lighting`, `storage`), `memory.x`, `build.rs`, `src/main.rs` (the tasks) |
+| `boards/<board>` | board facts as constants (`NAME`, `MANUFACTURER`, `FACE`, USB ids, flash areas), the `Interrupts` the peripherals need, `Board` with the configured drivers by board function (`usb`, `storage`, `leds`, `bootloader`, the serial number from the serial page) built by `Board::new(peripherals, &dyn Interrupts)` (not generic, `#[inline(never)]`, so it is compiled for size here), per-area data modules (`scan`, `lighting`, `storage`), `configuration` (the shared state, the profile model, the configuration handler, `hand_over`, the `channel`, `profiles` and `lights` tasks), `memory.x`, `build.rs`; `firmware/` is the binary `openwoot-<board>`: interrupt bindings, `start` and the `scanning`, `device` and `reports` tasks ([speed and size](building.md#speed-and-size)) |
 | `xtask` | `boards`, `build`, `flash`, `check`, `pac` |
 
 Dependencies point down the tree only; `cargo xtask check` verifies the direction from
@@ -37,20 +38,33 @@ Dependencies point down the tree only; `cargo xtask check` verifies the directio
 
 ## Runtime
 
-Embassy tasks cannot be generic, so each board's `src/main.rs` declares the tasks with concrete
-types and `openwoot::runtime` holds their logic, generic over `embassy_usb::driver::Driver`, the
-raw mutex and the lighting hooks. `runtime::Firmware::new` builds the USB face once at start-up
-(`runtime::Usb`) and splits it, with the lighting engine, into parts. The board's `start` spawns
-one task per part: `scanning` on the key executor (UART4 vector, priority 3), the others on the
-thread executor.
+Embassy tasks cannot be generic, so each board declares the tasks with concrete types and
+`openwoot::runtime` holds their logic, generic over `embassy_usb::driver::Driver`, the raw mutex
+and the lighting hooks. The board support crate's `configuration::start` builds the shared state,
+the USB parts (`runtime::Firmware::new`), the configuration handler and the profile model, and
+hands back one part per task; the firmware binary's `start` spawns each task on its executor
+(`hal::executor::Spawners`):
+
+| Executor | Priority | Tasks | Compiled for |
+| --- | --- | --- | --- |
+| key executor (UART4 vector) | 3 | `scanning` | speed (firmware binary) |
+| device executor (UART3 vector) | 4 | `device`, `reports` | speed (firmware binary) |
+| lighting executor (USART2 vector) | 5 | `lights` | size (board support crate) |
+| thread executor (thread mode) | below every interrupt | `channel`, `profiles` | size (board support crate) |
+
+Each level pre-empts the ones below it, so the key pass never waits behind USB, lighting or a
+settings write, the USB device and the reports never wait behind a frame or flash I/O, and
+lighting, compiled for size on the lowest executor, keeps its render cadence of one frame every
+16 ms (62.5 Hz). Thread mode runs only the configuration side, the one part that writes the
+flash.
 
 | Task | Runs |
 | --- | --- |
 | `scanning` | `runtime::KeyTask::run`: calibration, then scan cycles (`scan::Shared::cycle`), each followed by one pass of the key engine (`keys::Keys`); publishes the reports into `runtime::KeyReports`, key events and notices for the lighting task, and asks for a remote wake-up when a key is pressed while the host sleeps |
-| `device` | `runtime::Device::run`: enumeration, control requests, suspend and resume; while the host sleeps it waits for the bus to resume or for a wake-up request, and wakes the host if the host armed remote wake-up |
-| `channel` | the configuration channel on interface 2 (`runtime::Channel`): requests through the interrupt endpoints and stock feature reports, answered by `protocol::Handler`; owns the chip HAL's `Bootloader` (`protocol::UpdateMode`) for update mode |
+| `device` | builds the USB device from its `Send` parts (`runtime::UsbParts::build`, which gives `runtime::UsbTasks { device, channel, reports }`), passes the configuration channel to thread mode (`configuration::hand_over`, a static `Signal`), spawns `reports` with the device executor's `SendSpawner` it was given, then runs `runtime::Device::run`: enumeration, control requests, suspend and resume; while the host sleeps it waits for the bus to resume or for a wake-up request, and wakes the host if the host armed remote wake-up |
+| `channel` | waits for the channel from `device`, then serves the configuration channel on interface 2 (`runtime::Channel`): requests through the interrupt endpoints and stock feature reports, answered by `protocol::Handler`; owns the chip HAL's `Bootloader` (`protocol::UpdateMode`) for update mode |
 | `reports` | `runtime::Reports::run`: each time the host configures the device, one idle report on every HID input endpoint, then one forwarder per endpoint (keyboard; system, consumer and mouse; key states; gamepad or XInput) that sends what `KeyReports` holds for it; the LED pattern on the XInput output endpoint sets the player (`usb::HostState::xinput_player`, which `GetGamepadState` reports) |
-| `lights` | the lighting engine on the LED driver (`runtime::Lighting`), woken by key events and notices and every 4 ms |
+| `lights` | the lighting engine on the LED driver (`runtime::Lighting`), woken by key events and notices and every 4 ms; it renders a frame at most every 16 ms |
 | `profiles` | `profile::Configurator::serve`: activates the profile the keys request and saves the brightness after the brightness keys |
 
 `KeyReports` keeps, per report type, the report the key task offered last and the reports its
@@ -65,10 +79,23 @@ again, so a key pressed and released during the suspend is not replayed. The key
 brightness keys are kept as a level (which key is held), so a lost notice cannot leave the repeat
 running: a press steps once, holding steps again every 50 ms.
 
-Long-lived state lives in one `runtime::State` static of the board binary: `usb::Resources`,
-`usb::HostState`, `diagnostics::Diagnostics`, `lighting::HostControl`, `scan::SensorReadout`,
-the key events, the key notices, `KeyReports`, `keys::Shared`, `profile::Shared` and the
-lighting engine, handed out once by `runtime::Firmware::new`.
+Long-lived state lives in one `runtime::State` static of the board support crate
+(`configuration`): `usb::Resources`, `usb::HostState`, `diagnostics::Diagnostics`,
+`lighting::HostControl`, `scan::SensorReadout`, the key events, the key notices, `KeyReports`,
+`keys::Shared`, `profile::Shared` and the lighting engine, handed out once by
+`runtime::Firmware::new`; the engine goes to the `lights` task as `&'static mut`, with no mutex.
+
+The configuration side is synchronous: `profile::Model`, `profile::Configurator`, the
+`protocol::Configuration` methods and `storage::Settings` are plain functions, and the settings
+store runs each flash access to completion with `embassy_futures::block_on`. Only the two
+thread-mode tasks call them, so a settings write blocks only thread mode, and every executor
+pre-empts it. The profile model lies in a `RefCell` that `channel` and `profiles` borrow, never
+across an await; a borrow that fails answers `StorageInaccessible`. The model reaches the
+executors only through `keys::Shared` and `profile::Shared`, whose critical-section blocking
+mutexes are held only to copy a value in or out, atomics, `Signal`s (profile requests from the
+keys, the saved brightness from lighting) and the host-control mailboxes. No lock is held across
+flash I/O, and no interrupt executor ever waits on thread mode: the key task takes a changed
+profile between two scan cycles, and lighting takes changed settings at its next step.
 
 Optional lighting features plug into the engine as its hooks type (`lighting::Lightbar` and
 `lighting::Signals`, `()` for none). The Wooting 80HE binds `lighting::Bar`: the light-bar
@@ -81,6 +108,12 @@ carries the profile's light-bar settings, the keyboard-wide entries and the host
 (`lighting::HostExchange`) from the configuration task to it. A board with a special edition
 (the 80HE TenZ) gives a `profile::Edition`; `Edition::unit` picks the product string, the
 factory profiles and the default switch model from the edition code of the serial number.
+The hooks type also says at compile time whether the board has a light bar
+(`lighting::Lightbar::PRESENT`: true for `Bar`, false for `()`); `profile::Model` and
+`profile::Configurator` take it as a type parameter, and `protocol::Configuration::LIGHTBAR`
+follows it. Without a light bar (the Wooting 60HE+) the light-bar records are neither stored nor
+loaded, and the handler answers the light-bar and host-signal endpoints with `Unsupported`
+([protocol](protocol.md#configuration-model)).
 
 The configuration descriptor is built once for the face of the board (`FACE`, high speed on the
 Wooting 80HE, full speed on the Wooting 60HE+), and `usb::Negotiated` wraps the chip driver so
@@ -140,9 +173,12 @@ it is left to idle recalibration.
 
 ## Real time
 
-Priorities: 0 the scan interrupt (never masked), 1 the time driver (TIMER4) and the LED and NOR bus interrupts, 2 USB, 3 the key
-executor (UART4 vector) with the `scanning` task; everything else runs on the thread executor.
-Critical sections raise BASEPRI to `0x10`, so a critical section delays every level but the scan.
+Priorities: 0 the scan interrupt (never masked), 1 the time driver (TIMER4) and the LED and NOR
+bus interrupts, 2 USB, 3 the key executor (UART4 vector: `scanning`), 4 the device executor (UART3
+vector: `device`, `reports`), 5 the lighting executor (USART2 vector: `lights`); thread mode runs
+the configuration side (`channel`, `profiles`) and nothing else (see [runtime](#runtime)).
+Critical sections raise BASEPRI to `0x10`, so a critical section delays every level but the scan;
+the configuration side holds one only to copy a value, never across flash I/O.
 
 The scan interrupt keeps the try-lock on the scanner (a compare-and-swap and a release store, about
 10 instructions per conversion). Ownership alternates between the key task and the interrupt by the
@@ -161,35 +197,50 @@ the `reports` task to load the report into the keyboard endpoint and for the hos
 that endpoint.
 
 `xtask check` reads every board image with its relocations (the boards link with
-`--emit-relocs`) and builds a call graph: an edge for every branch and every address a function
-or a table takes, through data such as vtables. An image without call relocations, or with a `bl` that has none, is rejected. `xtask build` orders the link by the same graph ([link order](building.md#link-order)). Four checks run on it:
+`--emit-relocs`) and its link map (`-Map`, passed by the firmware's `build.rs`; `xtask build`
+copies it to `build/<board>/openwoot-<board>.map`), and builds a call graph: an edge for every
+branch and every address a function or a table takes, through data such as vtables. Every
+unnamed input section of the map (anonymous constants, vtables) is a node of its own, so a
+reference is attributed to the exact object it names. An image without call relocations, or
+with a `bl` that has none, is rejected. The checks treat every interrupt executor as an interrupt
+context: its tasks are found by name (`scanning`; `device`, `reports`; `lights`), and their poll
+functions are roots like the interrupt vectors. Four checks run on the graph:
 
-- No panic is reachable from an interrupt vector or from the poll function of the key task
-  (`scanning`, run by the key executor), except the `async fn` resumed-after-completion panics no
+- No panic is reachable from an interrupt vector or from the poll function of any task of the
+  key, device or lighting executor, except the `async fn` resumed-after-completion panics no
   executor triggers and the sites in `xtask/src/check/panic_paths/reviewed.rs`: asserts of pinned
   dependencies on facts the hardware or the dependency itself guarantees (OTG endpoint numbers,
-  SETUP packet length, the `AtomicWaker` protocol, the channel's own lock, executor wakers), each
-  with its reason. Each site is waived only from the context it names (interrupts or the key
-  task). A reviewed site that no image reaches any more is reported for removal.
+  SETUP packet length, the `AtomicWaker` protocol, the channel's own lock, executor wakers, and
+  the USB descriptor, control-request and endpoint-allocation invariants of the fixed
+  configuration), each with its reason. A panic call is waived only if every `Location` that can
+  reach it is listed: the one loaded in the block that ends in the call and, because the compiler
+  merges panic calls behind one shared block, the ones loaded before each unconditional branch
+  into that block, level by level. Each site is waived only from the contexts it names
+  (`reached_from`: `Origin::Interrupt` or `Origin::Task` of one executor). A reviewed site that
+  no image reaches any more is reported for removal. The thread-mode tasks are not checked.
 - No BASEPRI write is reachable from the scan vector (`ADC` on the GD32F425, `ADC0_1` on the GD32F303): the scan interrupt takes no critical section.
-- Every function that a device interrupt vector or the key task reaches lies in the zero-wait flash (`ZERO_WAIT` of `memory.x`); beyond it the GD32F425 ran the scan interrupt about 20 times slower ([lessons](hardware.md#lessons-from-the-wooting-80he)).
+- All code (the vector table and `.text`) lies in the zero-wait flash (`ZERO_WAIT` of `memory.x`), linked in the compiler's order; beyond it the GD32F425 ran the scan interrupt about 20 times slower ([lessons](hardware.md#lessons-from-the-wooting-80he)). No function that an interrupt vector or a task of the key or device executor reaches may come from a crate compiled for size ([speed and size](building.md#speed-and-size)); the lighting executor is compiled for size by design.
 - RAM and flash budget: statics (from the start of RAM to the end of the last static section) plus a stack bound must fit the RAM of `memory.x` with 2048
   bytes to spare, and the image must leave 32 KiB of its area free. The stack bound is the
   deepest path over the call graph with each function's frame decoded from its stack-pointer
   adjustments: thread mode (the start-up path, or the thread executor plus its deepest task),
-  plus every interrupt handler once with its 108-byte exception frame, plus the key task.
-  Calls that form a cycle are rejected; functions joined only through a table (a waker's `clone`
-  and its vtable) count once. Indirect calls through function pointers stored at run time are
-  not followed, by either check; the stack paint covers them on hardware.
+  plus the deepest task of each interrupt executor (each pre-empts the one below it, so their
+  stacks add up), plus every interrupt handler once with its 108-byte exception frame. The
+  budget is printed per board as `RAM N bytes static + N bytes stack (N thread, N keys,
+  N device, N lighting, N interrupts)`. Calls that form a cycle are rejected; functions joined
+  only through a table (a waker's `clone` and its vtable) count once. Indirect calls through
+  function pointers stored at run time are not followed, by either check; the stack paint
+  covers them on hardware.
 
 A panic anywhere else resets the microcontroller: each board's panic handler calls
 `hal::system::reset`.
 
 Start-up keeps large values out of frames that live forever: `main` only calls
-`hal::executor::run(start)`, and `start`, `open_model`, `install_scanner` and `open_storage`
-are separate functions whose frames are gone before the executor polls the first task. The
-scanner's sensor grid is a `ConstStaticCell` (`scan::SENSORS`), built at compile time like
-`storage::SETTINGS_STORE`, so `install_scanner` never holds it in its frame.
+`hal::executor::run(start)`, and `start`, `Board::new`, `configuration::start`, `open_model`,
+`install_scanner` and `open_storage` are separate `#[inline(never)]` functions whose frames are
+gone before the executors poll the first task. The scanner's sensor grid (`scan::SENSORS`) and
+the settings store (`storage::SETTINGS_STORE`) are `StaticCell`s filled at start-up, so they lie
+in `.bss`, not in `.data`.
 
 The chip HALs paint the stack at reset (`cortex-m-rt` `paint-stack`); `GetDiagnostics`
 (`openwoot/diagnostics`) reports the stack size and the deepest use since reset, and
@@ -219,7 +270,7 @@ Update protocol, update-mode product id and block size are all zero when the boa
 is unknown, and all non-zero otherwise. The image area and RAM come from `memory.x` through the
 board's `build.rs` (constants `IMAGE` and `RAM`); the update mode is a board constant. The board's
 `memory.x` places the section `.app_descriptor` there and starts the code right behind it (8-byte
-aligned); the board's `src/main.rs` fills it with `app_descriptor!`.
+aligned); the board's `firmware/src/main.rs` fills it with `app_descriptor!`.
 
 The host tool needs no list of boards: it finds the descriptor in the image and checks the image
 against it (start address, size, initial stack pointer equal to the end of the descriptor's RAM,

@@ -183,7 +183,7 @@ fn the_mode_key_toggles_typing_and_rapid_and_applies_their_keys_and_lighting() {
         let preset = &PRESETS[usize::from(slot)];
         assert_eq!(bench.keys.profiles().active(), slot);
         assert_eq!(
-            block_on(configurator.profiles()).map(|summary| summary.active),
+            configurator.profiles().map(|summary| summary.active),
             Ok(Slot::new(slot))
         );
         assert_eq!(

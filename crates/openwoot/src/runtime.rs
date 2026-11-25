@@ -18,4 +18,4 @@ pub use key_task::{KeyTask, Progress};
 pub use lighting::Lighting;
 pub use reports::Reports;
 pub use state::State;
-pub use usb::Usb;
+pub use usb::{Usb, UsbParts, UsbTasks};

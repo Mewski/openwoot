@@ -1,4 +1,3 @@
-use embassy_futures::block_on;
 use openwoot::storage::{FormatReason, Opened, Partition, RecordKey, Scope, Settings};
 
 use super::support::{
@@ -27,7 +26,7 @@ fn a_power_cut_at_any_step_of_a_store_keeps_every_other_setting() {
         let new = blob(10_000 + updates);
         for cut in 0.. {
             let (mut settings, _) = open(base.cut_after(cut), layout, false).unwrap();
-            let stored = block_on(settings.store(Scope::Profile(target), &new));
+            let stored = settings.store(Scope::Profile(target), &new);
             let nor = close(settings).unwrap();
             if !nor.was_cut() {
                 stored.unwrap();
@@ -36,7 +35,7 @@ fn a_power_cut_at_any_step_of_a_store_keeps_every_other_setting() {
             let (mut settings, opened) = open(nor.revived(), layout, false).unwrap();
             assert_eq!(opened, Opened::Kept, "update {updates}, cut {cut}");
             for profile in 0..PROFILES {
-                let loaded = block_on(settings.load::<Blob>(Scope::Profile(profile))).unwrap();
+                let loaded = settings.load::<Blob>(Scope::Profile(profile)).unwrap();
                 let old = expected[usize::from(profile)];
                 if profile == target {
                     assert!(
@@ -51,15 +50,15 @@ fn a_power_cut_at_any_step_of_a_store_keeps_every_other_setting() {
                     );
                 }
             }
-            block_on(settings.store(Scope::Profile(target), &new)).unwrap();
+            settings.store(Scope::Profile(target), &new).unwrap();
             assert_eq!(
-                block_on(settings.load::<Blob>(Scope::Profile(target))).unwrap(),
+                settings.load::<Blob>(Scope::Profile(target)).unwrap(),
                 Some(new)
             );
             assert!(device_info_untouched(&close(settings).unwrap()));
         }
         let (mut settings, _) = open(base, layout, false).unwrap();
-        block_on(settings.store(Scope::Profile(target), &new)).unwrap();
+        settings.store(Scope::Profile(target), &new).unwrap();
         expected[usize::from(target)] = new;
         base = close(settings).unwrap();
     }
@@ -75,16 +74,16 @@ fn a_power_cut_during_a_factory_reset_leaves_a_working_store() {
     let (base, layout, _) = filled(30).unwrap();
     for cut in 0.. {
         let (mut settings, _) = open(base.cut_after(cut), layout, false).unwrap();
-        let reset = block_on(settings.factory_reset());
+        let reset = settings.factory_reset();
         let nor = close(settings).unwrap();
         if !nor.was_cut() {
             reset.unwrap();
             break;
         }
         let (mut settings, _) = open(nor.revived(), layout, false).unwrap();
-        block_on(settings.store(Scope::Profile(0), &blob(1))).unwrap();
+        settings.store(Scope::Profile(0), &blob(1)).unwrap();
         assert_eq!(
-            block_on(settings.load::<Blob>(Scope::Profile(0))).unwrap(),
+            settings.load::<Blob>(Scope::Profile(0)).unwrap(),
             Some(blob(1))
         );
         assert!(device_info_untouched(&close(settings).unwrap()));
@@ -103,18 +102,19 @@ fn a_power_cut_during_a_factory_reset_never_keeps_a_part_of_the_settings() {
             Ok(first) if first < PROFILES * WIDE_ITEMS => (first / WIDE_ITEMS, first % WIDE_ITEMS),
             _ => (profile % PROFILES, item % WIDE_ITEMS),
         };
-        block_on(settings.store_with(wide_key(profile, item), 1, |body| {
-            postcard::to_slice(&blob(update), body)
-                .ok()
-                .map(|body| body.len())
-        }))
-        .unwrap();
+        settings
+            .store_with(wide_key(profile, item), 1, &|body| {
+                postcard::to_slice(&blob(update), body)
+                    .ok()
+                    .map(|body| body.len())
+            })
+            .unwrap();
     }
     let base = close(settings).unwrap();
     let every = usize::from(PROFILES) * usize::from(WIDE_ITEMS);
     for cut in 0.. {
         let (mut settings, _) = open(base.cut_after(cut), layout, false).unwrap();
-        let reset = block_on(settings.factory_reset());
+        let reset = settings.factory_reset();
         let nor = close(settings).unwrap();
         if !nor.was_cut() {
             reset.unwrap();
@@ -124,7 +124,7 @@ fn a_power_cut_during_a_factory_reset_never_keeps_a_part_of_the_settings() {
         let mut kept = 0;
         for profile in 0..PROFILES {
             for item in 0..WIDE_ITEMS {
-                let found = block_on(settings.load_with(wide_key(profile, item), |_| ()));
+                let found = settings.load_stored(wide_key(profile, item));
                 kept += usize::from(found.unwrap().is_some());
             }
         }
@@ -141,7 +141,7 @@ fn a_power_cut_at_any_step_of_a_remove_keeps_every_other_setting() {
         let key = RecordKey::of::<Blob>(Scope::Profile(target));
         for cut in 0.. {
             let (mut settings, _) = open(base.cut_after(cut), layout, false).unwrap();
-            let removed = block_on(settings.remove(key));
+            let removed = settings.remove(key);
             let nor = close(settings).unwrap();
             if !nor.was_cut() {
                 removed.unwrap();
@@ -150,7 +150,7 @@ fn a_power_cut_at_any_step_of_a_remove_keeps_every_other_setting() {
             let (mut settings, opened) = open(nor.revived(), layout, false).unwrap();
             assert_eq!(opened, Opened::Kept, "updates {updates}, cut {cut}");
             for profile in 0..PROFILES {
-                let loaded = block_on(settings.load::<Blob>(Scope::Profile(profile))).unwrap();
+                let loaded = settings.load::<Blob>(Scope::Profile(profile)).unwrap();
                 let old = expected[usize::from(profile)];
                 if profile == target {
                     assert!(
@@ -181,10 +181,10 @@ fn a_power_cut_while_foreign_content_is_replaced_leaves_a_working_store() {
     }
     for cut in 0.. {
         let mut settings = Settings::new();
-        let opened = block_on(settings.open(
+        let opened = settings.open(
             Partition::new(foreign.cut_after(cut), layout.settings_region()),
             false,
-        ));
+        );
         let nor = close(settings).unwrap();
         if !nor.was_cut() {
             assert_eq!(opened, Ok(Opened::Formatted(FormatReason::Unrecognised)));
@@ -196,9 +196,9 @@ fn a_power_cut_while_foreign_content_is_replaced_leaves_a_working_store() {
             Opened::Formatted(FormatReason::Unrecognised),
             "cut {cut}"
         );
-        block_on(settings.store(Scope::Profile(0), &blob(1))).unwrap();
+        settings.store(Scope::Profile(0), &blob(1)).unwrap();
         assert_eq!(
-            block_on(settings.load::<Blob>(Scope::Profile(0))).unwrap(),
+            settings.load::<Blob>(Scope::Profile(0)).unwrap(),
             Some(blob(1))
         );
         assert!(device_info_untouched(&close(settings).unwrap()));

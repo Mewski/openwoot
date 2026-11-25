@@ -1,51 +1,56 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{fs, path::PathBuf};
 
 use anyhow::{Context, Result, ensure};
+use cargo_metadata::Message;
 use ihex::Record;
 
 use crate::{
-    call_graph::CallGraph,
     elf::{Elf, Segment},
-    entry_points::EntryPoints,
     process,
-    symbol_order::symbol_order,
     workspace::{Board, Workspace},
 };
 
 const HEX_RECORD_LEN: usize = 16;
 const ERASED_BYTE: u8 = 0xFF;
-const SYMBOL_ORDER_VARIABLE: &str = "OPENWOOT_SYMBOL_ORDER";
+const LINK_MAP: &str = "link.map";
 
 pub(crate) struct Images {
     pub(crate) elf: PathBuf,
     pub(crate) hex: PathBuf,
     pub(crate) bin: PathBuf,
+    pub(crate) map: PathBuf,
 }
 
 pub(crate) fn build(workspace: &Workspace, board: &Board) -> Result<Images> {
     let root = &workspace.root;
-    let release = workspace
-        .target_directory()
-        .join(&board.target)
-        .join("release");
-    let linked = release.join(&board.binary);
-    let order = release.join(format!("{}.symbol-order", board.binary));
-    if !order.exists() {
-        fs::create_dir_all(&release)
-            .with_context(|| format!("could not create `{}`", release.display()))?;
-        write(&order, "")?;
-    }
-    link(root, board, &order)?;
-    let ordered = symbol_order_of(&linked)?;
-    let current = fs::read_to_string(&order)
-        .with_context(|| format!("could not read `{}`", order.display()))?;
-    if ordered != current {
-        write(&order, &ordered)?;
-        link(root, board, &order)?;
-    }
+    let messages = process::messages(process::cargo(root).args([
+        "build",
+        "--release",
+        "--package",
+        &board.firmware,
+        "--bin",
+        &board.binary,
+        "--target",
+        &board.target,
+    ]))?;
+    let (package, linked) = messages
+        .iter()
+        .find_map(|message| match message {
+            Message::CompilerArtifact(artifact) if artifact.target.name == board.binary => {
+                Some((&artifact.package_id, artifact.executable.as_ref()?))
+            }
+            _ => None,
+        })
+        .with_context(|| format!("cargo built no executable `{}`", board.binary))?;
+    let link_map = messages
+        .iter()
+        .find_map(|message| match message {
+            Message::BuildScriptExecuted(script) if script.package_id == *package => {
+                Some(script.out_dir.join(LINK_MAP))
+            }
+            _ => None,
+        })
+        .with_context(|| format!("the build script of `{}` did not run", board.firmware))?;
     let directory = root.join("build").join(&board.name);
     fs::create_dir_all(&directory)
         .with_context(|| format!("could not create `{}`", directory.display()))?;
@@ -53,9 +58,11 @@ pub(crate) fn build(workspace: &Workspace, board: &Board) -> Result<Images> {
         elf: directory.join(format!("{}.elf", board.binary)),
         hex: directory.join(format!("{}.hex", board.binary)),
         bin: directory.join(format!("{}.bin", board.binary)),
+        map: directory.join(format!("{}.map", board.binary)),
     };
-    fs::copy(&linked, &images.elf)
-        .with_context(|| format!("could not copy `{}`", linked.display()))?;
+    fs::copy(linked, &images.elf).with_context(|| format!("could not copy `{linked}`"))?;
+    fs::copy(&link_map, &images.map)
+        .with_context(|| format!("could not copy `{link_map}`; boards link with `-Map`"))?;
 
     let file = fs::read(&images.elf)
         .with_context(|| format!("could not read `{}`", images.elf.display()))?;
@@ -66,36 +73,6 @@ pub(crate) fn build(workspace: &Workspace, board: &Board) -> Result<Images> {
     fs::write(&images.hex, intel_hex(&segments, elf.entry())?)
         .with_context(|| format!("could not write `{}`", images.hex.display()))?;
     Ok(images)
-}
-
-fn link(root: &Path, board: &Board, order: &Path) -> Result<()> {
-    process::execute(
-        process::cargo(root)
-            .env(SYMBOL_ORDER_VARIABLE, order)
-            .args([
-                "build",
-                "--release",
-                "--package",
-                &board.name,
-                "--bin",
-                &board.binary,
-                "--target",
-                &board.target,
-            ]),
-    )
-}
-
-fn symbol_order_of(linked: &Path) -> Result<String> {
-    let file =
-        fs::read(linked).with_context(|| format!("could not read `{}`", linked.display()))?;
-    let elf = Elf::parse(&file)?;
-    let graph = CallGraph::new(&elf)?;
-    let entry_points = EntryPoints::find(&elf, &graph)?;
-    Ok(symbol_order(&graph, &entry_points))
-}
-
-fn write(path: &Path, contents: &str) -> Result<()> {
-    fs::write(path, contents).with_context(|| format!("could not write `{}`", path.display()))
 }
 
 fn flatten(segments: &[Segment<'_>]) -> Result<Vec<u8>> {

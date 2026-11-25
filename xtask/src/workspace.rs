@@ -1,13 +1,19 @@
-use std::path::{Path, PathBuf};
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail, ensure};
 use cargo_metadata::{Metadata, MetadataCommand, Package, TargetKind};
 
 use crate::pac;
 
+const FIRMWARE_DIRECTORY: &str = "firmware";
+
 #[derive(Debug)]
 pub(crate) struct Board {
     pub(crate) name: String,
+    pub(crate) firmware: String,
     pub(crate) binary: String,
     pub(crate) chip_hal: String,
     pub(crate) target: String,
@@ -75,6 +81,14 @@ impl Workspace {
         Self::package_directory(package).parent() == Some(self.root.join("boards").as_path())
     }
 
+    pub(crate) fn is_board_firmware(&self, package: &Package) -> bool {
+        let directory = Self::package_directory(package);
+        directory.file_name() == Some(OsStr::new(FIRMWARE_DIRECTORY))
+            && directory
+                .parent()
+                .is_some_and(|board| board.parent() == Some(self.root.join("boards").as_path()))
+    }
+
     pub(crate) fn is_pac(&self, package: &Package) -> bool {
         let directory = Self::package_directory(package);
         directory.parent() == Some(self.root.join("crates").as_path())
@@ -96,14 +110,27 @@ impl Workspace {
             "board package `{}` lives in `boards/{directory_name}`",
             package.name
         );
-        let binaries: Vec<&str> = package
+        let firmware_directory = directory.join(FIRMWARE_DIRECTORY);
+        let firmware = self
+            .members()
+            .find(|member| Self::package_directory(member) == firmware_directory)
+            .with_context(|| {
+                format!(
+                    "board `{}` has no firmware package in `boards/{directory_name}/{FIRMWARE_DIRECTORY}`",
+                    package.name
+                )
+            })?;
+        let binaries: Vec<&str> = firmware
             .targets
             .iter()
             .filter(|target| target.kind.contains(&TargetKind::Bin))
             .map(|target| target.name.as_str())
             .collect();
         let [binary] = binaries.as_slice() else {
-            bail!("board `{}` must have exactly one binary", package.name);
+            bail!(
+                "the firmware package of board `{}` must have exactly one binary",
+                package.name
+            );
         };
         let mut chip_hals: Vec<(&str, &str)> = package
             .dependencies
@@ -124,6 +151,7 @@ impl Workspace {
         };
         Ok(Board {
             name: package.name.to_string(),
+            firmware: firmware.name.to_string(),
             binary: (*binary).to_owned(),
             chip_hal: (*chip_hal).to_owned(),
             target: (*target).to_owned(),

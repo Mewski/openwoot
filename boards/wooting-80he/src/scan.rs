@@ -3,10 +3,10 @@ use hal::{
     scan::{AnalogInput, SampleTime, Wiring},
 };
 use openwoot::{
-    analog::MinMax,
+    analog::{CurveTable, MinMax},
     scan::{Map, RecheckFrom, Shared, ZeroLevel},
 };
-use static_cell::ConstStaticCell;
+use static_cell::{ConstStaticCell, StaticCell};
 
 use crate::hal;
 
@@ -139,7 +139,9 @@ pub const JIS: Map<INPUTS, ADDRESSES> = Map::from_codes([
 pub const SENSOR_MAPS: [Map<INPUTS, ADDRESSES>; 3] = [ANSI, ISO, JIS];
 
 pub static SCAN: Shared<Sensing, INPUTS, ADDRESSES> = Shared::new();
-pub static SENSORS: ConstStaticCell<Sensors> = ConstStaticCell::new(Sensors::new());
+pub static SENSORS: StaticCell<Sensors> = StaticCell::new();
+pub static CURVE_TABLES: ConstStaticCell<[CurveTable; 4]> =
+    ConstStaticCell::new([CurveTable::EMPTY; 4]);
 
 pub type Converter = hal::scan::Converter<INPUTS>;
 pub type Scanner = openwoot::scan::Scanner<Sensing, INPUTS, ADDRESSES>;
@@ -159,6 +161,7 @@ impl openwoot::scan::Sensing for Sensing {
 pub struct Interrupt;
 
 impl hal::scan::Conversion for Interrupt {
+    #[inline]
     fn on_conversion() {
         SCAN.on_conversion();
     }

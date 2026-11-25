@@ -1,4 +1,3 @@
-use embassy_futures::block_on;
 use openwoot::storage::{FormatReason, Opened, RecordKey, Scope};
 
 use super::support::{
@@ -10,22 +9,19 @@ fn a_blank_chip_is_formatted_once_and_keeps_values_across_a_restart() {
     let (nor, layout) = chip(SETTINGS_SECTORS);
     let (mut settings, opened) = open(nor, layout, false).unwrap();
     assert_eq!(opened, Opened::Formatted(FormatReason::Unrecognised));
-    block_on(settings.store(Scope::Global, &Brightness(80))).unwrap();
-    block_on(settings.store(Scope::Profile(2), &blob(7))).unwrap();
+    settings.store(Scope::Global, &Brightness(80)).unwrap();
+    settings.store(Scope::Profile(2), &blob(7)).unwrap();
     let (mut settings, opened) = open(close(settings).unwrap(), layout, false).unwrap();
     assert_eq!(opened, Opened::Kept);
     assert_eq!(
-        block_on(settings.load::<Brightness>(Scope::Global)).unwrap(),
+        settings.load::<Brightness>(Scope::Global).unwrap(),
         Some(Brightness(80))
     );
     assert_eq!(
-        block_on(settings.load::<Blob>(Scope::Profile(2))).unwrap(),
+        settings.load::<Blob>(Scope::Profile(2)).unwrap(),
         Some(blob(7))
     );
-    assert_eq!(
-        block_on(settings.load::<Blob>(Scope::Profile(3))).unwrap(),
-        None
-    );
+    assert_eq!(settings.load::<Blob>(Scope::Profile(3)).unwrap(), None);
     assert!(device_info_untouched(&close(settings).unwrap()));
 }
 
@@ -50,16 +46,10 @@ fn a_format_request_and_a_factory_reset_drop_every_setting() {
     let (nor, layout, _) = filled(10).unwrap();
     let (mut settings, opened) = open(nor, layout, true).unwrap();
     assert_eq!(opened, Opened::Formatted(FormatReason::Requested));
-    assert_eq!(
-        block_on(settings.load::<Blob>(Scope::Profile(0))).unwrap(),
-        None
-    );
-    block_on(settings.store(Scope::Profile(1), &blob(3))).unwrap();
-    block_on(settings.factory_reset()).unwrap();
-    assert_eq!(
-        block_on(settings.load::<Blob>(Scope::Profile(1))).unwrap(),
-        None
-    );
+    assert_eq!(settings.load::<Blob>(Scope::Profile(0)).unwrap(), None);
+    settings.store(Scope::Profile(1), &blob(3)).unwrap();
+    settings.factory_reset().unwrap();
+    assert_eq!(settings.load::<Blob>(Scope::Profile(1)).unwrap(), None);
     let nor = close(settings).unwrap();
     assert!(device_info_untouched(&nor));
     let (_, opened) = open(nor, layout, false).unwrap();
@@ -72,23 +62,21 @@ fn a_format_record_of_another_generation_or_version_formats_the_store() {
     for (version, generation) in [(1, 2u16), (2, 1)] {
         let (nor, layout) = chip(SETTINGS_SECTORS);
         let (mut settings, _) = open(nor, layout, false).unwrap();
-        block_on(settings.store(Scope::Profile(0), &blob(5))).unwrap();
+        settings.store(Scope::Profile(0), &blob(5)).unwrap();
         let format = RecordKey::new(Scope::Global, FORMAT_ITEM);
-        block_on(settings.store_with(format, version, |body| {
-            postcard::to_slice(&generation, body)
-                .ok()
-                .map(|body| body.len())
-        }))
-        .unwrap();
+        settings
+            .store_with(format, version, &|body| {
+                postcard::to_slice(&generation, body)
+                    .ok()
+                    .map(|body| body.len())
+            })
+            .unwrap();
         let (mut settings, opened) = open(close(settings).unwrap(), layout, false).unwrap();
         assert_eq!(
             opened,
             Opened::Formatted(FormatReason::Unrecognised),
             "version {version}, generation {generation}"
         );
-        assert_eq!(
-            block_on(settings.load::<Blob>(Scope::Profile(0))).unwrap(),
-            None
-        );
+        assert_eq!(settings.load::<Blob>(Scope::Profile(0)).unwrap(), None);
     }
 }

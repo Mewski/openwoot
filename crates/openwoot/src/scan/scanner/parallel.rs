@@ -100,7 +100,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
         let Some(sensor) = self.sensors.get_mut(position) else {
             return;
         };
-        let update = sensor.update(&self.converter, context, magnitude, value);
+        let update = sensor.update(&self.converter, &self.curves, context, magnitude, value);
         self.finish_key(position, update, travel);
     }
 }

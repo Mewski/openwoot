@@ -1,7 +1,10 @@
 # Wooting 80HE
 
 Board support crate for the Wooting 80HE: GD32F425 (chip HAL `openwoot-gd32f4`), key matrix of
-6 rows and 17 columns, read through 6 analog multiplexers (16:1).
+6 rows and 17 columns, read through 6 analog multiplexers (16:1). This crate holds the board
+facts, start-up, the configuration side and the lighting task, compiled for size; the firmware
+binary `openwoot-wooting-80he`, the package in `firmware/`, holds the interrupt bindings and the
+key and USB tasks, compiled for speed ([speed and size](../../docs/building.md#speed-and-size)).
 
 ```sh
 cargo xtask build wooting-80he
@@ -20,7 +23,7 @@ keys and the light bar, switches profiles with the Mode key, and answers `openwo
 | --- | --- |
 | factory bootloader, never written | `0x0800_0000`-`0x0800_7fff` |
 | image (`FLASH` in `memory.x`): vector table, descriptor, code | `0x0800_8000`-`0x080f_dfff` |
-| zero-wait flash (`ZERO_WAIT` in `memory.x`): the interrupt vectors' and key task's code is linked here first | `0x0800_0000`-`0x0807_ffff` |
+| zero-wait flash (`ZERO_WAIT` in `memory.x`): all code lies in it | `0x0800_0000`-`0x0807_ffff` |
 | serial number mirror page, never linked | `0x080f_e000`-`0x080f_efff` |
 | completion marker of the bootloader, never linked | `0x080f_f000`-`0x080f_ffff` |
 | RAM, stack from the top | `0x2000_0000`-`0x2002_ffff` |

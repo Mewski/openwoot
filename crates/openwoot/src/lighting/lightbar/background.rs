@@ -38,11 +38,11 @@ fn contrast(color: Rgb) -> Rgb {
         return YELLOW;
     }
     let hue = if max == red {
-        low_byte(43 * (green - blue) / delta)
+        low_byte(sixths(green - blue, delta))
     } else if max == green {
-        low_byte(43 * (blue - red) / delta + 85)
+        low_byte(sixths(blue - red, delta) + 85)
     } else {
-        low_byte(43 * (red - green) / delta - 85)
+        low_byte(sixths(red - green, delta) - 85)
     };
     match hue {
         0..=14 | 199..=240 => YELLOW,
@@ -53,6 +53,10 @@ fn contrast(color: Rgb) -> Rgb {
         142..=184 => GREEN,
         241..=255 => MINT,
     }
+}
+
+fn sixths(difference: i32, delta: i32) -> i32 {
+    (43 * difference).checked_div(delta).unwrap_or_default()
 }
 
 const fn low_byte(value: i32) -> u8 {

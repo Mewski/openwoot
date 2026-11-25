@@ -1,13 +1,15 @@
 use core::{
-    future::Future,
+    future::poll_fn,
+    ops::ControlFlow,
     pin::{Pin, pin},
+    task::{Context, Poll},
 };
 
 use embedded_hal_async::delay::DelayNs;
 use openwoot_protocol::{
-    ERROR_KEY, Endpoint, Key, Message, VarKey, Version, WireError, apps,
-    configuration::{Rejection, Validate},
-    decode_message, encode_message,
+    Body, ERROR_KEY, Endpoint, Key, Message, VarKey, Version, WireError, apps,
+    configuration::{Capabilities, Rejection, Validate},
+    decode_message, encode_frame,
     endpoints::{
         ActivateProfile, CreateProfile, DeleteAppLink, DeleteProfile, EnterUpdateMode,
         FactoryReset, GetAdvancedKeys, GetAppLink, GetAppLinkCount, GetCapabilities,
@@ -24,10 +26,8 @@ use openwoot_protocol::{
         SetKeyReports, SetKeySettings, SetKeymap, SetKeymapLink, SetLayout, SetLightbar,
         SetLighting, SetProfileInfo, SetRawScanning, SetSwitches, SwapProfiles,
     },
-    gamepad, host_lighting,
-    keys::{self, Layer},
-    lightbar,
-    profile::{self, Change, LayerRef, Slot},
+    gamepad, host_lighting, keys, lightbar,
+    profile::{self, Slot},
     stock::Status,
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -46,6 +46,17 @@ use crate::{
 };
 
 const HANDOVER_OPTION: u8 = 0;
+const UNSUPPORTED: Result<(), Rejection> = Err(Rejection::Unsupported);
+const LIGHTBAR_ENDPOINTS: [(Key, Key); 8] = [
+    (GetGlobalLightbar::REQ_KEY, GetGlobalLightbar::RESP_KEY),
+    (SetGlobalLightbar::REQ_KEY, SetGlobalLightbar::RESP_KEY),
+    (GetHostSignals::REQ_KEY, GetHostSignals::RESP_KEY),
+    (SetHostSignals::REQ_KEY, SetHostSignals::RESP_KEY),
+    (GetLightbar::REQ_KEY, GetLightbar::RESP_KEY),
+    (SetLightbar::REQ_KEY, SetLightbar::RESP_KEY),
+    (ResetHostLightbar::REQ_KEY, ResetHostLightbar::RESP_KEY),
+    (GetLightbarColors::REQ_KEY, GetLightbarColors::RESP_KEY),
+];
 
 #[derive(Debug, Clone, Copy)]
 pub struct Handler<C = ()> {
@@ -128,7 +139,7 @@ impl<C: Configuration> Handler<C> {
         &mut self,
         request: &[u8],
         response: &'a mut [u8],
-        mut delay: Option<&mut impl DelayNs>,
+        delay: Option<&mut impl DelayNs>,
     ) -> Answer<'a> {
         let message = match decode_message(request) {
             Ok(Some(message)) => message,
@@ -138,55 +149,17 @@ impl<C: Configuration> Handler<C> {
             }
             Err(_) => return Answer::NONE,
         };
-        let VarKey::Key8(key) = message.header.key else {
-            let length = fail(&message, &WireError::UnknownKey, response);
-            return Answer {
-                reply: reply(response, length),
-                handover: None,
-            };
-        };
-        let configuration = &mut self.configuration;
         let mut handover = None;
-        let mut length = keyboard_endpoints(
-            key,
-            self.version,
-            configuration,
-            &message,
+        let mut exchange = Exchange {
+            request: message,
             response,
-            &mut handover,
-        )
-        .await;
-        if length.is_none() {
-            length = profile_endpoints(key, configuration, &message, response).await;
-        }
-        if length.is_none() {
-            length = host_endpoints(key, self.host, configuration, &message, response).await;
-        }
-        if length.is_none() {
-            let served = bounded(
-                delay.as_deref_mut(),
-                host_control_endpoints(key, self.host_control, configuration, &message, response),
-            )
-            .await;
-            length =
-                served.unwrap_or_else(|| Some(fail(&message, &WireError::FailedToSpawn, response)));
-        }
-        if length.is_none() {
-            let served = bounded(
-                delay,
-                sensor_endpoints(key, self.sensors, configuration, &message, response),
-            )
-            .await;
-            length =
-                served.unwrap_or_else(|| Some(fail(&message, &WireError::FailedToSpawn, response)));
-        }
-        if length.is_none()
-            && let Some(readout) = self.diagnostics
-        {
-            length = diagnostics_endpoint(key, readout, configuration, &message, response).await;
-        }
-        let length = length.unwrap_or_else(|| fail(&message, &WireError::UnknownKey, response));
-        let reply = reply(response, length);
+        };
+        let length = if let VarKey::Key8(key) = message.header.key {
+            self.serve(key, &mut exchange, &mut handover, delay).await
+        } else {
+            exchange.fail(&WireError::UnknownKey)
+        };
+        let reply = reply(exchange.response, length);
         Answer {
             reply,
             handover: handover.filter(|_| reply.is_some()),
@@ -218,6 +191,316 @@ impl<C: Configuration> Handler<C> {
         }
         self.stock.answer(request, response)
     }
+}
+
+impl Answer<'_> {
+    pub const NONE: Self = Self {
+        reply: None,
+        handover: None,
+    };
+}
+
+macro_rules! dispatch {
+    ($key:ident, $capabilities:ident, $exchange:ident;
+        $($kind:ident $endpoint:ident $(if $feature:ident)? =>
+            |$request:pat_param $(, $value:ident)?| $serve:expr,)*) => {
+        $(
+            if $(C::$feature &&)? $key == <$endpoint as Endpoint>::REQ_KEY {
+                return ControlFlow::Break(answered(|| {
+                    dispatch!(@serve $kind $endpoint, $capabilities, $exchange,
+                        $request, ($($value)?), Ok($serve))
+                }));
+            }
+        )*
+    };
+    (bounded $key:ident, $capabilities:ident, $exchange:ident, $delay:ident;
+        $($kind:ident $endpoint:ident $(if $feature:ident)? =>
+            |$request:pat_param $(, $value:ident)?| $serve:expr,)*) => {
+        $(
+            if $(C::$feature &&)? $key == <$endpoint as Endpoint>::REQ_KEY {
+                outlined(pin!(async {
+                    dispatch!(@serve $kind $endpoint, $capabilities, $exchange,
+                        $request, ($($value)?),
+                        bounded($delay, async { $serve })
+                            .await
+                            .ok_or(WireError::FailedToSpawn))
+                }))
+                .await
+            } else
+        )*
+        {
+            $exchange.fail(&WireError::UnknownKey)
+        }
+    };
+    (@serve $kind:ident $endpoint:ident, $capabilities:ident, $exchange:ident,
+        $request:pat, (), $call:expr) => {{
+        let answer: Result<<$endpoint as Endpoint>::Response, WireError> =
+            match decode::<<$endpoint as Endpoint>::Request>($exchange.request.body) {
+                Some(request) => dispatch!(@$kind $capabilities, request, $request, $call),
+                None => Err(WireError::DeserFailed),
+            };
+        $exchange.answer(<$endpoint as Endpoint>::RESP_KEY, reply_body(&answer))
+    }};
+    (@serve $kind:ident $endpoint:ident, $capabilities:ident, $exchange:ident,
+        $request:pat, ($value:ident), $call:expr) => {{
+        let mut value = <<$endpoint as Endpoint>::Response as Filled>::Value::empty();
+        let filled: Result<Result<(), Rejection>, WireError> =
+            match decode::<<$endpoint as Endpoint>::Request>($exchange.request.body) {
+                Some(request) => {
+                    let $value = &mut value;
+                    dispatch!(@$kind $capabilities, request, $request, $call)
+                }
+                None => Err(WireError::DeserFailed),
+            };
+        let answer = filled.map(|filled| filled.map(|()| &value));
+        $exchange.answer(<$endpoint as Endpoint>::RESP_KEY, reply_body(&answer))
+    }};
+    (@plain $capabilities:ident, $decoded:ident, $request:pat, $call:expr) => {{
+        let $request = $decoded;
+        $call
+    }};
+    (@checked $capabilities:ident, $decoded:ident, $request:pat, $call:expr) => {
+        match check(&$capabilities, &$decoded) {
+            Ok(()) => {
+                let $request = $decoded;
+                $call
+            }
+            Err(rejection) => Ok(Err(rejection)),
+        }
+    };
+}
+
+impl<C: Configuration> Handler<C> {
+    async fn serve(
+        &mut self,
+        key: Key,
+        exchange: &mut Exchange<'_, '_>,
+        handover: &mut Option<Handover>,
+        delay: Option<&mut impl DelayNs>,
+    ) -> Option<usize> {
+        if let ControlFlow::Break(length) = self.serve_configuration(key, exchange, handover) {
+            return length;
+        }
+        self.serve_real_time(key, exchange, delay).await
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the dispatch table holds one row per endpoint of the protocol"
+    )]
+    fn serve_configuration(
+        &mut self,
+        key: Key,
+        exchange: &mut Exchange<'_, '_>,
+        handover: &mut Option<Handover>,
+    ) -> ControlFlow<Option<usize>> {
+        let version = self.version;
+        let host = self.host;
+        let sensors = self.sensors.ok_or(Rejection::Unsupported);
+        let configuration = &mut self.configuration;
+        let capabilities = configuration.capabilities();
+        if key == GetDiagnostics::REQ_KEY {
+            let Some(readout) = self.diagnostics else {
+                return ControlFlow::Break(exchange.fail(&WireError::UnknownKey));
+            };
+            return ControlFlow::Break(
+                dispatch!(@serve plain GetDiagnostics, capabilities, exchange,
+                (), (), Ok(readout.report())),
+            );
+        }
+        if !C::LIGHTBAR
+            && let Some(&(_, response)) = LIGHTBAR_ENDPOINTS
+                .iter()
+                .find(|(request, _)| *request == key)
+        {
+            return ControlFlow::Break(exchange.answer(response, Ok(&UNSUPPORTED)));
+        }
+        dispatch!(key, capabilities, exchange;
+            plain GetVersion => |()| version,
+            plain EnterUpdateMode => |()| *handover = Some(Handover::UpdateMode(HANDOVER_OPTION)),
+            plain Restart => |()| *handover = Some(Handover::Restart(HANDOVER_OPTION)),
+            plain GetCapabilities => |()| configuration.capabilities(),
+            plain GetDeviceSettings => |()| configuration.device_settings(),
+            checked SetDeviceSettings => |settings| configuration.set_device_settings(settings),
+            plain GetDeviceName => |()| configuration.device_name(),
+            plain SetDeviceName => |name| configuration.set_device_name(name),
+            plain GetLayout => |()| configuration.layout(),
+            checked SetLayout => |layout| configuration.set_layout(layout),
+            plain GetKeyGeometry => |(), keys| configuration.key_geometry(keys),
+            plain GetDefaultKeymap => |layer, keymap| configuration.default_keymap(layer, keymap),
+            plain GetGlobalSettings => |()| configuration.global_settings(),
+            checked SetGlobalSettings => |settings| configuration.set_global_settings(settings),
+            plain GetProfiles => |()| configuration.profiles(),
+            plain CreateProfile => |namespace| configuration.create_profile(namespace),
+            checked SelectLinkedProfile => |selection| {
+                configuration.select_linked_profile(selection)
+            },
+            plain GetAppLinkCount => |profile| match linked(&capabilities, profile) {
+                Ok(()) => configuration.app_link_count(profile),
+                Err(rejection) => Err(rejection),
+            },
+            checked GetAppLink => |link, value| {
+                configuration.app_link(link.profile, link.index, value)
+            },
+            checked SetAppLink => |change| {
+                configuration.set_app_link(change.profile, change.index, &change.link)
+            },
+            checked DeleteAppLink => |link| configuration.delete_app_link(link.profile, link.index),
+            checked DeleteProfile => |profile| configuration.delete_profile(profile),
+            checked ActivateProfile => |profile| configuration.activate_profile(profile),
+            checked SwapProfiles => |swap| configuration.swap_profiles(swap.first, swap.second),
+            checked MoveProfile => |shift| configuration.move_profile(shift.from, shift.to),
+            plain GetGlobalLightbar if LIGHTBAR => |(), entries| {
+                configuration.global_lightbar(entries)
+            },
+            checked SetGlobalLightbar if LIGHTBAR => |entries| {
+                configuration.set_global_lightbar(&entries)
+            },
+            plain GetHostSignals if LIGHTBAR => |()| configuration.host_signals(),
+            checked SetHostSignals if LIGHTBAR => |signals| configuration.set_host_signals(signals),
+            plain GetSwitches => |()| configuration.switches(),
+            checked SetSwitches => |settings| configuration.set_switches(settings),
+            plain GetSwitchModels => |()| configuration.switch_models(),
+            plain Save => |()| configuration.save(),
+            plain Revert => |()| configuration.revert(),
+            plain FactoryReset => |()| configuration.factory_reset(),
+            plain GetStorageUsage => |()| configuration.storage_usage(),
+            checked GetProfileInfo => |profile| configuration.profile_info(profile),
+            checked SetProfileInfo => |change| {
+                configuration.set_profile_info(change.profile, change.value)
+            },
+            checked GetProfileRevision => |profile| configuration.profile_revision(profile),
+            checked GetKeySettings => |profile| configuration.key_settings(profile),
+            checked SetKeySettings => |change| {
+                configuration.set_key_settings(change.profile, change.value)
+            },
+            checked GetKeymap => |layer, keymap| {
+                configuration.keymap(layer.profile, layer.layer, keymap)
+            },
+            checked SetKeymap => |change| {
+                configuration.set_keymap(change.profile, change.layer, &change.value)
+            },
+            checked GetKeymapLink => |profile| configuration.keymap_link(profile),
+            plain SetKeymapLink => |change| match check(&capabilities, &change.profile) {
+                Ok(()) => configuration.set_keymap_link(change.profile, change.value),
+                Err(rejection) => Err(rejection),
+            },
+            checked GetKeyOverrides => |profile, overrides| {
+                configuration.key_overrides(profile, overrides)
+            },
+            checked SetKeyOverrides => |change| {
+                configuration.set_key_overrides(change.profile, &change.value)
+            },
+            checked GetAdvancedKeys => |profile, keys| configuration.advanced_keys(profile, keys),
+            checked SetAdvancedKeys => |change| {
+                configuration.set_advanced_keys(change.profile, &change.value)
+            },
+            checked GetGamepadMapping => |profile, mapping| {
+                configuration.gamepad_mapping(profile, mapping)
+            },
+            checked SetGamepadMapping => |change| {
+                configuration.set_gamepad_mapping(change.profile, &change.value)
+            },
+            checked GetGamepadSettings => |profile| configuration.gamepad_settings(profile),
+            checked SetGamepadSettings => |change| {
+                configuration.set_gamepad_settings(change.profile, change.value)
+            },
+            checked GetLighting => |profile| configuration.lighting(profile),
+            checked SetLighting => |change| configuration.set_lighting(change.profile, change.value),
+            checked GetKeyColors => |layer, colors| {
+                configuration.key_colors(layer.profile, layer.layer, colors)
+            },
+            checked SetKeyColors => |change| {
+                configuration.set_key_colors(change.profile, change.layer, change.value.as_ref())
+            },
+            checked GetLightbar if LIGHTBAR => |profile, settings| {
+                configuration.lightbar(profile, settings)
+            },
+            checked SetLightbar if LIGHTBAR => |change| {
+                configuration.set_lightbar(change.profile, &change.value)
+            },
+            plain SetKeyReports => |enabled| {
+                host.map(|host| host.set_key_reports(enabled)).ok_or(Rejection::Unsupported)
+            },
+            plain GetGamepadState => |()| host.map(gamepad_state).ok_or(Rejection::Unsupported),
+            plain SetGamepadDetection => |enabled| {
+                host.map(|host| host.set_gamepad_detection(enabled))
+                    .ok_or(Rejection::Unsupported)
+            },
+            plain SetRawScanning => |enabled| {
+                sensors.map(|sensors| sensors.set_raw_scanning(enabled))
+            },
+        );
+        ControlFlow::Continue(())
+    }
+
+    async fn serve_real_time(
+        &mut self,
+        key: Key,
+        exchange: &mut Exchange<'_, '_>,
+        delay: Option<&mut impl DelayNs>,
+    ) -> Option<usize> {
+        let host_control = self.host_control.ok_or(Rejection::Unsupported);
+        let sensors = self.sensors.ok_or(Rejection::Unsupported);
+        let configuration = &mut self.configuration;
+        let capabilities = configuration.capabilities();
+        dispatch!(bounded key, capabilities, exchange, delay;
+            checked SetHostKeyColor => |request| {
+                host_control?
+                    .set_key_color(key_at(request.key), request.color)
+                    .await;
+                Ok(())
+            },
+            checked SetHostColors => |colors| {
+                host_control?.set_colors(|keys| keys.clone_from(&colors)).await;
+                Ok(())
+            },
+            checked ResetHostKeyColor => |position| {
+                host_control?.reset_key_color(key_at(position)).await;
+                Ok(())
+            },
+            plain ResetHostColors => |()| {
+                host_control?.reset_colors().await;
+                Ok(())
+            },
+            checked SetHostLightbar => |colors| {
+                host_control?.set_lightbar(&colors).await;
+                Ok(())
+            },
+            plain ResetHostLightbar if LIGHTBAR => |()| {
+                require_lightbar(&capabilities)?;
+                host_control?.reset_lightbar().await;
+                Ok(())
+            },
+            plain LeaveHostControl => |()| {
+                host_control?.leave().await;
+                Ok(())
+            },
+            plain GetLedFrame => |(), frame| {
+                host_control?.read_frame(frame).await;
+                Ok(())
+            },
+            plain GetLightbarColors if LIGHTBAR => |(), colors| {
+                require_lightbar(&capabilities)?;
+                host_control?.read_lightbar(colors).await;
+                Ok(())
+            },
+            plain GetProfileState => |()| {
+                let lighting = host_control?;
+                let active = configuration.profiles()?.active;
+                let leds = lighting.led_state().await;
+                Ok(profile::State {
+                    active,
+                    host_control: leds.host_control,
+                    idle_off: leds.idle_off,
+                })
+            },
+            plain GetSensorValues => |reading, values| {
+                sensors?.read(reading, values).await;
+                Ok(())
+            },
+        )
+    }
 
     fn stock_control(&self) -> StockControl<'static> {
         StockControl {
@@ -235,401 +518,44 @@ impl<C: Configuration> Handler<C> {
     }
 }
 
-impl Answer<'_> {
-    pub const NONE: Self = Self {
-        reply: None,
-        handover: None,
-    };
+struct Exchange<'m, 'r> {
+    request: Message<'m>,
+    response: &'r mut [u8],
 }
 
-macro_rules! dispatch {
-    ($key:ident, $configuration:ident, $message:ident, $response:ident;
-        $($kind:ident $endpoint:ty => $handle:expr,)*) => {
-        $(
-            if $key == <$endpoint as Endpoint>::REQ_KEY {
-                Some(dispatch!(@$kind $endpoint, $configuration, $message, $response, $handle))
-            } else
-        )* {
-            None
+impl Exchange<'_, '_> {
+    fn answer(&mut self, key: Key, answer: Result<&dyn Body, &WireError>) -> Option<usize> {
+        match answer {
+            Ok(body) => self
+                .encode(key, body)
+                .or_else(|| self.fail(&WireError::SerFailed)),
+            Err(error) => self.fail(error),
         }
-    };
-    (@plain $endpoint:ty, $configuration:ident, $message:ident, $response:ident, $handle:expr) => {{
-        let served: Pin<&mut dyn Future<Output = Option<usize>>> =
-            pin!(serve::<$endpoint, _>($configuration, $message, $response, $handle));
-        served.await
-    }};
-    (@checked $endpoint:ty, $configuration:ident, $message:ident, $response:ident, $handle:expr) => {{
-        let served: Pin<&mut dyn Future<Output = Option<usize>>> =
-            pin!(serve_checked::<$endpoint, _, _>($configuration, $message, $response, $handle));
-        served.await
-    }};
-    (@filled $endpoint:ty, $configuration:ident, $message:ident, $response:ident, $handle:expr) => {{
-        let served: Pin<&mut dyn Future<Output = Option<usize>>> =
-            pin!(serve_filled::<$endpoint, _, _>($configuration, $message, $response, $handle));
-        served.await
-    }};
-}
+    }
 
-async fn keyboard_endpoints<C: Configuration>(
-    key: Key,
-    version: Version,
-    configuration: &mut C,
-    message: &Message<'_>,
-    response: &mut [u8],
-    handover: &mut Option<Handover>,
-) -> Option<Option<usize>> {
-    dispatch!(key, configuration, message, response;
-        plain GetVersion => async |_, ()| version,
-        plain EnterUpdateMode => async |_, ()| {
-            *handover = Some(Handover::UpdateMode(HANDOVER_OPTION));
-        },
-        plain Restart => async |_, ()| {
-            *handover = Some(Handover::Restart(HANDOVER_OPTION));
-        },
-        plain GetCapabilities => async |configuration, ()| configuration.capabilities(),
-        plain GetDeviceSettings => async |configuration, ()| configuration.device_settings().await,
-        checked SetDeviceSettings => async |configuration, settings| {
-            configuration.set_device_settings(settings).await
-        },
-        plain GetDeviceName => async |configuration, ()| configuration.device_name().await,
-        plain SetDeviceName => async |configuration, name| {
-            configuration.set_device_name(name).await
-        },
-        plain GetLayout => async |configuration, ()| configuration.layout().await,
-        checked SetLayout => async |configuration, layout| configuration.set_layout(layout).await,
-        filled GetKeyGeometry => async |configuration, (), keys| {
-            configuration.key_geometry(keys).await
-        },
-        filled GetDefaultKeymap => async |configuration, layer: Layer, keymap| {
-            configuration.default_keymap(layer, keymap).await
-        },
-        plain GetGlobalSettings => async |configuration, ()| configuration.global_settings().await,
-        checked SetGlobalSettings => async |configuration, settings| {
-            configuration.set_global_settings(settings).await
-        },
-        plain GetProfiles => async |configuration, ()| configuration.profiles().await,
-        plain CreateProfile => async |configuration, namespace| {
-            configuration.create_profile(namespace).await
-        },
-        checked SelectLinkedProfile => async |configuration, selection| {
-            configuration.select_linked_profile(selection).await
-        },
-        plain GetAppLinkCount => async |configuration, profile: Slot| {
-            profile.check_linked(&configuration.capabilities()?)?;
-            configuration.app_link_count(profile).await
-        },
-        filled GetAppLink => async |configuration, link: apps::LinkRef, value| {
-            check(configuration, &link)?;
-            configuration.app_link(link.profile, link.index, value).await
-        },
-        checked SetAppLink => async |configuration, change| {
-            configuration.set_app_link(change.profile, change.index, &change.link).await
-        },
-        checked DeleteAppLink => async |configuration, link| {
-            configuration.delete_app_link(link.profile, link.index).await
-        },
-        checked DeleteProfile => async |configuration, profile| {
-            configuration.delete_profile(profile).await
-        },
-        checked ActivateProfile => async |configuration, profile| {
-            configuration.activate_profile(profile).await
-        },
-        checked SwapProfiles => async |configuration, swap| {
-            configuration.swap_profiles(swap.first, swap.second).await
-        },
-        checked MoveProfile => async |configuration, shift| {
-            configuration.move_profile(shift.from, shift.to).await
-        },
-        filled GetGlobalLightbar => async |configuration, (), entries| {
-            configuration.global_lightbar(entries).await
-        },
-        checked SetGlobalLightbar => async |configuration, entries| {
-            configuration.set_global_lightbar(&entries).await
-        },
-        plain GetHostSignals => async |configuration, ()| configuration.host_signals().await,
-        checked SetHostSignals => async |configuration, signals| {
-            configuration.set_host_signals(signals).await
-        },
-        plain GetSwitches => async |configuration, ()| configuration.switches().await,
-        checked SetSwitches => async |configuration, settings| {
-            configuration.set_switches(settings).await
-        },
-        plain GetSwitchModels => async |configuration, ()| configuration.switch_models().await,
-        plain Save => async |configuration, ()| configuration.save().await,
-        plain Revert => async |configuration, ()| configuration.revert().await,
-        plain FactoryReset => async |configuration, ()| configuration.factory_reset().await,
-        plain GetStorageUsage => async |configuration, ()| configuration.storage_usage().await,
-    )
-}
+    fn fail(&mut self, error: &WireError) -> Option<usize> {
+        self.encode(ERROR_KEY, error)
+    }
 
-async fn profile_endpoints<C: Configuration>(
-    key: Key,
-    configuration: &mut C,
-    message: &Message<'_>,
-    response: &mut [u8],
-) -> Option<Option<usize>> {
-    dispatch!(key, configuration, message, response;
-        checked GetProfileInfo => async |configuration, profile| {
-            configuration.profile_info(profile).await
-        },
-        checked SetProfileInfo => async |configuration, change| {
-            configuration.set_profile_info(change.profile, change.value).await
-        },
-        checked GetProfileRevision => async |configuration, profile| {
-            configuration.profile_revision(profile).await
-        },
-        checked GetKeySettings => async |configuration, profile| {
-            configuration.key_settings(profile).await
-        },
-        checked SetKeySettings => async |configuration, change| {
-            configuration.set_key_settings(change.profile, change.value).await
-        },
-        filled GetKeymap => async |configuration, layer: LayerRef, keymap| {
-            check(configuration, &layer)?;
-            configuration.keymap(layer.profile, layer.layer, keymap).await
-        },
-        checked SetKeymap => async |configuration, change| {
-            configuration.set_keymap(change.profile, change.layer, &change.value).await
-        },
-        checked GetKeymapLink => async |configuration, profile| {
-            configuration.keymap_link(profile).await
-        },
-        plain SetKeymapLink => async |configuration, change: Change<bool>| {
-            check(configuration, &change.profile)?;
-            configuration.set_keymap_link(change.profile, change.value).await
-        },
-        filled GetKeyOverrides => async |configuration, profile: Slot, overrides| {
-            check(configuration, &profile)?;
-            configuration.key_overrides(profile, overrides).await
-        },
-        checked SetKeyOverrides => async |configuration, change| {
-            configuration.set_key_overrides(change.profile, &change.value).await
-        },
-        filled GetAdvancedKeys => async |configuration, profile: Slot, keys| {
-            check(configuration, &profile)?;
-            configuration.advanced_keys(profile, keys).await
-        },
-        checked SetAdvancedKeys => async |configuration, change| {
-            configuration.set_advanced_keys(change.profile, &change.value).await
-        },
-        filled GetGamepadMapping => async |configuration, profile: Slot, mapping| {
-            check(configuration, &profile)?;
-            configuration.gamepad_mapping(profile, mapping).await
-        },
-        checked SetGamepadMapping => async |configuration, change| {
-            configuration.set_gamepad_mapping(change.profile, &change.value).await
-        },
-        checked GetGamepadSettings => async |configuration, profile| {
-            configuration.gamepad_settings(profile).await
-        },
-        checked SetGamepadSettings => async |configuration, change| {
-            configuration.set_gamepad_settings(change.profile, change.value).await
-        },
-        checked GetLighting => async |configuration, profile| {
-            configuration.lighting(profile).await
-        },
-        checked SetLighting => async |configuration, change| {
-            configuration.set_lighting(change.profile, change.value).await
-        },
-        filled GetKeyColors => async |configuration, layer: LayerRef, colors| {
-            check(configuration, &layer)?;
-            configuration.key_colors(layer.profile, layer.layer, colors).await
-        },
-        checked SetKeyColors => async |configuration, change| {
-            configuration
-                .set_key_colors(change.profile, change.layer, change.value.as_ref())
-                .await
-        },
-        filled GetLightbar => async |configuration, profile: Slot, settings| {
-            check(configuration, &profile)?;
-            configuration.lightbar(profile, settings).await
-        },
-        checked SetLightbar => async |configuration, change| {
-            configuration.set_lightbar(change.profile, &change.value).await
-        },
-    )
-}
-
-async fn host_endpoints<C: Configuration>(
-    key: Key,
-    host: Option<&HostState>,
-    configuration: &mut C,
-    message: &Message<'_>,
-    response: &mut [u8],
-) -> Option<Option<usize>> {
-    dispatch!(key, configuration, message, response;
-        plain SetKeyReports => async |_, enabled| {
-            host.map(|host| host.set_key_reports(enabled)).ok_or(Rejection::Unsupported)
-        },
-        plain GetGamepadState => async |_, ()| {
-            host.map(gamepad_state).ok_or(Rejection::Unsupported)
-        },
-        plain SetGamepadDetection => async |_, enabled| {
-            host.map(|host| host.set_gamepad_detection(enabled)).ok_or(Rejection::Unsupported)
-        },
-    )
-}
-
-async fn host_control_endpoints<C: Configuration>(
-    key: Key,
-    host_control: Option<&HostControl>,
-    configuration: &mut C,
-    message: &Message<'_>,
-    response: &mut [u8],
-) -> Option<Option<usize>> {
-    let host_control = host_control.ok_or(Rejection::Unsupported);
-    dispatch!(key, configuration, message, response;
-        checked SetHostKeyColor => async |_, request| {
-            host_control?
-                .set_key_color(key_at(request.key), request.color)
-                .await;
-            Ok(())
-        },
-        checked SetHostColors => async |_, colors| {
-            host_control?.set_colors(|keys| keys.clone_from(&colors)).await;
-            Ok(())
-        },
-        checked ResetHostKeyColor => async |_, position| {
-            host_control?.reset_key_color(key_at(position)).await;
-            Ok(())
-        },
-        plain ResetHostColors => async |_, ()| {
-            host_control?.reset_colors().await;
-            Ok(())
-        },
-        checked SetHostLightbar => async |_, colors| {
-            host_control?.set_lightbar(&colors).await;
-            Ok(())
-        },
-        plain ResetHostLightbar => async |configuration, ()| {
-            require_lightbar(configuration)?;
-            host_control?.reset_lightbar().await;
-            Ok(())
-        },
-        plain LeaveHostControl => async |_, ()| {
-            host_control?.leave().await;
-            Ok(())
-        },
-        filled GetLedFrame => async |_, (), frame| {
-            host_control?.read_frame(frame).await;
-            Ok(())
-        },
-        filled GetLightbarColors => async |configuration, (), colors| {
-            require_lightbar(configuration)?;
-            host_control?.read_lightbar(colors).await;
-            Ok(())
-        },
-        plain GetProfileState => async |configuration, ()| {
-            let lighting = host_control?;
-            let active = configuration.profiles().await?.active;
-            let leds = lighting.led_state().await;
-            Ok(profile::State {
-                active,
-                host_control: leds.host_control,
-                idle_off: leds.idle_off,
-            })
-        },
-    )
-}
-
-async fn sensor_endpoints<C: Configuration>(
-    key: Key,
-    sensors: Option<&SensorReadout>,
-    configuration: &mut C,
-    message: &Message<'_>,
-    response: &mut [u8],
-) -> Option<Option<usize>> {
-    let sensors = sensors.ok_or(Rejection::Unsupported);
-    dispatch!(key, configuration, message, response;
-        filled GetSensorValues => async |_, reading, values| {
-            sensors?.read(reading, values).await;
-            Ok(())
-        },
-        plain SetRawScanning => async |_, enabled| {
-            sensors.map(|sensors| sensors.set_raw_scanning(enabled))
-        },
-    )
-}
-
-async fn diagnostics_endpoint<C: Configuration>(
-    key: Key,
-    readout: Readout<'_>,
-    configuration: &mut C,
-    message: &Message<'_>,
-    response: &mut [u8],
-) -> Option<Option<usize>> {
-    dispatch!(key, configuration, message, response;
-        plain GetDiagnostics => async |_, ()| readout.report(),
-    )
-}
-
-async fn serve<E, C>(
-    configuration: &mut C,
-    message: &Message<'_>,
-    response: &mut [u8],
-    handle: impl AsyncFnOnce(&mut C, E::Request) -> E::Response,
-) -> Option<usize>
-where
-    E: Endpoint,
-    E::Request: DeserializeOwned,
-    E::Response: Serialize,
-{
-    let Some(request) = decode::<E::Request>(message.body) else {
-        return fail(message, &WireError::DeserFailed, response);
-    };
-    let answer = handle(configuration, request).await;
-    match encode_message(&message.reply_header(E::RESP_KEY), &answer, response) {
-        Ok(encoded) => Some(encoded.len()),
-        Err(_) => fail(message, &WireError::SerFailed, response),
+    fn encode(&mut self, key: Key, body: &dyn Body) -> Option<usize> {
+        encode_frame(&self.request.reply_header(key), body, self.response)
+            .ok()
+            .map(<[u8]>::len)
     }
 }
 
-async fn serve_checked<E, C, T>(
-    configuration: &mut C,
-    message: &Message<'_>,
-    response: &mut [u8],
-    handle: impl AsyncFnOnce(&mut C, E::Request) -> Result<T, Rejection>,
-) -> Option<usize>
-where
-    E: Endpoint<Response = Result<T, Rejection>>,
-    E::Request: DeserializeOwned + Validate,
-    C: Configuration,
-    T: Serialize,
-{
-    serve::<E, C>(
-        configuration,
-        message,
-        response,
-        async |configuration, request| {
-            let capabilities = configuration.capabilities()?;
-            request.validate(&capabilities)?;
-            handle(configuration, request).await
-        },
-    )
-    .await
+fn outlined<F: Future>(mut future: Pin<&mut F>) -> impl Future<Output = F::Output> {
+    poll_fn(move |context| poll_outlined(future.as_mut(), context))
 }
 
-async fn serve_filled<E, C, T>(
-    configuration: &mut C,
-    message: &Message<'_>,
-    response: &mut [u8],
-    handle: impl AsyncFnOnce(&mut C, E::Request, &mut T) -> Result<(), Rejection>,
-) -> Option<usize>
-where
-    E: Endpoint<Response = Result<T, Rejection>>,
-    E::Request: DeserializeOwned,
-    T: Empty + Serialize,
-{
-    let Some(request) = decode::<E::Request>(message.body) else {
-        return fail(message, &WireError::DeserFailed, response);
-    };
-    let mut value = T::empty();
-    let filled = handle(configuration, request, &mut value).await;
-    let answer = filled.map(|()| &value);
-    match encode_message(&message.reply_header(E::RESP_KEY), &answer, response) {
-        Ok(encoded) => Some(encoded.len()),
-        Err(_) => fail(message, &WireError::SerFailed, response),
-    }
+#[inline(never)]
+fn poll_outlined<F: Future>(future: Pin<&mut F>, context: &mut Context<'_>) -> Poll<F::Output> {
+    future.poll(context)
+}
+
+#[inline(never)]
+fn answered<R>(serve: impl FnOnce() -> R) -> R {
+    serve()
 }
 
 fn decode<T: DeserializeOwned>(body: &[u8]) -> Option<T> {
@@ -639,16 +565,44 @@ fn decode<T: DeserializeOwned>(body: &[u8]) -> Option<T> {
     }
 }
 
-fn check<C: Configuration>(configuration: &C, request: &impl Validate) -> Result<(), Rejection> {
-    Ok(request.validate(&configuration.capabilities()?)?)
+fn reply_body<T: Serialize>(answer: &Result<T, WireError>) -> Result<&dyn Body, &WireError> {
+    answer.as_ref().map(|answer| answer as &dyn Body)
 }
 
-fn require_lightbar<C: Configuration>(configuration: &C) -> Result<(), Rejection> {
-    if configuration.capabilities()?.lightbar_leds == 0 {
+fn reply(response: &[u8], length: Option<usize>) -> Option<&[u8]> {
+    response.get(..length?)
+}
+
+fn check(
+    capabilities: &Result<Capabilities, Rejection>,
+    request: &dyn Validate,
+) -> Result<(), Rejection> {
+    Ok(request.validate(capabilities.as_ref().map_err(|rejection| *rejection)?)?)
+}
+
+fn linked(capabilities: &Result<Capabilities, Rejection>, profile: Slot) -> Result<(), Rejection> {
+    Ok(profile.check_linked(capabilities.as_ref().map_err(|rejection| *rejection)?)?)
+}
+
+fn require_lightbar(capabilities: &Result<Capabilities, Rejection>) -> Result<(), Rejection> {
+    if capabilities
+        .as_ref()
+        .map_err(|rejection| *rejection)?
+        .lightbar_leds
+        == 0
+    {
         Err(Rejection::Unsupported)
     } else {
         Ok(())
     }
+}
+
+trait Filled {
+    type Value: Empty;
+}
+
+impl<T: Empty> Filled for Result<T, Rejection> {
+    type Value = T;
 }
 
 trait Empty {
@@ -703,16 +657,6 @@ impl Empty for host_lighting::Frame {
             lightbar: heapless::Vec::new(),
         }
     }
-}
-
-fn fail(message: &Message<'_>, error: &WireError, response: &mut [u8]) -> Option<usize> {
-    encode_message(&message.reply_header(ERROR_KEY), error, response)
-        .ok()
-        .map(<[u8]>::len)
-}
-
-fn reply(response: &[u8], length: Option<usize>) -> Option<&[u8]> {
-    response.get(..length?)
 }
 
 const fn key_at(position: keys::Position) -> crate::keys::Key {

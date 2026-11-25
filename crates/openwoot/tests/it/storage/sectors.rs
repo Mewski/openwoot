@@ -17,7 +17,9 @@ fn wear_spreads_evenly_over_the_settings_sectors() {
     let (mut settings, _) = open(nor, layout, false).unwrap();
     for update in 0..3000u32 {
         let profile = profile_of(update);
-        block_on(settings.store(Scope::Profile(profile), &blob(update))).unwrap();
+        settings
+            .store(Scope::Profile(profile), &blob(update))
+            .unwrap();
     }
     let nor = close(settings).unwrap();
     let wear = &nor.erases()[..8];
@@ -56,13 +58,19 @@ fn a_partition_behind_other_sectors_leaves_its_neighbours_alone() {
         device_info: None,
     };
     let mut settings = Settings::new();
-    block_on(settings.open(Partition::new(nor, layout.settings_region()), false)).unwrap();
+    settings
+        .open(Partition::new(nor, layout.settings_region()), false)
+        .unwrap();
     for update in 0..200 {
         let profile = profile_of(update);
-        block_on(settings.store(Scope::Profile(profile), &blob(update))).unwrap();
+        settings
+            .store(Scope::Profile(profile), &blob(update))
+            .unwrap();
     }
     assert_eq!(
-        block_on(settings.load::<Blob>(Scope::Profile(profile_of(199)))).unwrap(),
+        settings
+            .load::<Blob>(Scope::Profile(profile_of(199)))
+            .unwrap(),
         Some(blob(199))
     );
     let nor = close(settings).unwrap();

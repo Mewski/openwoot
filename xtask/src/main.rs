@@ -6,10 +6,10 @@ mod elf;
 mod entry_points;
 mod firmware;
 mod flash;
+mod link_map;
 mod output;
 mod pac;
 mod process;
-mod symbol_order;
 mod workspace;
 
 use std::{

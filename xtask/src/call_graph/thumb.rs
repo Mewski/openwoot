@@ -59,6 +59,24 @@ impl Instruction {
             _ => None,
         }
     }
+
+    pub(super) fn literal(self, at: u32) -> Option<u32> {
+        let base = at.wrapping_add(4) & !3;
+        match self {
+            Self::Narrow(instruction) if instruction >> 11 == 0b01001 => {
+                Some(base.wrapping_add(u32::from(instruction & 0xFF) << 2))
+            }
+            Self::Wide([first, second]) if first & 0xFF7F == 0xF85F => {
+                let offset = u32::from(second & 0x0FFF);
+                Some(if first & 0x0080 == 0 {
+                    base.wrapping_sub(offset)
+                } else {
+                    base.wrapping_add(offset)
+                })
+            }
+            _ => None,
+        }
+    }
 }
 
 pub(super) fn halves(bytes: &[u8]) -> Option<[u16; 2]> {
@@ -322,5 +340,30 @@ mod tests {
             Instruction::Narrow(0xD002).unconditional_branch_target(0),
             None
         );
+    }
+
+    #[test]
+    fn pc_relative_loads_name_their_literal() {
+        assert_eq!(
+            Instruction::Narrow(0x4813).literal(0x0802_E7A8),
+            Some(0x0802_E7F8)
+        );
+        assert_eq!(
+            Instruction::Narrow(0x4A14).literal(0x0802_E7AA),
+            Some(0x0802_E7FC)
+        );
+        assert_eq!(
+            Instruction::Wide([0xF8DF, 0x0440]).literal(0x0802_E3A8),
+            Some(0x0802_E7EC)
+        );
+        assert_eq!(
+            Instruction::Wide([0xF85F, 0x1010]).literal(0x0000_1000),
+            Some(0x0000_0FF4)
+        );
+        assert_eq!(
+            Instruction::Wide([0xF8D0, 0x0440]).literal(0x0802_E3A8),
+            None
+        );
+        assert_eq!(Instruction::Narrow(0x4798).literal(0x0802_E3A8), None);
     }
 }

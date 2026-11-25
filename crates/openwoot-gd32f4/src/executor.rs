@@ -13,24 +13,47 @@ use crate::{
 };
 
 const KEY_INTERRUPT: pac::Interrupt = pac::Interrupt::UART4;
+const DEVICE_INTERRUPT: pac::Interrupt = pac::Interrupt::UART3;
+const LIGHTING_INTERRUPT: pac::Interrupt = pac::Interrupt::USART2;
 const AIRCR_VECTKEY_NO_SUBPRIORITY: u32 = 0x05FA << 16;
 
 static STARTED: AtomicBool = AtomicBool::new(false);
 static KEYS: InterruptExecutor = InterruptExecutor::new();
+static DEVICE: InterruptExecutor = InterruptExecutor::new();
+static LIGHTING: InterruptExecutor = InterruptExecutor::new();
 static mut THREAD: MaybeUninit<Executor> = MaybeUninit::uninit();
 
-pub fn run(init: impl FnOnce(Spawner, SendSpawner)) -> ! {
+#[derive(Clone, Copy)]
+pub struct Spawners {
+    pub thread: Spawner,
+    pub keys: SendSpawner,
+    pub device: SendSpawner,
+    pub lighting: SendSpawner,
+}
+
+pub fn run(init: impl FnOnce(Spawners)) -> ! {
     if STARTED.swap(true, Ordering::AcqRel) {
         system::reset();
     }
     use_every_priority_bit_for_preemption();
     set_priority(KEY_INTERRUPT, Priority::KEYS);
+    set_priority(DEVICE_INTERRUPT, Priority::DEVICE);
+    set_priority(LIGHTING_INTERRUPT, Priority::LIGHTING);
     let keys = KEYS.start(KEY_INTERRUPT);
+    let device = DEVICE.start(DEVICE_INTERRUPT);
+    let lighting = LIGHTING.start(LIGHTING_INTERRUPT);
     let thread = &raw mut THREAD;
     // SAFETY: `STARTED` lets exactly one call reach this point, so this is the only reference to
     // `THREAD` that ever exists.
     let thread = unsafe { (*thread).write(Executor::new()) };
-    thread.run(|spawner| init(spawner, keys))
+    thread.run(|thread| {
+        init(Spawners {
+            thread,
+            keys,
+            device,
+            lighting,
+        });
+    })
 }
 
 fn use_every_priority_bit_for_preemption() {
@@ -46,4 +69,18 @@ fn UART4() {
     // SAFETY: `run` unmasks this interrupt only through `KEYS.start`, which initialises the
     // executor first; nothing else uses the vector or the UART4 peripheral.
     unsafe { KEYS.on_interrupt() };
+}
+
+#[interrupt]
+fn UART3() {
+    // SAFETY: `run` unmasks this interrupt only through `DEVICE.start`, which initialises the
+    // executor first; nothing else uses the vector or the UART3 peripheral.
+    unsafe { DEVICE.on_interrupt() };
+}
+
+#[interrupt]
+fn USART2() {
+    // SAFETY: `run` unmasks this interrupt only through `LIGHTING.start`, which initialises the
+    // executor first; nothing else uses the vector or the USART2 peripheral.
+    unsafe { LIGHTING.on_interrupt() };
 }

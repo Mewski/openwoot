@@ -1,4 +1,3 @@
-use embassy_futures::block_on;
 use openwoot::storage::{self, NorLayout, Opened, Partition, Record, Scope, Settings};
 use openwoot_image::Region;
 use serde::{Deserialize, Serialize};
@@ -68,7 +67,7 @@ pub(crate) fn open(
 ) -> Result<(Settings<Nor>, Opened), storage::Error> {
     let partition = Partition::new(nor, layout.settings_region());
     let mut settings = Settings::new();
-    let opened = block_on(settings.open(partition, format_requested))?;
+    let opened = settings.open(partition, format_requested)?;
     Ok((settings, opened))
 }
 
@@ -89,12 +88,12 @@ pub(crate) fn filled(updates: u32) -> Result<(Nor, NorLayout, Vec<Blob>), storag
     let (mut settings, _) = open(nor, layout, false)?;
     let mut expected: Vec<Blob> = (0..u32::from(PROFILES)).map(blob).collect();
     for (profile, value) in (0..PROFILES).zip(&expected) {
-        block_on(settings.store(Scope::Profile(profile), value))?;
+        settings.store(Scope::Profile(profile), value)?;
     }
     for update in 0..updates {
         let profile = profile_of(update);
         let value = blob(100 + update);
-        block_on(settings.store(Scope::Profile(profile), &value))?;
+        settings.store(Scope::Profile(profile), &value)?;
         if let Some(slot) = expected.get_mut(usize::from(profile)) {
             *slot = value;
         }

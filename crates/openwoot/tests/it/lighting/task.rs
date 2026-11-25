@@ -1,5 +1,5 @@
 use embassy_futures::block_on;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use openwoot::{
     diagnostics::{Diagnostics, Hardware},
     keys::Key,
@@ -56,9 +56,9 @@ impl LedMatrix for Recorder {
     }
 }
 
-type Shared = Mutex<CriticalSectionRawMutex, Lighting<(), ROWS, COLUMNS, PAGES, LENGTH>>;
+type Engine = Lighting<(), ROWS, COLUMNS, PAGES, LENGTH>;
 
-fn shared(effects: Effects) -> Shared {
+fn engine(effects: Effects) -> Engine {
     let mut lighting = Lighting::new(&MAP, &VARIANT, GEOMETRY, (), 0);
     let white = openwoot_protocol::lighting::Color {
         red: 255,
@@ -79,7 +79,7 @@ fn shared(effects: Effects) -> Shared {
         },
         0,
     );
-    Mutex::new(lighting)
+    lighting
 }
 
 fn writes(calls: &[Call]) -> usize {
@@ -91,18 +91,18 @@ fn writes(calls: &[Call]) -> usize {
 
 #[test]
 fn the_leds_wake_with_usb_and_every_page_is_sent_once() {
-    let lighting = shared(Effects::new());
+    let mut lighting = engine(Effects::new());
     let events = KeyEvents::new();
     let host = HostState::new();
     let diagnostics = Diagnostics::new();
-    let task = runtime::Lighting {
-        lighting: &lighting,
+    let mut task = runtime::Lighting {
+        lighting: &mut lighting,
         events: &events,
         notices: &runtime::KeyNotices::new(),
         host: &host,
         host_control: &HostControl::new(),
         diagnostics: &diagnostics,
-        profile: &profile::Shared::new(),
+        profile: &profile::Shared::<CriticalSectionRawMutex>::new(),
     };
     let active = || {
         diagnostics
@@ -128,17 +128,17 @@ fn the_leds_wake_with_usb_and_every_page_is_sent_once() {
 fn key_presses_reach_the_effects_through_the_event_channel() {
     let mut effects = Effects::new();
     effects.push(effect(11, [40, 0, 0, 0])).unwrap();
-    let lighting = shared(effects);
+    let mut lighting = engine(effects);
     let events = KeyEvents::new();
     let host = HostState::new();
-    let task = runtime::Lighting {
-        lighting: &lighting,
+    let mut task = runtime::Lighting {
+        lighting: &mut lighting,
         events: &events,
         notices: &runtime::KeyNotices::new(),
         host: &host,
         host_control: &HostControl::new(),
         diagnostics: &Diagnostics::new(),
-        profile: &profile::Shared::new(),
+        profile: &profile::Shared::<CriticalSectionRawMutex>::new(),
     };
     let mut matrix = Recorder::default();
     for now_ms in 0..40 {
@@ -154,24 +154,24 @@ fn key_presses_reach_the_effects_through_the_event_channel() {
         .unwrap();
     block_on(task.step(&mut matrix, &(), 40, true));
     block_on(task.step(&mut matrix, &(), 56, true));
-    let color = block_on(lighting.lock()).key_color(key);
+    let color = task.lighting.key_color(key);
     assert_eq!(color.map(|color| color.green), Some(255));
 }
 
 #[test]
 fn a_failed_write_sends_every_page_again() {
-    let lighting = shared(Effects::new());
+    let mut lighting = engine(Effects::new());
     let events = KeyEvents::new();
     let host = HostState::new();
     let diagnostics = Diagnostics::new();
-    let task = runtime::Lighting {
-        lighting: &lighting,
+    let mut task = runtime::Lighting {
+        lighting: &mut lighting,
         events: &events,
         notices: &runtime::KeyNotices::new(),
         host: &host,
         host_control: &HostControl::new(),
         diagnostics: &diagnostics,
-        profile: &profile::Shared::new(),
+        profile: &profile::Shared::<CriticalSectionRawMutex>::new(),
     };
     let mut matrix = Recorder {
         failing_writes: true,
@@ -194,17 +194,17 @@ fn a_failed_write_sends_every_page_again() {
 
 #[test]
 fn a_late_initialisation_wakes_the_reset_chip_and_sends_every_page() {
-    let lighting = shared(Effects::new());
+    let mut lighting = engine(Effects::new());
     let events = KeyEvents::new();
     let host = HostState::new();
-    let task = runtime::Lighting {
-        lighting: &lighting,
+    let mut task = runtime::Lighting {
+        lighting: &mut lighting,
         events: &events,
         notices: &runtime::KeyNotices::new(),
         host: &host,
         host_control: &HostControl::new(),
         diagnostics: &Diagnostics::new(),
-        profile: &profile::Shared::new(),
+        profile: &profile::Shared::<CriticalSectionRawMutex>::new(),
     };
     let mut matrix = Recorder::default();
     block_on(task.step(&mut matrix, &(), 1, true));
@@ -220,17 +220,17 @@ fn a_late_initialisation_wakes_the_reset_chip_and_sends_every_page() {
 
 #[test]
 fn a_failed_shut_down_is_retried_until_the_chip_stops() {
-    let lighting = shared(Effects::new());
+    let mut lighting = engine(Effects::new());
     let events = KeyEvents::new();
     let host = HostState::new();
-    let task = runtime::Lighting {
-        lighting: &lighting,
+    let mut task = runtime::Lighting {
+        lighting: &mut lighting,
         events: &events,
         notices: &runtime::KeyNotices::new(),
         host: &host,
         host_control: &HostControl::new(),
         diagnostics: &Diagnostics::new(),
-        profile: &profile::Shared::new(),
+        profile: &profile::Shared::<CriticalSectionRawMutex>::new(),
     };
     let mut matrix = Recorder {
         failing_shut_down: true,
@@ -242,12 +242,12 @@ fn a_failed_shut_down_is_retried_until_the_chip_stops() {
         assert!(!block_on(task.step(&mut matrix, &(), now_ms, false)));
     }
     assert_eq!(matrix.calls, vec![Call::Running(false); 4]);
-    assert!(block_on(lighting.lock()).output_enabled());
+    assert!(task.lighting.output_enabled());
     matrix.failing_shut_down = false;
     matrix.calls.clear();
     for now_ms in 6..10 {
         assert!(block_on(task.step(&mut matrix, &(), now_ms, false)));
     }
     assert_eq!(matrix.calls, [Call::Running(false)]);
-    assert!(!block_on(lighting.lock()).output_enabled());
+    assert!(!task.lighting.output_enabled());
 }

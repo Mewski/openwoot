@@ -131,7 +131,13 @@ impl Table {
 
     #[must_use]
     pub(crate) fn host_ids(&self) -> HostSignalIds {
-        self.host.iter().map(|host| host.id).collect()
+        let mut ids = HostSignalIds::new();
+        for host in &self.host {
+            if ids.push(host.id).is_err() {
+                break;
+            }
+        }
+        ids
     }
 
     pub(crate) const fn activate_host(&mut self) {

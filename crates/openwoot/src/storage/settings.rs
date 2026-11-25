@@ -1,5 +1,6 @@
 use core::fmt;
 
+use embassy_futures::block_on;
 use embedded_storage_async::nor_flash::{
     MultiwriteNorFlash, NorFlash, NorFlashError, NorFlashErrorKind,
 };
@@ -17,7 +18,7 @@ use super::{
     nor_layout::MAXIMUM_SETTINGS_SECTORS,
     partition::{Partition, PartitionError},
     record::{
-        Encoder, Encoding, KEY_LEN, MAX_VALUE_LEN, Record, RecordKey, Scope, Stored, VERSION_LEN,
+        Encoder, KEY_LEN, MAX_VALUE_LEN, Record, RecordKey, Scope, Stored, VERSION_LEN, encode,
     },
     stored_keys::StoredKeys,
     usage::Tally,
@@ -84,45 +85,41 @@ impl<F: MultiwriteNorFlash> Settings<F> {
         self
     }
 
-    pub async fn load<R: Record>(&mut self, scope: Scope) -> Result<Option<R>, Error> {
-        let loaded = self.fetch(scope).await;
-        if let Some(diagnostics) = self.diagnostics {
-            diagnostics.storage_loaded(&loaded);
-        }
-        loaded
+    pub fn load<R: Record>(&mut self, scope: Scope) -> Result<Option<R>, Error> {
+        Ok(self
+            .load_stored(RecordKey::of::<R>(scope))?
+            .and_then(|stored| stored.decode()))
     }
 
-    pub async fn store<R: Record>(&mut self, scope: Scope, record: &R) -> Result<(), Error> {
-        let stored = self.write(scope, record).await;
-        if let Some(diagnostics) = self.diagnostics {
-            diagnostics.storage_stored(&stored);
-        }
-        stored
+    pub fn store<R: Record>(&mut self, scope: Scope, record: &R) -> Result<(), Error> {
+        self.store_with(RecordKey::of::<R>(scope), R::VERSION, &|body| {
+            encode(record, body)
+        })
     }
 
-    pub async fn remove(&mut self, key: RecordKey) -> Result<(), Error> {
-        let removed = self.delete(key).await;
+    pub fn remove(&mut self, key: RecordKey) -> Result<(), Error> {
+        let removed = self.delete(key);
         if let Some(diagnostics) = self.diagnostics {
             diagnostics.storage_stored(&removed);
         }
         removed
     }
 
-    pub async fn visit(&mut self, visit: impl FnMut(RecordKey, Stored<'_>)) -> Result<(), Error> {
-        let visited = self.walk(visit).await;
+    pub fn visit(&mut self, visit: &mut dyn FnMut(RecordKey, Stored<'_>)) -> Result<(), Error> {
+        let visited = Self::walk(&mut self.map, &mut self.buffer, visit);
         if let Some(diagnostics) = self.diagnostics {
             diagnostics.storage_loaded(&visited);
         }
         visited
     }
 
-    pub async fn usage(&mut self) -> Result<StorageUsage, Error> {
+    pub fn usage(&mut self) -> Result<StorageUsage, Error> {
         let mut tally = Tally::new(
             self.len,
             Map::<F>::item_overhead_size(),
             F::WRITE_SIZE.max(F::READ_SIZE),
         );
-        let indexed = self.index(|_, stored| tally.add(stored)).await;
+        let indexed = self.index(&mut |_, stored| tally.add(stored));
         if let Some(diagnostics) = self.diagnostics {
             diagnostics.storage_loaded(&indexed);
         }
@@ -130,25 +127,22 @@ impl<F: MultiwriteNorFlash> Settings<F> {
         Ok(tally.finish(self.known.count()))
     }
 
-    pub async fn load_with<T>(
-        &mut self,
-        key: RecordKey,
-        read: impl FnOnce(Stored<'_>) -> T,
-    ) -> Result<Option<T>, Error> {
-        let loaded = self.fetch_with(key, read).await;
-        if let Some(diagnostics) = self.diagnostics {
+    pub fn load_stored(&mut self, key: RecordKey) -> Result<Option<Stored<'_>>, Error> {
+        let diagnostics = self.diagnostics;
+        let loaded = self.fetch(key);
+        if let Some(diagnostics) = diagnostics {
             diagnostics.storage_loaded(&loaded);
         }
         loaded
     }
 
-    pub async fn store_with(
+    pub fn store_with(
         &mut self,
         key: RecordKey,
         version: u8,
-        encode: impl Fn(&mut [u8]) -> Option<usize>,
+        encode: &dyn Fn(&mut [u8]) -> Option<usize>,
     ) -> Result<(), Error> {
-        let stored = self.write_with(key, Encoder { version, encode }).await;
+        let stored = self.write(key, &Encoder { version, encode });
         if let Some(diagnostics) = self.diagnostics {
             diagnostics.storage_stored(&stored);
         }
@@ -172,9 +166,9 @@ impl<F: MultiwriteNorFlash> Settings<F> {
         Ok(())
     }
 
-    pub(super) async fn erase(&mut self) -> Result<(), Error> {
+    pub(super) fn erase(&mut self) -> Result<(), Error> {
         let (mut partition, _) = self.map.take().ok_or(Error::Internal)?.destroy();
-        let erased = partition.erase(0, self.len).await;
+        let erased = block_on(partition.erase(0, self.len));
         self.map = Some(MapStorage::new(partition, config(self.len)?, cache()));
         if erased.is_ok() {
             self.known.start();
@@ -184,133 +178,93 @@ impl<F: MultiwriteNorFlash> Settings<F> {
         erased.map_err(|error| Error::Flash(error.kind()))
     }
 
-    pub(super) async fn index(
+    pub(super) fn index(
         &mut self,
-        mut visit: impl FnMut(RecordKey, Stored<'_>),
+        visit: &mut dyn FnMut(RecordKey, Stored<'_>),
     ) -> Result<(), Error> {
-        self.known.start();
-        let indexed = self.note_stored_keys(&mut visit).await;
+        let Self {
+            map, buffer, known, ..
+        } = self;
+        known.start();
+        let indexed = Self::walk(map, buffer, &mut |key, stored| {
+            known.insert(key);
+            visit(key, stored);
+        });
         if indexed.is_err() {
-            self.known.forget();
+            known.forget();
         }
         indexed
     }
 
-    async fn note_stored_keys(
-        &mut self,
-        visit: &mut impl FnMut(RecordKey, Stored<'_>),
-    ) -> Result<(), Error> {
-        let Self {
-            map, buffer, known, ..
-        } = self;
-        let mut items = map
-            .as_mut()
-            .ok_or(Error::Internal)?
-            .fetch_all_items(&mut buffer.0)
-            .await
-            .map_err(Error::from_store)?;
-        while let Some((key, stored)) = items
-            .next::<Stored<'_>>(&mut buffer.0)
-            .await
-            .map_err(Error::from_store)?
-        {
-            known.insert(key);
-            visit(key, stored);
-        }
-        Ok(())
-    }
-
-    async fn fetch<R: Record>(&mut self, scope: Scope) -> Result<Option<R>, Error> {
-        Ok(self
-            .fetch_with(RecordKey::of::<R>(scope), |stored| stored.decode())
-            .await?
-            .flatten())
-    }
-
-    async fn write<R: Record>(&mut self, scope: Scope, record: &R) -> Result<(), Error> {
-        let key = RecordKey::of::<R>(scope);
-        let Self {
-            map, buffer, known, ..
-        } = self;
-        known.insert(key);
-        map.as_mut()
-            .ok_or(Error::Internal)?
-            .store_item(&mut buffer.0, &key, &Encoding(record))
-            .await
-            .map_err(Error::from_store)
-    }
-
-    async fn delete(&mut self, key: RecordKey) -> Result<(), Error> {
-        let Self {
-            map, buffer, known, ..
-        } = self;
-        if known.lacks(key) {
-            return Ok(());
-        }
-        map.as_mut()
-            .ok_or(Error::Internal)?
-            .remove_item(&mut buffer.0, &key)
-            .await
-            .map_err(Error::from_store)?;
-        known.remove(key);
-        Ok(())
-    }
-
-    async fn fetch_with<T>(
-        &mut self,
-        key: RecordKey,
-        read: impl FnOnce(Stored<'_>) -> T,
-    ) -> Result<Option<T>, Error> {
+    fn fetch(&mut self, key: RecordKey) -> Result<Option<Stored<'_>>, Error> {
         let Self {
             map, buffer, known, ..
         } = self;
         if known.lacks(key) {
             return Ok(None);
         }
-        let stored = map
-            .as_mut()
-            .ok_or(Error::Internal)?
-            .fetch_item::<Stored<'_>>(&mut buffer.0, &key)
-            .await
-            .map_err(Error::from_store)?;
+        let stored = block_on(
+            map.as_mut()
+                .ok_or(Error::Internal)?
+                .fetch_item::<Stored<'_>>(&mut buffer.0, &key),
+        )
+        .map_err(Error::from_store)?;
         if stored.is_none() {
             known.remove(key);
         }
-        Ok(stored.map(read))
+        Ok(stored)
     }
 
-    async fn write_with<E: Fn(&mut [u8]) -> Option<usize>>(
-        &mut self,
-        key: RecordKey,
-        encoder: Encoder<E>,
-    ) -> Result<(), Error> {
+    fn write(&mut self, key: RecordKey, encoder: &Encoder<'_>) -> Result<(), Error> {
         let Self {
             map, buffer, known, ..
         } = self;
         known.insert(key);
-        map.as_mut()
-            .ok_or(Error::Internal)?
-            .store_item(&mut buffer.0, &key, &encoder)
-            .await
-            .map_err(Error::from_store)
+        block_on(
+            map.as_mut()
+                .ok_or(Error::Internal)?
+                .store_item(&mut buffer.0, &key, encoder),
+        )
+        .map_err(Error::from_store)
     }
 
-    async fn walk(&mut self, mut visit: impl FnMut(RecordKey, Stored<'_>)) -> Result<(), Error> {
-        let Self { map, buffer, .. } = self;
-        let mut items = map
-            .as_mut()
-            .ok_or(Error::Internal)?
-            .fetch_all_items(&mut buffer.0)
-            .await
-            .map_err(Error::from_store)?;
-        while let Some((key, stored)) = items
-            .next::<Stored<'_>>(&mut buffer.0)
-            .await
-            .map_err(Error::from_store)?
-        {
-            visit(key, stored);
+    fn delete(&mut self, key: RecordKey) -> Result<(), Error> {
+        let Self {
+            map, buffer, known, ..
+        } = self;
+        if known.lacks(key) {
+            return Ok(());
         }
+        block_on(
+            map.as_mut()
+                .ok_or(Error::Internal)?
+                .remove_item(&mut buffer.0, &key),
+        )
+        .map_err(Error::from_store)?;
+        known.remove(key);
         Ok(())
+    }
+
+    fn walk(
+        map: &mut Option<Map<F>>,
+        buffer: &mut Buffer,
+        visit: &mut dyn FnMut(RecordKey, Stored<'_>),
+    ) -> Result<(), Error> {
+        let map = map.as_mut().ok_or(Error::Internal)?;
+        block_on(async {
+            let mut items = map
+                .fetch_all_items(&mut buffer.0)
+                .await
+                .map_err(Error::from_store)?;
+            while let Some((key, stored)) = items
+                .next::<Stored<'_>>(&mut buffer.0)
+                .await
+                .map_err(Error::from_store)?
+            {
+                visit(key, stored);
+            }
+            Ok(())
+        })
     }
 }
 

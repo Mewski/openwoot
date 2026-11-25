@@ -32,57 +32,55 @@ impl Record for Format {
 }
 
 impl<F: MultiwriteNorFlash> Settings<F> {
-    pub async fn open(
+    pub fn open(
         &mut self,
         partition: Partition<F>,
         format_requested: bool,
     ) -> Result<Opened, Error> {
         self.attach(partition)?;
         if format_requested {
-            self.format().await?;
+            self.format()?;
             return Ok(Opened::Formatted(FormatReason::Requested));
         }
-        match self.stored_format().await {
+        match self.stored_format() {
             Ok(Some(format)) if format == CURRENT_FORMAT => Ok(Opened::Kept),
             Ok(_)
             | Err(Error::Corrupted | Error::TooBig | Error::Unencodable | Error::Internal) => {
-                self.format().await?;
+                self.format()?;
                 Ok(Opened::Formatted(FormatReason::Unrecognised))
             }
             Err(error) => Err(error),
         }
     }
 
-    async fn stored_format(&mut self) -> Result<Option<Format>, Error> {
+    fn stored_format(&mut self) -> Result<Option<Format>, Error> {
         let key = RecordKey::of::<Format>(Scope::Global);
         let mut found = None;
-        let indexed = self
-            .index(|stored_key, stored| {
-                if stored_key == key {
-                    found = stored.decode::<Format>();
-                }
-            })
-            .await;
+        let indexed = self.index(&mut |stored_key, stored| {
+            if stored_key == key {
+                found = stored.decode::<Format>();
+            }
+        });
         match indexed {
             Ok(()) => return Ok(found),
             Err(Error::Flash(kind)) => return Err(Error::Flash(kind)),
             Err(_) => {}
         }
-        let repaired = self.load::<Format>(Scope::Global).await?;
-        let _ = self.index(|_, _| {}).await;
+        let repaired = self.load::<Format>(Scope::Global)?;
+        let _ = self.index(&mut |_, _| {});
         Ok(repaired)
     }
 
-    pub async fn factory_reset(&mut self) -> Result<(), Error> {
-        self.format().await
+    pub fn factory_reset(&mut self) -> Result<(), Error> {
+        self.format()
     }
 
-    async fn format(&mut self) -> Result<(), Error> {
-        let removed = self.remove(RecordKey::of::<Format>(Scope::Global)).await;
+    fn format(&mut self) -> Result<(), Error> {
+        let removed = self.remove(RecordKey::of::<Format>(Scope::Global));
         if let Err(Error::Flash(kind)) = removed {
             return Err(Error::Flash(kind));
         }
-        self.erase().await?;
-        self.store(Scope::Global, &CURRENT_FORMAT).await
+        self.erase()?;
+        self.store(Scope::Global, &CURRENT_FORMAT)
     }
 }

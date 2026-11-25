@@ -2,7 +2,6 @@ use anyhow::{Context, Result, bail, ensure};
 
 use crate::{call_graph::CallGraph, elf::Elf};
 
-const KEY_TASK: &str = "scanning";
 const TASK_POLL_PREFIX: &str = "<embassy_executor::raw::TaskStorage<";
 const TASK_POLL_SUFFIX: &str = ">>::poll";
 const THREAD_EXECUTOR: &str = "<embassy_executor::platform::thread::Executor>::run";
@@ -10,14 +9,54 @@ const RESET_VECTOR: usize = 1;
 const FIRST_DEVICE_VECTOR: usize = 16;
 const SCAN_VECTORS: [&str; 2] = ["ADC", "ADC0_1"];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Executor {
+    Keys,
+    Device,
+    Lighting,
+}
+
 pub(crate) struct EntryPoints {
     pub(crate) reset: usize,
     pub(crate) handlers: Vec<usize>,
     pub(crate) interrupts: Vec<usize>,
     pub(crate) scan: usize,
-    pub(crate) key_tasks: Vec<usize>,
+    pub(crate) interrupt_tasks: Vec<(Executor, Vec<usize>)>,
     pub(crate) thread_executors: Vec<usize>,
     pub(crate) thread_tasks: Vec<usize>,
+}
+
+impl Executor {
+    pub(crate) const ALL: [Self; 3] = [Self::Keys, Self::Device, Self::Lighting];
+
+    pub(crate) const fn tasks(self) -> &'static [&'static str] {
+        match self {
+            Self::Keys => &["scanning"],
+            Self::Device => &["device", "reports"],
+            Self::Lighting => &["lights"],
+        }
+    }
+
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Keys => "keys",
+            Self::Device => "device",
+            Self::Lighting => "lighting",
+        }
+    }
+
+    pub(crate) const fn runs_for_speed(self) -> bool {
+        matches!(self, Self::Keys | Self::Device)
+    }
+
+    fn of(task: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|executor| {
+            executor
+                .tasks()
+                .iter()
+                .any(|name| task.contains(&format!("::__{name}_task::")))
+        })
+    }
 }
 
 impl EntryPoints {
@@ -69,24 +108,84 @@ impl EntryPoints {
                     SCAN_VECTORS.join("` or `")
                 )
             })?;
-        let key_marker = format!("::__{KEY_TASK}_task::");
-        let tasks = graph.nodes_named(|name| {
-            name.starts_with(TASK_POLL_PREFIX) && name.ends_with(TASK_POLL_SUFFIX)
-        });
-        let (key_tasks, thread_tasks): (Vec<usize>, Vec<usize>) = tasks
+        let mut interrupt_tasks: Vec<(Executor, Vec<usize>)> = Executor::ALL
             .into_iter()
-            .partition(|&node| graph.name(node).contains(&key_marker));
-        if key_tasks.is_empty() {
-            bail!("the image has no poll function of the key task `{KEY_TASK}`");
+            .map(|executor| (executor, Vec::new()))
+            .collect();
+        let mut thread_tasks = Vec::new();
+        for task in graph.nodes_named(|name| {
+            name.starts_with(TASK_POLL_PREFIX) && name.ends_with(TASK_POLL_SUFFIX)
+        }) {
+            let executor = Executor::of(graph.name(task));
+            match interrupt_tasks
+                .iter_mut()
+                .find(|(known, _)| Some(*known) == executor)
+            {
+                Some((_, tasks)) => tasks.push(task),
+                None => thread_tasks.push(task),
+            }
+        }
+        for (executor, tasks) in &interrupt_tasks {
+            for name in executor.tasks() {
+                let marker = format!("::__{name}_task::");
+                if !tasks.iter().any(|&task| graph.name(task).contains(&marker)) {
+                    bail!(
+                        "the image has no poll function of the task `{name}` of the {} executor",
+                        executor.name()
+                    );
+                }
+            }
         }
         Ok(Self {
             reset,
             handlers,
             interrupts,
             scan,
-            key_tasks,
+            interrupt_tasks,
             thread_executors: graph.nodes_named(|name| name.starts_with(THREAD_EXECUTOR)),
             thread_tasks,
         })
+    }
+
+    pub(crate) fn tasks_of(&self, executor: Executor) -> &[usize] {
+        self.interrupt_tasks
+            .iter()
+            .find(|(known, _)| *known == executor)
+            .map_or(&[], |(_, tasks)| tasks.as_slice())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_task_belongs_to_the_executor_that_names_it() {
+        let poll =
+            |path: &str| format!("{TASK_POLL_PREFIX}{path}::{{closure#0}}{TASK_POLL_SUFFIX}");
+        assert_eq!(
+            Executor::of(&poll(
+                "openwoot_wooting_80he::__scanning_task::__scanning_task_inner_function"
+            )),
+            Some(Executor::Keys)
+        );
+        assert_eq!(
+            Executor::of(&poll(
+                "openwoot_wooting_80he::__reports_task::__reports_task_inner_function"
+            )),
+            Some(Executor::Device)
+        );
+        assert_eq!(
+            Executor::of(&poll(
+                "wooting_80he::configuration::__lights_task::__lights_task_inner_function"
+            )),
+            Some(Executor::Lighting)
+        );
+        assert_eq!(
+            Executor::of(&poll(
+                "wooting_80he::configuration::__channel_task::__channel_task_inner_function"
+            )),
+            None
+        );
     }
 }

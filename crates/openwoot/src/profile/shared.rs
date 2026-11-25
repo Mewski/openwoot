@@ -15,7 +15,7 @@ use crate::lighting::{HostExchange, Lightbar, Lighting, ProfileState, Signals};
 pub struct Shared<M: RawMutex> {
     appearance: Mutex<M, RefCell<Option<Appearance>>>,
     global: Mutex<M, Cell<Option<global::Settings>>>,
-    global_lightbar: Mutex<M, RefCell<lightbar::Entries>>,
+    global_lightbar: Mutex<M, Cell<lightbar::Entries>>,
     profile_state: Mutex<M, Cell<Option<ProfileState>>>,
     host_signals: HostExchange<M>,
     fast_scan: AtomicBool,
@@ -31,7 +31,7 @@ impl<M: RawMutex> Shared<M> {
         Self {
             appearance: Mutex::new(RefCell::new(None)),
             global: Mutex::new(Cell::new(None)),
-            global_lightbar: Mutex::new(RefCell::new(lightbar::Entries::new())),
+            global_lightbar: Mutex::new(Cell::new(lightbar::Entries::new())),
             profile_state: Mutex::new(Cell::new(None)),
             host_signals: HostExchange::new(),
             fast_scan: AtomicBool::new(false),
@@ -70,7 +70,7 @@ impl<M: RawMutex> Shared<M> {
     ) -> Option<R> {
         let result = self
             .appearance
-            .lock(|cell| cell.borrow_mut().as_mut().map(change));
+            .lock(|cell| cell.try_borrow_mut().ok()?.as_mut().map(change));
         if result.is_some() {
             self.mark(changes);
         }
@@ -79,7 +79,7 @@ impl<M: RawMutex> Shared<M> {
 
     pub fn read<R>(&self, read: impl FnOnce(&Appearance) -> R) -> Option<R> {
         self.appearance
-            .lock(|cell| cell.borrow().as_ref().map(read))
+            .lock(|cell| cell.try_borrow().ok()?.as_ref().map(read))
     }
 
     pub fn set_global(&self, settings: global::Settings) {
@@ -88,14 +88,17 @@ impl<M: RawMutex> Shared<M> {
     }
 
     pub fn set_global_lightbar(&self, entries: &lightbar::Entries) {
-        self.global_lightbar
-            .lock(|cell| cell.borrow_mut().clone_from(entries));
+        self.global_lightbar.lock(|cell| cell.set(entries.clone()));
         self.mark(Changes::LIGHTBAR);
     }
 
     #[must_use]
     pub fn global_lightbar(&self) -> lightbar::Entries {
-        self.global_lightbar.lock(|cell| cell.borrow().clone())
+        self.global_lightbar.lock(|cell| {
+            let entries = cell.take();
+            cell.set(entries.clone());
+            entries
+        })
     }
 
     pub fn set_profile_state(&self, state: ProfileState) {
@@ -131,7 +134,9 @@ impl<M: RawMutex> Shared<M> {
     ) where
         H: Lightbar + Signals,
     {
-        self.host_signals.sync(lighting.hooks_mut());
+        if H::PRESENT {
+            self.host_signals.sync(lighting.hooks_mut());
+        }
         let changes = self.take_changes();
         if changes.contains(Changes::GLOBAL)
             && let Some(global) = self.global.lock(Cell::get)
@@ -155,7 +160,8 @@ impl<M: RawMutex> Shared<M> {
                 lighting.set_layer_colors(layer.number(), colors.layer(layer));
             }
         }
-        if changes.contains(Changes::LIGHTBAR)
+        if H::PRESENT
+            && changes.contains(Changes::LIGHTBAR)
             && let Some(settings) = self.read(|appearance| appearance.lightbar.clone())
         {
             let global = self.global_lightbar();
@@ -177,7 +183,9 @@ impl<M: RawMutex> Shared<M> {
             return;
         }
         self.appearance.lock(|cell| {
-            if let Some(appearance) = cell.borrow_mut().as_mut() {
+            if let Ok(mut appearance) = cell.try_borrow_mut()
+                && let Some(appearance) = appearance.as_mut()
+            {
                 appearance.settings.brightness = level;
             }
         });

@@ -1,6 +1,8 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+#[cfg(target_os = "none")]
+pub mod configuration;
 pub mod keys;
 pub mod lighting;
 pub mod profiles;
@@ -8,10 +10,10 @@ pub mod scan;
 pub mod storage;
 
 pub use cortex_m_rt::entry;
-use embassy_futures::block_on;
 use hal::{
     gpio::{Level, Output, OutputType, Pin, Port, Speed},
     i2c::I2c,
+    interrupt::{Binding, typelevel},
     pac,
     rcu::{self, AhbDivider, ApbDivider, Clocks, PllMultiplier},
     spi::{Device, Spi},
@@ -70,15 +72,27 @@ const _: () = assert!(
     "the clock tree stays within the bus limits and gives the USB controller its 48 MHz"
 );
 
-hal::bind_interrupts!(struct Irqs {
-    USBD_HP_CAN0_TX => usb::InterruptHandler;
-    USBD_LP_CAN0_RX0 => usb::InterruptHandler;
-    DMA0_Channel3 => hal::spi::InterruptHandler;
-    I2C0_EV => hal::i2c::InterruptHandler;
-    I2C0_ER => hal::i2c::InterruptHandler;
-    DMA0_Channel5 => hal::i2c::InterruptHandler;
-    ADC0_1 => hal::scan::InterruptHandler<scan::Interrupt>;
-});
+pub trait Interrupts:
+    Binding<typelevel::USBD_HP_CAN0_TX, usb::InterruptHandler>
+    + Binding<typelevel::USBD_LP_CAN0_RX0, usb::InterruptHandler>
+    + Binding<typelevel::DMA0_Channel3, hal::spi::InterruptHandler>
+    + Binding<typelevel::I2C0_EV, hal::i2c::InterruptHandler>
+    + Binding<typelevel::I2C0_ER, hal::i2c::InterruptHandler>
+    + Binding<typelevel::DMA0_Channel5, hal::i2c::InterruptHandler>
+    + Binding<typelevel::ADC0_1, hal::scan::InterruptHandler<scan::Interrupt>>
+{
+}
+
+impl<T> Interrupts for T where
+    T: Binding<typelevel::USBD_HP_CAN0_TX, usb::InterruptHandler>
+        + Binding<typelevel::USBD_LP_CAN0_RX0, usb::InterruptHandler>
+        + Binding<typelevel::DMA0_Channel3, hal::spi::InterruptHandler>
+        + Binding<typelevel::I2C0_EV, hal::i2c::InterruptHandler>
+        + Binding<typelevel::I2C0_ER, hal::i2c::InterruptHandler>
+        + Binding<typelevel::DMA0_Channel5, hal::i2c::InterruptHandler>
+        + Binding<typelevel::ADC0_1, hal::scan::InterruptHandler<scan::Interrupt>>
+{
+}
 
 pub type UsbDriver = usb::Driver<Pin<'A', 15, Output>>;
 
@@ -95,7 +109,8 @@ pub struct Board {
 
 impl Board {
     #[must_use]
-    pub fn new(peripherals: pac::Peripherals) -> Self {
+    #[inline(never)]
+    pub fn new(peripherals: pac::Peripherals, irqs: &dyn Interrupts) -> Self {
         let clocks = CLOCK_TREE.configure(peripherals.rcu, &peripherals.pmu);
         hal::time::start(peripherals.timer4, &clocks);
         let converter = hal::scan::Converter::new(
@@ -106,7 +121,7 @@ impl Board {
             },
             &scan::WIRING,
             &clocks,
-            Irqs,
+            irqs,
         );
         install_scanner(converter);
         let port_a = Port::<'A'>::new(peripherals.gpioa);
@@ -120,7 +135,7 @@ impl Board {
             port_b.pin13,
             port_b.pin15,
             port_b.pin14,
-            Irqs,
+            irqs,
         );
         let nor = SpiNor::new(
             Device::new(flash_bus, chip_select, clocks.system),
@@ -136,10 +151,10 @@ impl Board {
             port_a
                 .pin15
                 .into_output(OutputType::PushPull, Speed::High, Level::Low),
-            Irqs,
+            irqs,
             &clocks,
         );
-        let led_bus = I2c::new(peripherals.i2c0, port_b.pin6, port_b.pin7, Irqs, &clocks);
+        let led_bus = I2c::new(peripherals.i2c0, port_b.pin6, port_b.pin7, irqs, &clocks);
         let led_enable = port_b
             .pin5
             .into_output(OutputType::PushPull, Speed::High, Level::Low);
@@ -187,10 +202,15 @@ fn serial_number() -> Option<&'static str> {
 
 #[inline(never)]
 fn install_scanner(converter: scan::Converter) {
-    let installed = scan::SENSORS.try_take().is_some_and(|sensors| {
-        scan::SCAN
-            .install(|| scan::Scanner::new(converter, scan::ANSI, scan::PARALLEL_ORDER, sensors))
-    });
+    let installed = scan::SENSORS
+        .try_init(scan::Sensors::new())
+        .zip(scan::CURVE_TABLES.try_take())
+        .is_some_and(|(sensors, tables)| {
+            scan::SCAN.install(|| {
+                scan::Scanner::new(converter, scan::ANSI, scan::PARALLEL_ORDER, sensors)
+                    .with_curve_tables(tables)
+            })
+        });
     if !installed {
         hal::system::reset();
     }
@@ -198,18 +218,15 @@ fn install_scanner(converter: scan::Converter) {
 
 #[inline(never)]
 fn open_storage(nor: storage::Nor, format: bool) -> (storage::Storage, Face) {
-    let mut storage = block_on(storage::Storage::open(
+    let mut storage = storage::Storage::open(
         nor,
-        storage::SETTINGS_STORE.take(),
+        storage::SETTINGS_STORE.init(openwoot::storage::Settings::new()),
         storage::SETTINGS,
-        storage::DEVICE_INFO,
-        storage::LAYOUT_VARIANT,
+        &storage::DEVICE_INFO,
+        &storage::LAYOUT_VARIANT,
         format,
-    ));
-    let face = block_on(openwoot::profile::stored_face(
-        storage.settings.as_deref_mut(),
-        FACE,
-    ));
+    );
+    let face = openwoot::profile::stored_face(storage.settings.as_deref_mut(), FACE);
     (storage, face)
 }
 

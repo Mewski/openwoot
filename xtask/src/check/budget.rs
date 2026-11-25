@@ -59,13 +59,11 @@ impl Budget {
             .saturating_add(STACK_MARGIN);
         if ram_needed > self.ram_size {
             bail!(
-                "the image needs {} bytes of statics, a stack of up to {} bytes ({} bytes thread \
-                 mode, {} bytes interrupts) and a margin of {STACK_MARGIN} bytes, more than the {} \
-                 bytes of RAM",
+                "the image needs {} bytes of statics, a stack of up to {} bytes ({}) and a margin \
+                 of {STACK_MARGIN} bytes, more than the {} bytes of RAM",
                 self.static_ram,
                 self.stack.total(),
-                self.stack.thread,
-                self.stack.interrupts,
+                self.stack,
                 self.ram_size
             );
         }
@@ -92,14 +90,12 @@ impl fmt::Display for Budget {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "flash {} of {} bytes, RAM {} bytes static + {} bytes stack ({} thread, {} \
-             interrupts) of {} bytes",
+            "flash {} of {} bytes, RAM {} bytes static + {} bytes stack ({}) of {} bytes",
             self.flash,
             self.flash_size,
             self.static_ram,
             self.stack.total(),
-            self.stack.thread,
-            self.stack.interrupts,
+            self.stack,
             self.ram_size
         )
     }
@@ -108,6 +104,7 @@ impl fmt::Display for Budget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entry_points::Executor;
 
     fn budget(static_ram: u32, thread: u32, flash: u32) -> Budget {
         Budget {
@@ -116,7 +113,8 @@ mod tests {
             static_ram,
             stack: StackBound {
                 thread,
-                interrupts: 10_000,
+                executors: Executor::ALL.map(|executor| (executor, 1_000)),
+                handlers: 7_000,
             },
             ram_size: 0x0001_8000,
         }
@@ -134,9 +132,9 @@ mod tests {
                 .check()
                 .unwrap_err()
                 .to_string(),
-            "the image needs 65504 bytes of statics, a stack of up to 106720 bytes (96720 bytes \
-             thread mode, 10000 bytes interrupts) and a margin of 2048 bytes, more than the 98304 \
-             bytes of RAM"
+            "the image needs 65504 bytes of statics, a stack of up to 106720 bytes (96720 \
+             thread, 1000 keys, 1000 device, 1000 lighting, 7000 interrupts) and a margin of 2048 \
+             bytes, more than the 98304 bytes of RAM"
         );
     }
 

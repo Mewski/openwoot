@@ -18,5 +18,6 @@ mod support;
 mod task;
 
 pub(crate) use support::{
-    COLUMNS, GEOMETRY, LENGTH, MAP, PAGES, ROWS, VARIANT, base_color, lighting,
+    COLUMNS, GEOMETRY, LENGTH, MAP, PAGES, ROWS, START_MS, VARIANT, base_color, lighting,
+    lit_lighting, read, red_bar,
 };

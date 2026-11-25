@@ -10,7 +10,10 @@ use super::{
     Context, Converter, Decision, Event, Events, Grid, Map, Mode, Position, Recalibration,
     Reference, Sensing, Sensor, Sensors, Travel, Update,
 };
-use crate::{analog::Switch, keys::Key};
+use crate::{
+    analog::{CurveCache, CurveTable, Switch},
+    keys::Key,
+};
 
 const SETTLE_CYCLES: u8 = 3;
 const DELAY_INPUT_US: u16 = 54;
@@ -60,6 +63,7 @@ pub struct Scanner<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> {
     events: Events,
     cycle_finished: bool,
     sensors: &'static mut Sensors<S::Noise, INPUTS>,
+    curves: CurveCache<'static>,
 }
 
 impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS, ADDRESSES> {
@@ -85,6 +89,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
             successors: successors(&map),
             order,
             sensors,
+            curves: CurveCache::default(),
             recheck: S::Recheck::default(),
             reference: S::Reference::default(),
             recalibration: Recalibration::new(),
@@ -108,6 +113,13 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
             rebound_filter: false,
             now_ms: 0,
         }
+    }
+
+    #[must_use]
+    pub fn with_curve_tables(mut self, tables: &'static mut [CurveTable]) -> Self {
+        self.curves = CurveCache::new(tables);
+        self.assign_curves();
+        self
     }
 
     #[must_use]
@@ -182,6 +194,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
         self.map = map;
         self.successors = successors(&map);
         self.pending = None;
+        self.assign_curves();
     }
 
     pub fn request_mode(&mut self, mode: Mode) {
@@ -210,6 +223,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
                 sensor.set_switch(switch_for(key));
             }
         }
+        self.assign_curves();
     }
 
     pub fn prepare(&mut self, now_ms: u32) {
@@ -291,6 +305,16 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
         } else {
             Position::new(group, member)
         }
+    }
+
+    fn assign_curves(&mut self) {
+        let sensors = &*self.sensors;
+        self.curves.assign(
+            self.map
+                .iter()
+                .filter_map(|(position, _)| sensors.get(position))
+                .map(Sensor::switch),
+        );
     }
 
     fn switch_mode(&mut self) {

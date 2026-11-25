@@ -6,6 +6,7 @@ mod panic_paths;
 mod rust_rules;
 mod rust_source;
 mod scan_interrupt;
+mod speed;
 mod symmetry;
 mod tools;
 mod tree;
@@ -15,6 +16,7 @@ use std::{collections::BTreeSet, path::Path};
 
 use anyhow::{Context, Result, bail, ensure};
 use packages::Kind;
+use speed::OptLevels;
 
 use crate::{output::show, workspace::Workspace};
 
@@ -46,9 +48,10 @@ pub(crate) fn run(root: &Path) -> Result<()> {
         .map(|board| board.name.len() + 1)
         .max()
         .unwrap_or_default();
+    let levels = OptLevels::read(&workspace)?;
     let mut reviewed = BTreeSet::new();
     for board in workspace.boards() {
-        let analysis = board_image::check(&workspace, board)
+        let analysis = board_image::check(&workspace, board, &levels)
             .with_context(|| format!("could not check the image of `{}`", board.name))?;
         show(&board.name, analysis.budget, width);
         if let Err(error) = analysis.budget.check() {
@@ -61,6 +64,9 @@ pub(crate) fn run(root: &Path) -> Result<()> {
             problems.push(format!("`{}`: {problem}", board.name));
         }
         for problem in analysis.code_beyond_zero_wait {
+            problems.push(format!("`{}`: {problem}", board.name));
+        }
+        for problem in analysis.size_compiled_hot_code {
             problems.push(format!("`{}`: {problem}", board.name));
         }
         reviewed.extend(analysis.panics.reviewed);

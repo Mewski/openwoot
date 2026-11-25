@@ -2,16 +2,16 @@ mod linked;
 mod links;
 mod stored;
 
-use std::{pin::pin, rc::Rc};
+use std::{cell::RefCell, pin::pin, rc::Rc};
 
 use embassy_futures::block_on;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_usb_driver::Speed as BusSpeed;
 use openwoot::{
     analog::{self, SwitchModel},
     keys::{self, Key, ProfileSource},
     layout::{DefaultKeymap, Patch},
-    lighting::{LedMatrix, Lighting, from_rgb565},
+    lighting::{Bar, LedMatrix, Lighting, from_rgb565},
     profile::{self, Changes, Configurator, Factory, Model, Order, Preset},
     protocol::Configuration,
     runtime::{Firmware, State},
@@ -40,8 +40,8 @@ use crate::{
 };
 
 type Mutual = CriticalSectionRawMutex;
-pub(crate) type ProfileModel<'a> = Model<'a, Mutual, Nor, ROWS, COLUMNS>;
-type ProbedModel<'a> = Model<'a, Mutual, Probe, ROWS, COLUMNS>;
+pub(crate) type ProfileModel<'a> = Model<'a, Mutual, Nor, Bar, ROWS, COLUMNS>;
+type ProbedModel<'a> = Model<'a, Mutual, Probe, Bar, ROWS, COLUMNS>;
 
 const LAYOUT: NorLayout = NorLayout {
     capacity: 6 * SECTOR,
@@ -262,15 +262,14 @@ pub(crate) fn storage() -> Settings<Nor> {
         device_info: None,
     };
     let mut settings = Settings::new();
-    let opened =
-        block_on(settings.open(Partition::new(Nor::new(6), layout.settings_region()), false));
+    let opened = settings.open(Partition::new(Nor::new(6), layout.settings_region()), false);
     assert!(opened.is_ok(), "{opened:?}");
     settings
 }
 
 fn storage_on(nor: Nor) -> Settings<Nor> {
     let mut settings = Settings::new();
-    let opened = block_on(settings.open(Partition::new(nor, LAYOUT.settings_region()), false));
+    let opened = settings.open(Partition::new(nor, LAYOUT.settings_region()), false);
     assert!(opened.is_ok(), "{opened:?}");
     settings
 }
@@ -278,7 +277,7 @@ fn storage_on(nor: Nor) -> Settings<Nor> {
 fn probed_storage() -> (Settings<Probe>, Rc<Watch>) {
     let (probe, watch) = Probe::new(Nor::new(6));
     let mut settings = Settings::new();
-    let opened = block_on(settings.open(Partition::new(probe, LAYOUT.settings_region()), false));
+    let opened = settings.open(Partition::new(probe, LAYOUT.settings_region()), false);
     assert!(opened.is_ok(), "{opened:?}");
     (settings, watch)
 }
@@ -289,7 +288,7 @@ fn open_probed<'a>(
     storage: &'a mut Settings<Probe>,
 ) -> ProbedModel<'a> {
     let mut model = Model::new(keys, shared, Some(storage), &FACTORY, 0, 4);
-    block_on(model.load());
+    model.load();
     model
 }
 
@@ -303,7 +302,7 @@ pub(crate) fn open<'a>(
     storage: Option<&'a mut Settings<Nor>>,
 ) -> ProfileModel<'a> {
     let mut model = Model::new(keys, shared, storage, &FACTORY, 0, 4);
-    block_on(model.load());
+    model.load();
     model
 }
 
@@ -313,9 +312,7 @@ fn factory_profiles_light_the_leds_once_the_host_configures_the_keyboard() {
     assert_eq!(model.summary().count, 2);
     let host = Host::default();
     let Firmware {
-        mut device,
-        lighting,
-        ..
+        usb, mut lighting, ..
     } = Firmware::new(
         &STATE,
         host.driver(),
@@ -327,6 +324,7 @@ fn factory_profiles_light_the_leds_once_the_host_configures_the_keyboard() {
     let mut leds = Leds::default();
     block_on(lighting.step(&mut leds, &(), 0, lighting.host.is_active()));
     assert_eq!(leds.calls, []);
+    let mut device = usb.build().device;
     let mut device = pin!(device.run());
     host.attach(device.as_mut());
     assert_eq!(
@@ -345,7 +343,7 @@ fn factory_profiles_light_the_leds_once_the_host_configures_the_keyboard() {
         "{} lit values",
         leds.lit_values()
     );
-    let lighting = block_on(lighting.lighting.lock());
+    let lighting = &lighting.lighting;
     assert_eq!(lighting.brightness(), 255);
     assert!(
         lighting
@@ -362,27 +360,28 @@ fn a_fresh_keyboard_has_the_factory_profiles_with_their_names_and_lighting() {
     let mut model = open(&keys, &shared, Some(&mut settings));
     assert_eq!(model.summary().count, 2);
     assert_eq!(
-        block_on(model.info(Slot::new(1))).map(|info| info.name),
+        model.info(Slot::new(1)).map(|info| info.name),
         Ok("Rapid Profile".try_into().unwrap())
     );
     assert_eq!(
-        block_on(model.lighting(Slot::new(1))).map(|settings| settings.brightness),
+        model
+            .lighting(Slot::new(1))
+            .map(|settings| settings.brightness),
         Ok(128)
     );
     let mut colors = None;
     assert_eq!(
-        block_on(model.key_colors(Slot::new(0), Layer::Base, &mut colors)),
+        model.key_colors(Slot::new(0), Layer::Base, &mut colors),
         Ok(())
     );
     assert_eq!(colors, Some(BLUE_KEYS.clone()));
     assert_eq!(
-        block_on(model.settings(Slot::new(1))).map(|settings| settings.rapid_trigger_enabled),
+        model
+            .settings(Slot::new(1))
+            .map(|settings| settings.rapid_trigger_enabled),
         Ok(true)
     );
-    assert_eq!(
-        block_on(model.info(Slot::new(2))),
-        Err(Rejection::ProfileMissing(2))
-    );
+    assert_eq!(model.info(Slot::new(2)), Err(Rejection::ProfileMissing(2)));
     assert_eq!(
         model.device_settings(),
         device::Settings::from(FACTORY.face)
@@ -396,23 +395,20 @@ fn profiles_are_created_up_to_the_capacity_and_only_the_last_one_is_deleted() {
     let shared = profile::Shared::new();
     let mut settings = storage();
     let mut model = open(&keys, &shared, Some(&mut settings));
-    assert_eq!(block_on(model.create(Onboard)), Ok(Slot::new(2)));
-    assert_eq!(block_on(model.create(Onboard)), Ok(Slot::new(3)));
-    assert_eq!(
-        block_on(model.create(Onboard)),
-        Err(Rejection::ProfileLimitReached)
-    );
+    assert_eq!(model.create(Onboard), Ok(Slot::new(2)));
+    assert_eq!(model.create(Onboard), Ok(Slot::new(3)));
+    assert_eq!(model.create(Onboard), Err(Rejection::ProfileLimitReached));
     assert_eq!(keys.profiles(), (4, 0));
     assert_eq!(
-        block_on(model.delete(Slot::new(0))),
+        model.delete(Slot::new(0)),
         Err(Rejection::ProfileProtected(0))
     );
     assert_eq!(
-        block_on(model.delete(Slot::new(2))),
+        model.delete(Slot::new(2)),
         Err(Rejection::ProfileProtected(2))
     );
-    block_on(model.activate(Slot::new(3))).unwrap();
-    block_on(model.delete(Slot::new(3))).unwrap();
+    model.activate(Slot::new(3)).unwrap();
+    model.delete(Slot::new(3)).unwrap();
     assert_eq!(model.summary().count, 3);
     assert_eq!(model.summary().active, Slot::new(2));
     assert_eq!(keys.profiles(), (3, 2));
@@ -429,35 +425,39 @@ fn lighting_and_colours_apply_at_once_and_stay_after_save() {
         brightness: 40,
         ..PRESETS[0].lighting.clone()
     };
-    block_on(model.set_lighting(Slot::new(0), dim.clone())).unwrap();
+    model.set_lighting(Slot::new(0), dim.clone()).unwrap();
     assert!(shared.take_changes().contains(Changes::LIGHTING));
     assert_eq!(
         shared.read(|appearance| appearance.settings.brightness),
         Some(40)
     );
-    block_on(model.revert());
+    model.revert();
     assert_eq!(
         shared.read(|appearance| appearance.settings.brightness),
         Some(255)
     );
-    let revision = block_on(model.revision(Slot::new(0))).unwrap();
-    block_on(model.set_lighting(Slot::new(0), dim.clone())).unwrap();
+    let revision = model.revision(Slot::new(0)).unwrap();
+    model.set_lighting(Slot::new(0), dim.clone()).unwrap();
     let red = Vec::from_array([from_rgb565(0xF800); ROWS * COLUMNS]);
-    block_on(model.set_key_colors(Slot::new(0), Layer::One, Some(&red))).unwrap();
-    block_on(model.save()).unwrap();
-    assert_eq!(block_on(model.revision(Slot::new(0))), Ok(revision + 1));
-    block_on(model.revert());
-    assert_eq!(block_on(model.lighting(Slot::new(0))), Ok(dim));
+    model
+        .set_key_colors(Slot::new(0), Layer::One, Some(&red))
+        .unwrap();
+    model.save().unwrap();
+    assert_eq!(model.revision(Slot::new(0)), Ok(revision + 1));
+    model.revert();
+    assert_eq!(model.lighting(Slot::new(0)), Ok(dim));
     let mut colors = None;
-    block_on(model.key_colors(Slot::new(0), Layer::One, &mut colors)).unwrap();
+    model
+        .key_colors(Slot::new(0), Layer::One, &mut colors)
+        .unwrap();
     assert_eq!(colors, Some(red));
     let named = Info {
         name: "Mine".try_into().unwrap(),
         color: BLUE,
         icon: 7,
     };
-    block_on(model.set_info(Slot::new(1), named.clone())).unwrap();
-    assert_eq!(block_on(model.info(Slot::new(1))), Ok(named));
+    model.set_info(Slot::new(1), named.clone()).unwrap();
+    assert_eq!(model.info(Slot::new(1)), Ok(named));
 }
 
 #[test]
@@ -466,15 +466,16 @@ fn a_profile_switch_saves_the_changes_of_the_profile_it_leaves() {
     let shared = profile::Shared::new();
     let mut settings = storage();
     let mut model = open(&keys, &shared, Some(&mut settings));
-    block_on(model.set_lighting(
-        Slot::new(0),
-        LightingSettings {
-            brightness: 7,
-            ..PRESETS[0].lighting.clone()
-        },
-    ))
-    .unwrap();
-    block_on(model.activate(Slot::new(1))).unwrap();
+    model
+        .set_lighting(
+            Slot::new(0),
+            LightingSettings {
+                brightness: 7,
+                ..PRESETS[0].lighting.clone()
+            },
+        )
+        .unwrap();
+    model.activate(Slot::new(1)).unwrap();
     assert_eq!(
         shared.read(|appearance| appearance.settings.brightness),
         Some(128)
@@ -483,7 +484,7 @@ fn a_profile_switch_saves_the_changes_of_the_profile_it_leaves() {
         keys.read(|profile| profile.settings.rapid_trigger_enabled),
         Some(true)
     );
-    block_on(model.activate(Slot::new(0))).unwrap();
+    model.activate(Slot::new(0)).unwrap();
     assert_eq!(
         shared.read(|appearance| appearance.settings.brightness),
         Some(7)
@@ -510,8 +511,8 @@ fn global_settings_reach_the_lighting_and_the_scan_at_once() {
         ..device::Settings::from(FACTORY.face)
     };
     model.set_device_settings(device);
-    block_on(model.save()).unwrap();
-    block_on(model.revert());
+    model.save().unwrap();
+    model.revert();
     assert_eq!(model.global_settings(), settings);
     assert_eq!(model.device_settings(), device);
 }
@@ -524,10 +525,12 @@ fn brightness_keys_store_the_level_in_the_active_profile() {
     let mut model = open(&keys, &shared, Some(&mut settings));
     shared.save_brightness(90);
     assert_eq!(block_on(shared.brightness_saved()), 90);
-    block_on(model.save_brightness()).unwrap();
-    block_on(model.revert());
+    model.save_brightness().unwrap();
+    model.revert();
     assert_eq!(
-        block_on(model.lighting(Slot::new(0))).map(|settings| settings.brightness),
+        model
+            .lighting(Slot::new(0))
+            .map(|settings| settings.brightness),
         Ok(90)
     );
 }
@@ -540,20 +543,24 @@ fn single_layers_of_an_inactive_profile_change_without_touching_the_others() {
     let mut model = open(&keys, &shared, Some(&mut settings));
     let inactive = Slot::new(1);
     let red = Vec::from_array([from_rgb565(0xF800); ROWS * COLUMNS]);
-    block_on(model.set_key_colors(inactive, Layer::Two, Some(&red))).unwrap();
+    model
+        .set_key_colors(inactive, Layer::Two, Some(&red))
+        .unwrap();
     let mut colors = None;
-    block_on(model.key_colors(inactive, Layer::Two, &mut colors)).unwrap();
+    model.key_colors(inactive, Layer::Two, &mut colors).unwrap();
     assert_eq!(colors, Some(red));
-    block_on(model.key_colors(inactive, Layer::Base, &mut colors)).unwrap();
+    model
+        .key_colors(inactive, Layer::Base, &mut colors)
+        .unwrap();
     assert_eq!(colors, None);
     let typed = Vec::from_array([Action::Keyboard(0x05); ROWS * COLUMNS]);
-    block_on(model.set_keymap(inactive, Layer::One, &typed)).unwrap();
+    model.set_keymap(inactive, Layer::One, &typed).unwrap();
     let mut keymap = Keymap::new();
-    block_on(model.keymap(inactive, Layer::One, &mut keymap)).unwrap();
+    model.keymap(inactive, Layer::One, &mut keymap).unwrap();
     assert_eq!(keymap, typed);
-    block_on(model.keymap(inactive, Layer::Base, &mut keymap)).unwrap();
+    model.keymap(inactive, Layer::Base, &mut keymap).unwrap();
     assert_eq!(keymap.as_slice(), LAYERS[0].as_flattened());
-    block_on(model.activate(inactive)).unwrap();
+    model.activate(inactive).unwrap();
     assert_eq!(
         keys.read(|profile| profile.keymaps.0[1].clone()),
         Some(typed)
@@ -571,14 +578,16 @@ fn a_profile_switch_reads_only_the_parts_the_profile_has_stored() {
     let (mut settings, watch) = probed_storage();
     let mut model = open_probed(&keys, &shared, &mut settings);
     for usage in 4..44 {
-        block_on(model.set_keymap(Slot::new(0), Layer::One, &typed(usage))).unwrap();
-        block_on(model.save()).unwrap();
+        model
+            .set_keymap(Slot::new(0), Layer::One, &typed(usage))
+            .unwrap();
+        model.save().unwrap();
     }
     let before = watch.reads();
-    block_on(model.activate(Slot::new(1))).unwrap();
+    model.activate(Slot::new(1)).unwrap();
     let reads = watch.reads() - before;
     assert!(reads < 200, "{reads} reads");
-    block_on(model.activate(Slot::new(0))).unwrap();
+    model.activate(Slot::new(0)).unwrap();
     assert_eq!(
         keys.read(|profile| profile.keymaps.0[1].clone()),
         Some(typed(43))
@@ -592,18 +601,15 @@ fn a_profile_count_that_cannot_be_stored_creates_and_deletes_nothing() {
     let (mut settings, watch) = probed_storage();
     let mut model = open_probed(&keys, &shared, &mut settings);
     watch.fail_writes(true);
-    assert_eq!(
-        block_on(model.create(Onboard)),
-        Err(Rejection::StorageInaccessible)
-    );
+    assert_eq!(model.create(Onboard), Err(Rejection::StorageInaccessible));
     assert_eq!(model.summary().count, 2);
     assert_eq!(keys.profiles(), (2, 0));
     watch.fail_writes(false);
-    assert_eq!(block_on(model.create(Onboard)), Ok(Slot::new(2)));
-    block_on(model.activate(Slot::new(2))).unwrap();
+    assert_eq!(model.create(Onboard), Ok(Slot::new(2)));
+    model.activate(Slot::new(2)).unwrap();
     watch.fail_writes(true);
     assert_eq!(
-        block_on(model.delete(Slot::new(2))),
+        model.delete(Slot::new(2)),
         Err(Rejection::StorageInaccessible)
     );
     assert_eq!(
@@ -617,11 +623,13 @@ fn a_profile_count_that_cannot_be_stored_creates_and_deletes_nothing() {
     );
     assert_eq!(keys.profiles(), (3, 2));
     assert_eq!(
-        block_on(model.lighting(Slot::new(2))).map(|settings| settings.brightness),
+        model
+            .lighting(Slot::new(2))
+            .map(|settings| settings.brightness),
         Ok(255)
     );
     watch.fail_writes(false);
-    block_on(model.delete(Slot::new(2))).unwrap();
+    model.delete(Slot::new(2)).unwrap();
     assert_eq!(
         model.summary(),
         Summary {
@@ -651,10 +659,12 @@ fn a_power_cut_while_a_profile_is_deleted_leaves_it_whole_or_gone() {
         let mut settings = storage_on(Nor::new(6));
         {
             let mut model = open(&keys, &shared, Some(&mut settings));
-            assert_eq!(block_on(model.create(Onboard)), Ok(Slot::new(2)));
-            block_on(model.set_keymap(Slot::new(2), Layer::One, &typed(0x05))).unwrap();
-            block_on(model.set_lighting(Slot::new(2), dim.clone())).unwrap();
-            block_on(model.set_info(Slot::new(2), named.clone())).unwrap();
+            assert_eq!(model.create(Onboard), Ok(Slot::new(2)));
+            model
+                .set_keymap(Slot::new(2), Layer::One, &typed(0x05))
+                .unwrap();
+            model.set_lighting(Slot::new(2), dim.clone()).unwrap();
+            model.set_info(Slot::new(2), named.clone()).unwrap();
         }
         settings.release().map(Partition::release).unwrap()
     };
@@ -662,7 +672,7 @@ fn a_power_cut_while_a_profile_is_deleted_leaves_it_whole_or_gone() {
         let keys = keys::Shared::new();
         let shared = profile::Shared::new();
         let mut settings = storage_on(base.cut_after(cut));
-        let deleted = block_on(open(&keys, &shared, Some(&mut settings)).delete(Slot::new(2)));
+        let deleted = open(&keys, &shared, Some(&mut settings)).delete(Slot::new(2));
         let nor = settings.release().map(Partition::release).unwrap();
         if !nor.was_cut() {
             deleted.unwrap();
@@ -677,18 +687,10 @@ fn a_power_cut_while_a_profile_is_deleted_leaves_it_whole_or_gone() {
         }
         assert_eq!(model.summary().count, 3, "cut {cut}");
         let mut keymap = Keymap::new();
-        block_on(model.keymap(Slot::new(2), Layer::One, &mut keymap)).unwrap();
+        model.keymap(Slot::new(2), Layer::One, &mut keymap).unwrap();
         assert_eq!(keymap, typed(0x05), "cut {cut}");
-        assert_eq!(
-            block_on(model.lighting(Slot::new(2))),
-            Ok(dim.clone()),
-            "cut {cut}"
-        );
-        assert_eq!(
-            block_on(model.info(Slot::new(2))),
-            Ok(named.clone()),
-            "cut {cut}"
-        );
+        assert_eq!(model.lighting(Slot::new(2)), Ok(dim.clone()), "cut {cut}");
+        assert_eq!(model.info(Slot::new(2)), Ok(named.clone()), "cut {cut}");
     }
 }
 
@@ -703,17 +705,17 @@ fn a_brightness_key_stores_the_level_without_the_unsaved_lighting() {
         indicators: INDICATORS,
         effects: Vec::new(),
     };
-    block_on(model.set_lighting(Slot::new(0), unsaved)).unwrap();
+    model.set_lighting(Slot::new(0), unsaved).unwrap();
     shared.save_brightness(90);
     assert_eq!(block_on(shared.brightness_saved()), 90);
-    let revision = block_on(model.revision(Slot::new(0))).unwrap();
-    block_on(model.save_brightness()).unwrap();
-    assert_eq!(block_on(model.revision(Slot::new(0))), Ok(revision + 1));
-    block_on(model.save_brightness()).unwrap();
-    assert_eq!(block_on(model.revision(Slot::new(0))), Ok(revision + 1));
-    block_on(model.revert());
+    let revision = model.revision(Slot::new(0)).unwrap();
+    model.save_brightness().unwrap();
+    assert_eq!(model.revision(Slot::new(0)), Ok(revision + 1));
+    model.save_brightness().unwrap();
+    assert_eq!(model.revision(Slot::new(0)), Ok(revision + 1));
+    model.revert();
     assert_eq!(
-        block_on(model.lighting(Slot::new(0))),
+        model.lighting(Slot::new(0)),
         Ok(LightingSettings {
             brightness: 90,
             ..PRESETS[0].lighting.clone()
@@ -728,14 +730,18 @@ fn a_profile_switch_stores_a_pending_brightness_level_for_the_profile_it_leaves(
     let mut settings = storage();
     let mut model = open(&keys, &shared, Some(&mut settings));
     shared.save_brightness(90);
-    block_on(model.activate(Slot::new(1))).unwrap();
+    model.activate(Slot::new(1)).unwrap();
     assert!(!shared.take_brightness_save());
     assert_eq!(
-        block_on(model.lighting(Slot::new(1))).map(|settings| settings.brightness),
+        model
+            .lighting(Slot::new(1))
+            .map(|settings| settings.brightness),
         Ok(128)
     );
     assert_eq!(
-        block_on(model.lighting(Slot::new(0))).map(|settings| settings.brightness),
+        model
+            .lighting(Slot::new(0))
+            .map(|settings| settings.brightness),
         Ok(90)
     );
 }
@@ -748,20 +754,26 @@ fn a_stored_colour_layer_that_does_not_cover_the_key_matrix_gives_way_to_its_fac
     let red: KeyColors = Vec::from_array([from_rgb565(0xF800); ROWS * COLUMNS]);
     let short: KeyColors = Vec::from_array([BLUE, BLACK]);
     let stored = profile::Colors([Some(red.clone()), Some(short), None, None]);
-    block_on(settings.store(Scope::Profile(0), &stored)).unwrap();
-    block_on(settings.store(Scope::Profile(1), &stored)).unwrap();
+    settings.store(Scope::Profile(0), &stored).unwrap();
+    settings.store(Scope::Profile(1), &stored).unwrap();
     let mut model = open(&keys, &shared, Some(&mut settings));
     assert_eq!(
         shared.read(|appearance| appearance.colors.clone()),
         Some(profile::Colors([Some(red.clone()), None, None, None]))
     );
     let mut colors = Some(KeyColors::new());
-    block_on(model.key_colors(Slot::new(1), Layer::One, &mut colors)).unwrap();
+    model
+        .key_colors(Slot::new(1), Layer::One, &mut colors)
+        .unwrap();
     assert_eq!(colors, None);
-    block_on(model.key_colors(Slot::new(1), Layer::Base, &mut colors)).unwrap();
+    model
+        .key_colors(Slot::new(1), Layer::Base, &mut colors)
+        .unwrap();
     assert_eq!(colors.as_ref(), Some(&red));
-    block_on(model.set_key_colors(Slot::new(1), Layer::Two, Some(&red))).unwrap();
-    block_on(model.activate(Slot::new(1))).unwrap();
+    model
+        .set_key_colors(Slot::new(1), Layer::Two, Some(&red))
+        .unwrap();
+    model.activate(Slot::new(1)).unwrap();
     assert_eq!(
         shared.read(|appearance| appearance.colors.clone()),
         Some(profile::Colors([Some(red.clone()), None, Some(red), None]))
@@ -805,11 +817,11 @@ fn stored_parts_that_fail_validation_give_way_to_the_factory_parts() {
     keymaps.0[2] = refused;
     for slot in [0, 1] {
         let scope = Scope::Profile(slot);
-        block_on(settings.store(scope, &stray)).unwrap();
-        block_on(settings.store(scope, &flat)).unwrap();
-        block_on(settings.store(scope, &biased)).unwrap();
-        block_on(settings.store(scope, &frozen)).unwrap();
-        block_on(settings.store(scope, &keymaps)).unwrap();
+        settings.store(scope, &stray).unwrap();
+        settings.store(scope, &flat).unwrap();
+        settings.store(scope, &biased).unwrap();
+        settings.store(scope, &frozen).unwrap();
+        settings.store(scope, &keymaps).unwrap();
     }
     let mut model = open(&keys, &shared, Some(&mut settings));
     let factory_layer = |layer: Layer| FACTORY.keymap.actions(layer, 0).collect::<Keymap>();
@@ -834,21 +846,18 @@ fn stored_parts_that_fail_validation_give_way_to_the_factory_parts() {
     );
     let inactive = Slot::new(1);
     let mut advanced = advanced::Keys::new();
-    block_on(model.advanced(inactive, &mut advanced)).unwrap();
+    model.advanced(inactive, &mut advanced).unwrap();
     assert!(advanced.is_empty());
-    assert_eq!(block_on(model.settings(inactive)), Ok(PRESETS[1].keys));
+    assert_eq!(model.settings(inactive), Ok(PRESETS[1].keys));
     assert_eq!(
-        block_on(model.gamepad_settings(inactive)),
+        model.gamepad_settings(inactive),
         Ok(keys::default_gamepad_settings())
     );
-    assert_eq!(
-        block_on(model.lighting(inactive)),
-        Ok(PRESETS[1].lighting.clone())
-    );
+    assert_eq!(model.lighting(inactive), Ok(PRESETS[1].lighting.clone()));
     let mut keymap = Keymap::new();
-    block_on(model.keymap(inactive, Layer::One, &mut keymap)).unwrap();
+    model.keymap(inactive, Layer::One, &mut keymap).unwrap();
     assert_eq!(keymap, typed(0x05));
-    block_on(model.keymap(inactive, Layer::Two, &mut keymap)).unwrap();
+    model.keymap(inactive, Layer::Two, &mut keymap).unwrap();
     assert_eq!(keymap, factory_layer(Layer::Two));
 }
 
@@ -877,11 +886,11 @@ fn the_layout_is_the_one_of_the_layout_variant_of_the_unit() {
         (2, device::Layout::Jis),
         (9, device::Layout::Ansi),
     ] {
-        let model: Mutex<Mutual, ProfileModel<'_>> =
-            Mutex::new(Model::new(&keys, &shared, None, &FACTORY, variant, 4));
+        let model: RefCell<ProfileModel<'_>> =
+            RefCell::new(Model::new(&keys, &shared, None, &FACTORY, variant, 4));
         let mut configurator = Configurator::new(&model, capabilities.clone());
         assert_eq!(
-            block_on(configurator.layout()),
+            configurator.layout(),
             Ok(device::LayoutState {
                 active: layout,
                 chosen: layout
@@ -907,12 +916,12 @@ fn the_key_geometry_is_the_one_of_the_layout_in_effect() {
         table
     });
     for (variant, width) in [(0, 100), (1, 150), (2, 200), (9, 100)] {
-        let model: Mutex<Mutual, ProfileModel<'_>> =
-            Mutex::new(Model::new(&keys, &shared, None, &FACTORY, variant, 4));
+        let model: RefCell<ProfileModel<'_>> =
+            RefCell::new(Model::new(&keys, &shared, None, &FACTORY, variant, 4));
         let mut configurator =
             Configurator::new(&model, switch_capabilities()).with_geometry(&tables);
         let mut served = geometry::Keys::new();
-        assert_eq!(block_on(configurator.key_geometry(&mut served)), Ok(()));
+        assert_eq!(configurator.key_geometry(&mut served), Ok(()));
         assert_eq!(served.len(), ROWS * COLUMNS);
         assert_eq!(
             served[COLUMNS + 2].map(|key| key.width),
@@ -921,11 +930,11 @@ fn the_key_geometry_is_the_one_of_the_layout_in_effect() {
         );
         assert_eq!(served.iter().flatten().count(), 1);
     }
-    let model: Mutex<Mutual, ProfileModel<'_>> =
-        Mutex::new(Model::new(&keys, &shared, None, &FACTORY, 0, 4));
+    let model: RefCell<ProfileModel<'_>> =
+        RefCell::new(Model::new(&keys, &shared, None, &FACTORY, 0, 4));
     let mut without = Configurator::new(&model, switch_capabilities());
     assert_eq!(
-        block_on(without.key_geometry(&mut geometry::Keys::new())),
+        without.key_geometry(&mut geometry::Keys::new()),
         Err(Rejection::Unsupported)
     );
 }
@@ -973,10 +982,10 @@ fn a_fresh_keyboard_has_the_factory_switch_on_every_key_and_lists_the_known_mode
     let keys = keys::Shared::new();
     let shared = profile::Shared::new();
     let mut settings = storage();
-    let model = Mutex::new(open(&keys, &shared, Some(&mut settings)));
+    let model = RefCell::new(open(&keys, &shared, Some(&mut settings)));
     let mut configurator = Configurator::new(&model, switch_capabilities());
-    assert_eq!(block_on(configurator.switches()), Ok(factory_switches()));
-    let models = block_on(configurator.switch_models()).unwrap();
+    assert_eq!(configurator.switches(), Ok(factory_switches()));
+    let models = configurator.switch_models().unwrap();
     assert_eq!(models.len(), usize::from(SwitchModel::COUNT));
     assert_eq!(
         models.first(),
@@ -999,10 +1008,7 @@ fn a_fresh_keyboard_has_the_factory_switch_on_every_key_and_lists_the_known_mode
             ..switch_capabilities()
         },
     );
-    assert_eq!(
-        block_on(narrow.switch_models()).map(|models| models.len()),
-        Ok(3)
-    );
+    assert_eq!(narrow.switch_models().map(|models| models.len()), Ok(3));
     for id in 0..SwitchModel::COUNT {
         assert_eq!(
             keys.fitted_switch(usize::from(id), kind(id)),
@@ -1018,12 +1024,12 @@ fn switches_reach_the_keys_at_once_are_stored_by_save_and_dropped_by_revert() {
     let shared = profile::Shared::new();
     let mut settings = storage();
     {
-        let model = Mutex::new(open(&keys, &shared, Some(&mut settings)));
+        let model = RefCell::new(open(&keys, &shared, Some(&mut settings)));
         let mut configurator = Configurator::new(&model, switch_capabilities());
         let _ = keys.take_switch_change();
-        block_on(configurator.set_switches(mixed_switches())).unwrap();
+        configurator.set_switches(mixed_switches()).unwrap();
         assert!(keys.take_switch_change());
-        assert_eq!(block_on(configurator.switches()), Ok(mixed_switches()));
+        assert_eq!(configurator.switches(), Ok(mixed_switches()));
         assert_eq!(
             keys.fitted_switch(0, SwitchModel::DEFAULT),
             analog::Switch::new(kind(2), None)
@@ -1032,23 +1038,23 @@ fn switches_reach_the_keys_at_once_are_stored_by_save_and_dropped_by_revert() {
             keys.fitted_switch(1, SwitchModel::DEFAULT),
             analog::Switch::new(kind(0), Some(20))
         );
-        block_on(configurator.revert()).unwrap();
-        assert_eq!(block_on(configurator.switches()), Ok(factory_switches()));
+        configurator.revert().unwrap();
+        assert_eq!(configurator.switches(), Ok(factory_switches()));
         assert!(keys.take_switch_change());
         assert_eq!(
             keys.fitted_switch(1, kind(1)),
             analog::Switch::new(kind(1), None)
         );
-        block_on(configurator.revert()).unwrap();
+        configurator.revert().unwrap();
         assert!(!keys.take_switch_change());
-        block_on(configurator.set_switches(mixed_switches())).unwrap();
-        block_on(configurator.save()).unwrap();
-        assert_eq!(block_on(configurator.profile_revision(Slot::new(0))), Ok(0));
-        block_on(configurator.revert()).unwrap();
-        assert_eq!(block_on(configurator.switches()), Ok(mixed_switches()));
+        configurator.set_switches(mixed_switches()).unwrap();
+        configurator.save().unwrap();
+        assert_eq!(configurator.profile_revision(Slot::new(0)), Ok(0));
+        configurator.revert().unwrap();
+        assert_eq!(configurator.switches(), Ok(mixed_switches()));
     }
     assert_eq!(
-        block_on(settings.load::<switches::Settings>(Scope::Global)),
+        settings.load::<switches::Settings>(Scope::Global),
         Ok(Some(mixed_switches()))
     );
     let restarted = keys::Shared::new();
@@ -1065,18 +1071,18 @@ fn switches_reach_the_keys_at_once_are_stored_by_save_and_dropped_by_revert() {
 fn switches_the_keyboard_cannot_fit_are_refused_and_change_nothing() {
     let keys = keys::Shared::new();
     let shared = profile::Shared::new();
-    let model = Mutex::new(open(&keys, &shared, None));
+    let model = RefCell::new(open(&keys, &shared, None));
     let mut configurator = Configurator::new(&model, switch_capabilities());
     let mut longest = factory_switches();
     longest.keys[0] = Some(chosen(0, 79));
     longest.keys[1] = Some(chosen(2, 65));
-    assert_eq!(block_on(configurator.set_switches(longest.clone())), Ok(()));
+    assert_eq!(configurator.set_switches(longest.clone()), Ok(()));
     let _ = keys.take_switch_change();
     for (model, offset, travel) in [(0, 80, 80), (0, 255, 80), (2, 66, 66)] {
         let mut beyond = longest.clone();
         beyond.keys[2] = Some(chosen(model, offset));
         assert_eq!(
-            block_on(configurator.set_switches(beyond)),
+            configurator.set_switches(beyond),
             Err(Rejection::Invalid(Invalid::TravelOffsetReachesTravel {
                 model,
                 offset,
@@ -1089,7 +1095,7 @@ fn switches_the_keyboard_cannot_fit_are_refused_and_change_nothing() {
         ..longest.clone()
     };
     assert_eq!(
-        block_on(configurator.set_switches(default_beyond)),
+        configurator.set_switches(default_beyond),
         Err(Rejection::Invalid(Invalid::TravelOffsetReachesTravel {
             model: 0,
             offset: 80,
@@ -1099,7 +1105,7 @@ fn switches_the_keyboard_cannot_fit_are_refused_and_change_nothing() {
     let mut unknown = longest.clone();
     unknown.keys[2] = Some(chosen(SwitchModel::COUNT, 0));
     assert_eq!(
-        block_on(configurator.set_switches(unknown)),
+        configurator.set_switches(unknown),
         Err(Rejection::Invalid(Invalid::SwitchModelUnknown(
             SwitchModel::COUNT
         )))
@@ -1110,15 +1116,12 @@ fn switches_the_keyboard_cannot_fit_are_refused_and_change_nothing() {
         *key = Some(chosen(1, offset));
     }
     assert_eq!(
-        block_on(configurator.set_switches(many)),
+        configurator.set_switches(many),
         Err(Rejection::Invalid(Invalid::TunedSwitchesExceedLimit))
     );
     assert!(!keys.take_switch_change());
-    assert_eq!(block_on(configurator.switches()), Ok(longest));
-    assert_eq!(
-        block_on(configurator.save()),
-        Err(Rejection::StorageInaccessible)
-    );
+    assert_eq!(configurator.switches(), Ok(longest));
+    assert_eq!(configurator.save(), Err(Rejection::StorageInaccessible));
 }
 
 #[test]
@@ -1134,7 +1137,7 @@ fn a_stored_switch_setting_that_fails_validation_gives_way_to_the_factory_switch
     for stored in [beyond, short, unknown] {
         let keys = keys::Shared::new();
         let mut settings = storage();
-        block_on(settings.store(Scope::Global, &stored)).unwrap();
+        settings.store(Scope::Global, &stored).unwrap();
         let model = open(&keys, &shared, Some(&mut settings));
         assert_eq!(model.switches(), factory_switches(), "{stored:?}");
         assert_eq!(
@@ -1150,64 +1153,58 @@ fn the_chosen_layout_is_stored_by_save_and_in_effect_from_the_next_start() {
     let shared = profile::Shared::new();
     let mut settings = storage();
     {
-        let model = Mutex::new(open(&keys, &shared, Some(&mut settings)));
+        let model = RefCell::new(open(&keys, &shared, Some(&mut settings)));
         let mut configurator = Configurator::new(&model, switch_capabilities());
+        assert_eq!(configurator.set_layout(device::Layout::Iso), Ok(()));
         assert_eq!(
-            block_on(configurator.set_layout(device::Layout::Iso)),
-            Ok(())
-        );
-        assert_eq!(
-            block_on(configurator.layout()),
+            configurator.layout(),
             Ok(layouts(device::Layout::Ansi, device::Layout::Iso))
         );
-        block_on(configurator.revert()).unwrap();
+        configurator.revert().unwrap();
         assert_eq!(
-            block_on(configurator.layout()),
+            configurator.layout(),
             Ok(layouts(device::Layout::Ansi, device::Layout::Ansi))
         );
-        block_on(configurator.save()).unwrap();
+        configurator.save().unwrap();
     }
-    assert_eq!(
-        block_on(settings.load::<LayoutOverride>(Scope::Global)),
-        Ok(None)
-    );
+    assert_eq!(settings.load::<LayoutOverride>(Scope::Global), Ok(None));
     {
-        let model = Mutex::new(open(&keys, &shared, Some(&mut settings)));
+        let model = RefCell::new(open(&keys, &shared, Some(&mut settings)));
         let mut configurator = Configurator::new(&model, switch_capabilities());
-        block_on(configurator.set_layout(device::Layout::Iso)).unwrap();
-        block_on(configurator.save()).unwrap();
-        assert_eq!(block_on(configurator.profile_revision(Slot::new(0))), Ok(0));
-        block_on(configurator.revert()).unwrap();
+        configurator.set_layout(device::Layout::Iso).unwrap();
+        configurator.save().unwrap();
+        assert_eq!(configurator.profile_revision(Slot::new(0)), Ok(0));
+        configurator.revert().unwrap();
         assert_eq!(
-            block_on(configurator.layout()),
+            configurator.layout(),
             Ok(layouts(device::Layout::Ansi, device::Layout::Iso))
         );
     }
-    let variant = block_on(LayoutOverride::variant_or(&mut settings, 0));
+    let variant = LayoutOverride::variant_or(&mut settings, 0);
     assert_eq!(variant, 1);
     let mut restarted: ProfileModel<'_> =
         Model::new(&keys, &shared, Some(&mut settings), &FACTORY, variant, 4)
             .with_factory_variant(0);
-    block_on(restarted.load());
-    let model = Mutex::new(restarted);
+    restarted.load();
+    let model = RefCell::new(restarted);
     let mut configurator = Configurator::new(&model, switch_capabilities());
     assert_eq!(
-        block_on(configurator.layout()),
+        configurator.layout(),
         Ok(layouts(device::Layout::Iso, device::Layout::Iso))
     );
-    block_on(configurator.set_layout(device::Layout::Ansi)).unwrap();
+    configurator.set_layout(device::Layout::Ansi).unwrap();
     assert_eq!(
-        block_on(configurator.layout()),
+        configurator.layout(),
         Ok(layouts(device::Layout::Iso, device::Layout::Ansi))
     );
-    block_on(configurator.revert()).unwrap();
+    configurator.revert().unwrap();
     assert_eq!(
-        block_on(configurator.layout()),
+        configurator.layout(),
         Ok(layouts(device::Layout::Iso, device::Layout::Iso))
     );
-    block_on(configurator.factory_reset()).unwrap();
+    configurator.factory_reset().unwrap();
     assert_eq!(
-        block_on(configurator.layout()),
+        configurator.layout(),
         Ok(layouts(device::Layout::Iso, device::Layout::Ansi))
     );
 }
@@ -1220,25 +1217,25 @@ pub(crate) const fn layouts(active: device::Layout, chosen: device::Layout) -> d
 fn a_layout_the_keyboard_cannot_have_is_refused() {
     let keys = keys::Shared::new();
     let shared = profile::Shared::new();
-    let model = Mutex::new(open(&keys, &shared, None));
+    let model = RefCell::new(open(&keys, &shared, None));
     let mut configurator = Configurator::new(&model, switch_capabilities());
     assert_eq!(
-        block_on(configurator.set_layout(device::Layout::Jis)),
+        configurator.set_layout(device::Layout::Jis),
         Err(Rejection::Invalid(Invalid::LayoutMissing(
             device::Layout::Jis
         )))
     );
-    assert_eq!(block_on(configurator.save()), Ok(()));
+    assert_eq!(configurator.save(), Ok(()));
 }
 
 #[test]
 fn a_stored_layout_outside_the_known_layouts_gives_way_to_the_factory_layout() {
     let mut settings = storage();
-    assert_eq!(block_on(LayoutOverride::variant_or(&mut settings, 1)), 1);
-    block_on(settings.store(Scope::Global, &LayoutOverride(2))).unwrap();
-    assert_eq!(block_on(LayoutOverride::variant_or(&mut settings, 1)), 2);
-    block_on(settings.store(Scope::Global, &LayoutOverride(3))).unwrap();
-    assert_eq!(block_on(LayoutOverride::variant_or(&mut settings, 1)), 1);
+    assert_eq!(LayoutOverride::variant_or(&mut settings, 1), 1);
+    settings.store(Scope::Global, &LayoutOverride(2)).unwrap();
+    assert_eq!(LayoutOverride::variant_or(&mut settings, 1), 2);
+    settings.store(Scope::Global, &LayoutOverride(3)).unwrap();
+    assert_eq!(LayoutOverride::variant_or(&mut settings, 1), 1);
 }
 
 #[test]
@@ -1247,21 +1244,21 @@ fn a_factory_reset_returns_the_switches_and_the_layout_to_the_factory() {
     let shared = profile::Shared::new();
     let mut settings = storage();
     {
-        let model = Mutex::new(open(&keys, &shared, Some(&mut settings)));
+        let model = RefCell::new(open(&keys, &shared, Some(&mut settings)));
         let mut configurator = Configurator::new(&model, switch_capabilities());
-        block_on(configurator.set_switches(mixed_switches())).unwrap();
-        block_on(configurator.set_layout(device::Layout::Iso)).unwrap();
-        block_on(configurator.save()).unwrap();
+        configurator.set_switches(mixed_switches()).unwrap();
+        configurator.set_layout(device::Layout::Iso).unwrap();
+        configurator.save().unwrap();
         let _ = keys.take_switch_change();
-        block_on(configurator.factory_reset()).unwrap();
-        assert_eq!(block_on(configurator.switches()), Ok(factory_switches()));
+        configurator.factory_reset().unwrap();
+        assert_eq!(configurator.switches(), Ok(factory_switches()));
         assert!(keys.take_switch_change());
         assert_eq!(
-            block_on(configurator.layout()),
+            configurator.layout(),
             Ok(layouts(device::Layout::Ansi, device::Layout::Ansi))
         );
     }
-    assert_eq!(block_on(LayoutOverride::variant_or(&mut settings, 0)), 0);
+    assert_eq!(LayoutOverride::variant_or(&mut settings, 0), 0);
 }
 
 #[test]
@@ -1285,8 +1282,8 @@ fn the_default_keymap_is_the_factory_keymap_of_the_layout_in_effect_on_every_lay
         ),
     ] {
         let mut model = Model::new(&keys, &shared, None, &LAYERED, variant, 4);
-        block_on(model.load());
-        let model: Mutex<Mutual, ProfileModel<'_>> = Mutex::new(model);
+        model.load();
+        let model: RefCell<ProfileModel<'_>> = RefCell::new(model);
         let mut configurator = Configurator::new(&model, switch_capabilities());
         let mut keymap = Keymap::new();
         for (layer, expected) in [
@@ -1294,11 +1291,13 @@ fn the_default_keymap_is_the_factory_keymap_of_the_layout_in_effect_on_every_lay
             (Layer::One, function),
             (Layer::Two, Vec::from_array([Action::None; ROWS * COLUMNS])),
         ] {
-            block_on(configurator.default_keymap(layer, &mut keymap)).unwrap();
+            configurator.default_keymap(layer, &mut keymap).unwrap();
             assert_eq!(keymap, expected, "variant {variant}, {layer:?}");
             assert_eq!(keymap.len(), key_count);
             let mut unstored = Keymap::new();
-            block_on(configurator.keymap(Slot::new(1), layer, &mut unstored)).unwrap();
+            configurator
+                .keymap(Slot::new(1), layer, &mut unstored)
+                .unwrap();
             assert_eq!(unstored, expected, "variant {variant}, {layer:?}");
         }
     }
@@ -1317,31 +1316,25 @@ fn a_profile_icon_stays_with_its_profile_and_is_saved_like_its_name() {
     {
         let mut model = open(&keys, &shared, Some(&mut settings));
         for slot in [0, 1] {
-            assert_eq!(
-                block_on(model.info(Slot::new(slot))).map(|info| info.icon),
-                Ok(0)
-            );
+            assert_eq!(model.info(Slot::new(slot)).map(|info| info.icon), Ok(0));
         }
-        block_on(model.set_info(Slot::new(0), iconic(9))).unwrap();
-        assert_eq!(block_on(model.info(Slot::new(0))), Ok(iconic(9)));
-        block_on(model.revert());
-        assert_eq!(
-            block_on(model.info(Slot::new(0))).map(|info| info.icon),
-            Ok(0)
-        );
-        block_on(model.set_info(Slot::new(0), iconic(9))).unwrap();
-        block_on(model.save()).unwrap();
-        block_on(model.set_info(Slot::new(1), iconic(u8::MAX))).unwrap();
+        model.set_info(Slot::new(0), iconic(9)).unwrap();
+        assert_eq!(model.info(Slot::new(0)), Ok(iconic(9)));
+        model.revert();
+        assert_eq!(model.info(Slot::new(0)).map(|info| info.icon), Ok(0));
+        model.set_info(Slot::new(0), iconic(9)).unwrap();
+        model.save().unwrap();
+        model.set_info(Slot::new(1), iconic(u8::MAX)).unwrap();
     }
     let mut reopened = open(&keys, &shared, Some(&mut settings));
-    assert_eq!(block_on(reopened.info(Slot::new(0))), Ok(iconic(9)));
-    assert_eq!(block_on(reopened.info(Slot::new(1))), Ok(iconic(u8::MAX)));
+    assert_eq!(reopened.info(Slot::new(0)), Ok(iconic(9)));
+    assert_eq!(reopened.info(Slot::new(1)), Ok(iconic(u8::MAX)));
 }
 
 fn names(model: &mut ProfileModel<'_>) -> std::vec::Vec<String> {
     (0..model.summary().count)
         .map(|slot| {
-            block_on(model.info(Slot::new(slot))).map_or_else(
+            model.info(Slot::new(slot)).map_or_else(
                 |rejection| rejection.to_string(),
                 |info| info.name.as_str().to_owned(),
             )
@@ -1370,10 +1363,12 @@ fn swapped_profiles_keep_their_parts_and_the_active_profile_stays_active() {
     };
     {
         let mut model = open(&keys, &shared, Some(&mut settings));
-        block_on(model.set_keymap(Slot::new(1), Layer::One, &typed(0x05))).unwrap();
-        block_on(model.set_lighting(Slot::new(0), dim.clone())).unwrap();
-        let revision = block_on(model.revision(Slot::new(1))).unwrap();
-        block_on(model.swap(Slot::new(0), Slot::new(1))).unwrap();
+        model
+            .set_keymap(Slot::new(1), Layer::One, &typed(0x05))
+            .unwrap();
+        model.set_lighting(Slot::new(0), dim.clone()).unwrap();
+        let revision = model.revision(Slot::new(1)).unwrap();
+        model.swap(Slot::new(0), Slot::new(1)).unwrap();
         assert_eq!(names(&mut model), ["Rapid Profile", "Typing Profile"]);
         assert_eq!(
             model.summary(),
@@ -1385,27 +1380,31 @@ fn swapped_profiles_keep_their_parts_and_the_active_profile_stays_active() {
             }
         );
         assert_eq!(keys.profiles(), (2, 1));
-        assert_eq!(block_on(model.revision(Slot::new(0))), Ok(revision));
+        assert_eq!(model.revision(Slot::new(0)), Ok(revision));
         let mut keymap = Keymap::new();
-        block_on(model.keymap(Slot::new(0), Layer::One, &mut keymap)).unwrap();
+        model.keymap(Slot::new(0), Layer::One, &mut keymap).unwrap();
         assert_eq!(keymap, typed(0x05));
         assert_eq!(
-            block_on(model.settings(Slot::new(0))).map(|settings| settings.rapid_trigger_enabled),
+            model
+                .settings(Slot::new(0))
+                .map(|settings| settings.rapid_trigger_enabled),
             Ok(true)
         );
         assert_eq!(
-            block_on(model.lighting(Slot::new(0))).map(|settings| settings.brightness),
+            model
+                .lighting(Slot::new(0))
+                .map(|settings| settings.brightness),
             Ok(128)
         );
-        assert_eq!(block_on(model.lighting(Slot::new(1))), Ok(dim.clone()));
-        block_on(model.save()).unwrap();
-        block_on(model.swap(Slot::new(1), Slot::new(1))).unwrap();
+        assert_eq!(model.lighting(Slot::new(1)), Ok(dim.clone()));
+        model.save().unwrap();
+        model.swap(Slot::new(1), Slot::new(1)).unwrap();
     }
     let mut reopened = open(&keys, &shared, Some(&mut settings));
     assert_eq!(names(&mut reopened), ["Rapid Profile", "Typing Profile"]);
     assert_eq!(reopened.summary().active, Slot::new(1));
-    assert_eq!(block_on(reopened.lighting(Slot::new(1))), Ok(dim));
-    block_on(reopened.activate(Slot::new(0))).unwrap();
+    assert_eq!(reopened.lighting(Slot::new(1)), Ok(dim));
+    reopened.activate(Slot::new(0)).unwrap();
     assert_eq!(
         keys.read(|profile| profile.keymaps.0[1].clone()),
         Some(typed(0x05))
@@ -1419,31 +1418,33 @@ fn a_moved_profile_takes_its_new_slot_and_the_profiles_between_close_up() {
     let mut settings = storage();
     let mut model = open(&keys, &shared, Some(&mut settings));
     for _ in 0..2 {
-        block_on(model.create(Onboard)).unwrap();
+        model.create(Onboard).unwrap();
     }
     for (slot, name) in [(1, "B"), (2, "C"), (3, "D")] {
-        block_on(model.set_info(Slot::new(slot), named(name))).unwrap();
+        model.set_info(Slot::new(slot), named(name)).unwrap();
     }
-    block_on(model.shift(Slot::new(3), Slot::new(0))).unwrap();
+    model.shift(Slot::new(3), Slot::new(0)).unwrap();
     assert_eq!(names(&mut model), ["D", "Typing Profile", "B", "C"]);
     assert_eq!(model.summary().active, Slot::new(1));
-    block_on(model.shift(Slot::new(1), Slot::new(3))).unwrap();
+    model.shift(Slot::new(1), Slot::new(3)).unwrap();
     assert_eq!(names(&mut model), ["D", "B", "C", "Typing Profile"]);
     assert_eq!(model.summary().active, Slot::new(3));
     assert_eq!(keys.profiles(), (4, 3));
-    block_on(model.shift(Slot::new(2), Slot::new(2))).unwrap();
+    model.shift(Slot::new(2), Slot::new(2)).unwrap();
     assert_eq!(
-        block_on(model.shift(Slot::new(0), Slot::new(4))),
+        model.shift(Slot::new(0), Slot::new(4)),
         Err(Rejection::ProfileMissing(4))
     );
     assert_eq!(names(&mut model), ["D", "B", "C", "Typing Profile"]);
-    block_on(model.delete(Slot::new(3))).unwrap();
+    model.delete(Slot::new(3)).unwrap();
     assert_eq!(names(&mut model), ["D", "B", "C"]);
     assert_eq!(model.summary().active, Slot::new(2));
-    assert_eq!(block_on(model.create(Onboard)), Ok(Slot::new(3)));
+    assert_eq!(model.create(Onboard), Ok(Slot::new(3)));
     assert_eq!(names(&mut model), ["D", "B", "C", "Typing Profile"]);
     assert_eq!(
-        block_on(model.lighting(Slot::new(3))).map(|settings| settings.brightness),
+        model
+            .lighting(Slot::new(3))
+            .map(|settings| settings.brightness),
         Ok(255)
     );
 }
@@ -1459,12 +1460,13 @@ fn a_stored_order_is_kept_only_while_it_places_every_profile_slot_once() {
         (&[1, 0][..], ["Typing Profile", "Rapid Profile"]),
         (&[1, 0, 2, 3, 4][..], ["Typing Profile", "Rapid Profile"]),
     ] {
-        block_on(settings.store_with(
-            RecordKey::of::<Order>(Scope::Global),
-            <Order as Record>::VERSION,
-            |body| postcard::to_slice(stored, body).ok().map(|body| body.len()),
-        ))
-        .unwrap();
+        settings
+            .store_with(
+                RecordKey::of::<Order>(Scope::Global),
+                <Order as Record>::VERSION,
+                &|body| postcard::to_slice(stored, body).ok().map(|body| body.len()),
+            )
+            .unwrap();
         let mut model = open(&keys, &shared, Some(&mut settings));
         assert_eq!(names(&mut model), expected, "{stored:?}");
     }
@@ -1478,18 +1480,18 @@ fn a_reorder_that_cannot_be_stored_changes_nothing() {
     let mut model = open_probed(&keys, &shared, &mut settings);
     watch.fail_writes(true);
     assert_eq!(
-        block_on(model.swap(Slot::new(0), Slot::new(1))),
+        model.swap(Slot::new(0), Slot::new(1)),
         Err(Rejection::StorageInaccessible)
     );
     assert_eq!(
-        block_on(model.shift(Slot::new(1), Slot::new(0))),
+        model.shift(Slot::new(1), Slot::new(0)),
         Err(Rejection::StorageInaccessible)
     );
-    assert_eq!(block_on(model.swap(Slot::new(1), Slot::new(1))), Ok(()));
+    assert_eq!(model.swap(Slot::new(1), Slot::new(1)), Ok(()));
     assert_eq!(model.summary().active, Slot::new(0));
     assert_eq!(keys.profiles(), (2, 0));
     assert_eq!(
-        block_on(model.info(Slot::new(0))).map(|info| info.name),
+        model.info(Slot::new(0)).map(|info| info.name),
         Ok("Typing Profile".try_into().unwrap())
     );
 }
@@ -1502,7 +1504,7 @@ fn a_power_cut_while_profiles_swap_leaves_them_in_one_order_or_the_other() {
         let mut settings = storage_on(Nor::new(6));
         {
             let mut model = open(&keys, &shared, Some(&mut settings));
-            block_on(model.set_info(Slot::new(1), named("Mine"))).unwrap();
+            model.set_info(Slot::new(1), named("Mine")).unwrap();
         }
         settings.release().map(Partition::release).unwrap()
     };
@@ -1510,8 +1512,7 @@ fn a_power_cut_while_profiles_swap_leaves_them_in_one_order_or_the_other() {
         let keys = keys::Shared::new();
         let shared = profile::Shared::new();
         let mut settings = storage_on(base.cut_after(cut));
-        let swapped =
-            block_on(open(&keys, &shared, Some(&mut settings)).swap(Slot::new(0), Slot::new(1)));
+        let swapped = open(&keys, &shared, Some(&mut settings)).swap(Slot::new(0), Slot::new(1));
         let nor = settings.release().map(Partition::release).unwrap();
         if !nor.was_cut() {
             swapped.unwrap();
@@ -1528,7 +1529,7 @@ fn a_power_cut_while_profiles_swap_leaves_them_in_one_order_or_the_other() {
         );
         let active = model.summary().active;
         assert_eq!(
-            block_on(model.info(active)).map(|info| info.name),
+            model.info(active).map(|info| info.name),
             Ok("Typing Profile".try_into().unwrap()),
             "cut {cut}"
         );

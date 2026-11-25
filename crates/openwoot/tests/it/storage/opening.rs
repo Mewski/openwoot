@@ -1,6 +1,5 @@
 use core::future::{Future, ready};
 
-use embassy_futures::block_on;
 use embedded_hal::spi::{Error as SpiError, ErrorKind, ErrorType};
 use embedded_hal_async::spi::{Operation, SpiDevice};
 use openwoot::storage::{Error, InDeviceInfo, NorLayout, NorSector, Settings, Storage};
@@ -71,16 +70,16 @@ impl SpiDevice for StuckHigh {
 }
 
 fn open_on<D: SpiDevice>(device: D, cell: &mut Settings<SpiNor<D>>) -> Storage<'_, SpiNor<D>> {
-    block_on(Storage::open(
+    Storage::open(
         SpiNor::new(device, CAPACITY),
         cell,
         LAYOUT.settings_region(),
-        NorSector {
+        &NorSector {
             offset: DEVICE_INFO.start,
         },
-        InDeviceInfo,
+        &InDeviceInfo,
         false,
-    ))
+    )
 }
 
 #[test]

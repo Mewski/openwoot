@@ -29,11 +29,9 @@ pub struct Stored<'a> {
     pub body: &'a [u8],
 }
 
-pub(super) struct Encoding<'r, R>(pub(super) &'r R);
-
-pub(super) struct Encoder<F> {
+pub(super) struct Encoder<'e> {
     pub(super) version: u8,
-    pub(super) encode: F,
+    pub(super) encode: &'e dyn Fn(&mut [u8]) -> Option<usize>,
 }
 
 impl RecordKey {
@@ -111,23 +109,7 @@ impl<'a> Value<'a> for Stored<'a> {
     }
 }
 
-impl<'a, R: Record> Value<'a> for Encoding<'_, R> {
-    fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
-        let (version, body) = split(buffer)?;
-        *version = R::VERSION;
-        let body = postcard::to_slice(self.0, body).map_err(|error| match error {
-            postcard::Error::SerializeBufferFull => SerializationError::BufferTooSmall,
-            _ => SerializationError::InvalidData,
-        })?;
-        Ok(VERSION_LEN + body.len())
-    }
-
-    fn deserialize_from(_buffer: &'a [u8]) -> Result<(Self, usize), SerializationError> {
-        Err(SerializationError::InvalidData)
-    }
-}
-
-impl<'a, F: Fn(&mut [u8]) -> Option<usize>> Value<'a> for Encoder<F> {
+impl<'a> Value<'a> for Encoder<'_> {
     fn serialize_into(&self, buffer: &mut [u8]) -> Result<usize, SerializationError> {
         let (version, body) = split(buffer)?;
         *version = self.version;
@@ -142,6 +124,12 @@ impl<'a, F: Fn(&mut [u8]) -> Option<usize>> Value<'a> for Encoder<F> {
     fn deserialize_from(_buffer: &'a [u8]) -> Result<(Self, usize), SerializationError> {
         Err(SerializationError::InvalidData)
     }
+}
+
+pub(crate) fn encode(value: &impl Serialize, body: &mut [u8]) -> Option<usize> {
+    postcard::to_slice(value, body)
+        .ok()
+        .map(|encoded| encoded.len())
 }
 
 fn split(buffer: &mut [u8]) -> Result<(&mut u8, &mut [u8]), SerializationError> {
@@ -179,9 +167,12 @@ mod tests {
     #[test]
     fn values_carry_their_version_in_front_of_the_body() {
         let mut buffer = [0; 8];
-        let len = Encoding(&Brightness(200))
-            .serialize_into(&mut buffer)
-            .unwrap();
+        let len = Encoder {
+            version: Brightness::VERSION,
+            encode: &|body| encode(&Brightness(200), body),
+        }
+        .serialize_into(&mut buffer)
+        .unwrap();
         assert_eq!(buffer[..len], [2, 200]);
         let (stored, _) = Stored::deserialize_from(&buffer[..len]).unwrap();
         assert_eq!(
@@ -192,9 +183,13 @@ mod tests {
             }
         );
         assert_eq!(stored.decode::<Brightness>(), Some(Brightness(200)));
-        assert_eq!(
-            Encoding(&Brightness(1)).serialize_into(&mut [0; 1]),
-            Err(SerializationError::BufferTooSmall)
+        assert!(
+            Encoder {
+                version: Brightness::VERSION,
+                encode: &|body| encode(&Brightness(1), body),
+            }
+            .serialize_into(&mut [0; 1])
+            .is_err()
         );
     }
 
@@ -212,7 +207,7 @@ mod tests {
         let mut buffer = [0; 8];
         let encoder = Encoder {
             version: 3,
-            encode: |body: &mut [u8]| {
+            encode: &|body: &mut [u8]| {
                 postcard::to_slice(&Brightness(9), body)
                     .ok()
                     .map(|body| body.len())
@@ -227,7 +222,7 @@ mod tests {
         let mut buffer = [0; 2 * MAX_VALUE_LEN];
         let whole = Encoder {
             version: 1,
-            encode: |body: &mut [u8]| Some(body.len()),
+            encode: &|body: &mut [u8]| Some(body.len()),
         };
         assert_eq!(
             whole.serialize_into(&mut buffer),
@@ -240,7 +235,7 @@ mod tests {
         let mut buffer = [0; 8];
         let failing = Encoder {
             version: 1,
-            encode: |_: &mut [u8]| None,
+            encode: &|_: &mut [u8]| None,
         };
         assert_eq!(
             failing.serialize_into(&mut buffer),
@@ -248,16 +243,16 @@ mod tests {
         );
         let oversized = Encoder {
             version: 1,
-            encode: |body: &mut [u8]| Some(body.len() + 1),
+            encode: &|body: &mut [u8]| Some(body.len() + 1),
         };
         assert_eq!(
             oversized.serialize_into(&mut buffer),
             Err(SerializationError::BufferTooSmall)
         );
         assert!(
-            Encoder::<fn(&mut [u8]) -> Option<usize>> {
+            Encoder {
                 version: 1,
-                encode: |_| Some(0),
+                encode: &|_| Some(0),
             }
             .serialize_into(&mut [])
             .is_err()

@@ -15,6 +15,7 @@ pub(super) enum Kind {
     Pac,
     ChipHal,
     Board,
+    BoardFirmware,
     Host,
     Cli,
     Gui,
@@ -42,6 +43,14 @@ impl Kind {
                 Self::ChipHal,
                 Self::Pac,
             ],
+            Self::BoardFirmware => &[
+                Self::Firmware,
+                Self::Protocol,
+                Self::Drivers,
+                Self::Image,
+                Self::ChipHal,
+                Self::Board,
+            ],
             Self::Host => &[Self::Protocol, Self::Image],
             Self::Cli | Self::Gui => &[Self::Protocol, Self::Image, Self::Host],
             Self::Xtask => &[Self::Image],
@@ -59,6 +68,7 @@ impl fmt::Display for Kind {
             Self::Pac => "PAC",
             Self::ChipHal => "chip HAL",
             Self::Board => "board",
+            Self::BoardFirmware => "board firmware",
             Self::Host => "host",
             Self::Cli => "CLI",
             Self::Gui => "GUI",
@@ -88,6 +98,7 @@ pub(super) fn classify(workspace: &Workspace) -> Result<Vec<Member<'_>>> {
                 "xtask" => Kind::Xtask,
                 _ if workspace.is_pac(package) => Kind::Pac,
                 _ if workspace.is_board(package) => Kind::Board,
+                _ if workspace.is_board_firmware(package) => Kind::BoardFirmware,
                 _ if workspace::chip_target(package).is_some() => Kind::ChipHal,
                 name => bail!("package `{name}` belongs to no known kind of crate"),
             };
@@ -245,6 +256,21 @@ mod tests {
                 .contains(&Kind::ChipHal)
         );
         assert!(!Kind::Board.allowed_dependencies().contains(&Kind::Cli));
+        assert!(
+            Kind::BoardFirmware
+                .allowed_dependencies()
+                .contains(&Kind::Board)
+        );
+        assert!(
+            !Kind::BoardFirmware
+                .allowed_dependencies()
+                .contains(&Kind::Pac)
+        );
+        assert!(
+            !Kind::Board
+                .allowed_dependencies()
+                .contains(&Kind::BoardFirmware)
+        );
         assert!(!Kind::Cli.allowed_dependencies().contains(&Kind::Firmware));
         assert!(!Kind::Board.allowed_dependencies().contains(&Kind::Host));
         assert!(!Kind::Host.allowed_dependencies().contains(&Kind::Cli));
@@ -270,6 +296,7 @@ mod tests {
     fn kinds_read_as_words_in_messages() {
         assert_eq!(Kind::ChipHal.to_string(), "chip HAL");
         assert_eq!(Kind::Board.to_string(), "board");
+        assert_eq!(Kind::BoardFirmware.to_string(), "board firmware");
         assert_eq!(Kind::Pac.to_string(), "PAC");
         assert_eq!(Kind::Host.to_string(), "host");
         assert_eq!(Kind::Gui.to_string(), "GUI");

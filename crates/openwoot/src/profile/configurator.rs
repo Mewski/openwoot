@@ -1,7 +1,10 @@
-use core::future::{Future, pending, ready};
+use core::{
+    cell::{RefCell, RefMut},
+    future::pending,
+};
 
 use embassy_futures::select::{Either3, select3};
-use embassy_sync::{blocking_mutex::raw::RawMutex, mutex::Mutex};
+use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_time::{Duration, Timer};
 use embassy_usb::driver;
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
@@ -19,29 +22,31 @@ use openwoot_protocol::{
 };
 
 use super::Model;
-use crate::{keys::switch_models, protocol::Configuration, usb::Speed};
+use crate::{keys::switch_models, lighting::Lightbar, protocol::Configuration, usb::Speed};
 
 const ACTIVE_PROFILE_SETTLE: Duration = Duration::from_secs(2);
 
-pub struct Configurator<'a, M, F, const ROWS: usize, const COLUMNS: usize>
+pub struct Configurator<'a, M, F, H, const ROWS: usize, const COLUMNS: usize>
 where
     M: RawMutex,
     F: MultiwriteNorFlash,
+    H: Lightbar,
 {
-    model: &'a Mutex<M, Model<'a, M, F, ROWS, COLUMNS>>,
+    model: &'a RefCell<Model<'a, M, F, H, ROWS, COLUMNS>>,
     capabilities: Capabilities,
     geometry: &'a [[[Option<geometry::Key>; COLUMNS]; ROWS]],
     negotiated_speed: Option<fn() -> Option<driver::Speed>>,
 }
 
-impl<'a, M, F, const ROWS: usize, const COLUMNS: usize> Configurator<'a, M, F, ROWS, COLUMNS>
+impl<'a, M, F, H, const ROWS: usize, const COLUMNS: usize> Configurator<'a, M, F, H, ROWS, COLUMNS>
 where
     M: RawMutex,
     F: MultiwriteNorFlash,
+    H: Lightbar,
 {
     #[must_use]
     pub const fn new(
-        model: &'a Mutex<M, Model<'a, M, F, ROWS, COLUMNS>>,
+        model: &'a RefCell<Model<'a, M, F, H, ROWS, COLUMNS>>,
         capabilities: Capabilities,
     ) -> Self {
         Self {
@@ -71,9 +76,9 @@ where
     }
 
     pub async fn serve(&self) -> ! {
-        let (keys, shared) = {
-            let model = self.model.lock().await;
-            (model.keys(), model.shared())
+        let (keys, shared) = match self.model.try_borrow() {
+            Ok(model) => (model.keys(), model.shared()),
+            Err(_) => pending().await,
         };
         let mut settling = false;
         loop {
@@ -87,21 +92,32 @@ where
             };
             match select3(keys.profile_request(), shared.brightness_saved(), settled).await {
                 Either3::First(profile) => {
-                    let _ = self.model.lock().await.switch(Slot::new(profile)).await;
+                    if let Ok(mut model) = self.model() {
+                        let _ = model.switch(Slot::new(profile));
+                    }
                     settling = true;
                 }
                 Either3::Second(_) => {
-                    let mut model = self.model.lock().await;
-                    if shared.take_brightness_save() {
-                        let _ = model.save_brightness().await;
+                    if let Ok(mut model) = self.model()
+                        && shared.take_brightness_save()
+                    {
+                        let _ = model.save_brightness();
                     }
                 }
                 Either3::Third(()) => {
-                    let _ = self.model.lock().await.store_active().await;
+                    if let Ok(mut model) = self.model() {
+                        let _ = model.store_active();
+                    }
                     settling = false;
                 }
             }
         }
+    }
+
+    fn model(&self) -> Result<RefMut<'_, Model<'a, M, F, H, ROWS, COLUMNS>>, Rejection> {
+        self.model
+            .try_borrow_mut()
+            .map_err(|_| Rejection::StorageInaccessible)
     }
 
     const fn require_lightbar(&self) -> Result<(), Rejection> {
@@ -130,19 +146,22 @@ where
     }
 }
 
-impl<M, F, const ROWS: usize, const COLUMNS: usize> Configuration
-    for Configurator<'_, M, F, ROWS, COLUMNS>
+impl<M, F, H, const ROWS: usize, const COLUMNS: usize> Configuration
+    for Configurator<'_, M, F, H, ROWS, COLUMNS>
 where
     M: RawMutex,
     F: MultiwriteNorFlash,
+    H: Lightbar,
 {
+    const LIGHTBAR: bool = H::PRESENT;
+
     fn capabilities(&self) -> Result<Capabilities, Rejection> {
         Ok(self.capabilities.clone())
     }
 
-    async fn device_settings(&mut self) -> Result<SettingsState, Rejection> {
+    fn device_settings(&mut self) -> Result<SettingsState, Rejection> {
         let (active, chosen) = {
-            let model = self.model.lock().await;
+            let model = self.model()?;
             (model.booted_device_settings(), model.device_settings())
         };
         Ok(SettingsState {
@@ -155,22 +174,22 @@ where
         })
     }
 
-    async fn set_device_settings(&mut self, settings: device::Settings) -> Result<(), Rejection> {
-        self.model.lock().await.set_device_settings(settings);
+    fn set_device_settings(&mut self, settings: device::Settings) -> Result<(), Rejection> {
+        self.model()?.set_device_settings(settings);
         Ok(())
     }
 
-    async fn device_name(&mut self) -> Result<device::Name, Rejection> {
-        Ok(self.model.lock().await.device_name().await)
+    fn device_name(&mut self) -> Result<device::Name, Rejection> {
+        Ok(self.model()?.device_name())
     }
 
-    async fn set_device_name(&mut self, name: device::Name) -> Result<(), Rejection> {
-        self.model.lock().await.set_device_name(name).await
+    fn set_device_name(&mut self, name: device::Name) -> Result<(), Rejection> {
+        self.model()?.set_device_name(name)
     }
 
-    async fn layout(&mut self) -> Result<LayoutState, Rejection> {
+    fn layout(&mut self) -> Result<LayoutState, Rejection> {
         let (active, chosen) = {
-            let model = self.model.lock().await;
+            let model = self.model()?;
             (model.variant(), model.chosen_variant())
         };
         Ok(LayoutState {
@@ -179,7 +198,7 @@ where
         })
     }
 
-    async fn set_layout(&mut self, layout: device::Layout) -> Result<(), Rejection> {
+    fn set_layout(&mut self, layout: device::Layout) -> Result<(), Rejection> {
         let variant = self
             .capabilities
             .layouts
@@ -187,12 +206,12 @@ where
             .position(|known| *known == layout)
             .and_then(|position| u8::try_from(position).ok())
             .ok_or(Invalid::LayoutMissing(layout))?;
-        self.model.lock().await.set_layout_variant(variant);
+        self.model()?.set_layout_variant(variant);
         Ok(())
     }
 
-    async fn key_geometry(&mut self, keys: &mut geometry::Keys) -> Result<(), Rejection> {
-        let variant = usize::from(self.model.lock().await.variant());
+    fn key_geometry(&mut self, keys: &mut geometry::Keys) -> Result<(), Rejection> {
+        let variant = usize::from(self.model()?.variant());
         let table = self
             .geometry
             .get(variant)
@@ -203,346 +222,279 @@ where
             .map_err(|_| Rejection::Unsupported)
     }
 
-    async fn default_keymap(&mut self, layer: Layer, keymap: &mut Keymap) -> Result<(), Rejection> {
-        self.model.lock().await.default_keymap(layer, keymap);
+    fn default_keymap(&mut self, layer: Layer, keymap: &mut Keymap) -> Result<(), Rejection> {
+        self.model()?.default_keymap(layer, keymap);
         Ok(())
     }
 
-    async fn global_settings(&mut self) -> Result<global::Settings, Rejection> {
-        Ok(self.model.lock().await.global_settings())
+    fn global_settings(&mut self) -> Result<global::Settings, Rejection> {
+        Ok(self.model()?.global_settings())
     }
 
-    async fn set_global_settings(&mut self, settings: global::Settings) -> Result<(), Rejection> {
-        self.model.lock().await.set_global_settings(settings);
+    fn set_global_settings(&mut self, settings: global::Settings) -> Result<(), Rejection> {
+        self.model()?.set_global_settings(settings);
         Ok(())
     }
 
-    async fn profiles(&mut self) -> Result<Summary, Rejection> {
-        Ok(self.model.lock().await.summary())
+    fn profiles(&mut self) -> Result<Summary, Rejection> {
+        Ok(self.model()?.summary())
     }
 
-    async fn create_profile(&mut self, namespace: Namespace) -> Result<Slot, Rejection> {
-        self.model.lock().await.create(namespace).await
+    fn create_profile(&mut self, namespace: Namespace) -> Result<Slot, Rejection> {
+        self.model()?.create(namespace)
     }
 
-    async fn select_linked_profile(&mut self, selection: Selection) -> Result<(), Rejection> {
-        self.model.lock().await.select_linked(selection).await
+    fn select_linked_profile(&mut self, selection: Selection) -> Result<(), Rejection> {
+        self.model()?.select_linked(selection)
     }
 
-    async fn app_link_count(&mut self, profile: Slot) -> Result<u8, Rejection> {
-        self.model.lock().await.app_link_count(profile).await
+    fn app_link_count(&mut self, profile: Slot) -> Result<u8, Rejection> {
+        self.model()?.app_link_count(profile)
     }
 
-    async fn app_link(
+    fn app_link(
         &mut self,
         profile: Slot,
         index: u8,
         link: &mut apps::Link,
     ) -> Result<(), Rejection> {
-        self.model.lock().await.app_link(profile, index, link).await
+        self.model()?.app_link(profile, index, link)
     }
 
-    async fn set_app_link(
+    fn set_app_link(
         &mut self,
         profile: Slot,
         index: u8,
         link: &apps::Link,
     ) -> Result<(), Rejection> {
-        self.model
-            .lock()
-            .await
-            .set_app_link(profile, index, link)
-            .await
+        self.model()?.set_app_link(profile, index, link)
     }
 
-    async fn delete_app_link(&mut self, profile: Slot, index: u8) -> Result<(), Rejection> {
-        self.model
-            .lock()
-            .await
-            .delete_app_link(profile, index)
-            .await
+    fn delete_app_link(&mut self, profile: Slot, index: u8) -> Result<(), Rejection> {
+        self.model()?.delete_app_link(profile, index)
     }
 
-    async fn delete_profile(&mut self, profile: Slot) -> Result<(), Rejection> {
-        self.model.lock().await.delete(profile).await
+    fn delete_profile(&mut self, profile: Slot) -> Result<(), Rejection> {
+        self.model()?.delete(profile)
     }
 
-    async fn activate_profile(&mut self, profile: Slot) -> Result<(), Rejection> {
-        self.model.lock().await.activate(profile).await
+    fn activate_profile(&mut self, profile: Slot) -> Result<(), Rejection> {
+        self.model()?.activate(profile)
     }
 
-    async fn swap_profiles(&mut self, first: Slot, second: Slot) -> Result<(), Rejection> {
-        self.model.lock().await.swap(first, second).await
+    fn swap_profiles(&mut self, first: Slot, second: Slot) -> Result<(), Rejection> {
+        self.model()?.swap(first, second)
     }
 
-    async fn move_profile(&mut self, from: Slot, to: Slot) -> Result<(), Rejection> {
-        self.model.lock().await.shift(from, to).await
+    fn move_profile(&mut self, from: Slot, to: Slot) -> Result<(), Rejection> {
+        self.model()?.shift(from, to)
     }
 
-    async fn profile_info(&mut self, profile: Slot) -> Result<Info, Rejection> {
-        self.model.lock().await.info(profile).await
+    fn profile_info(&mut self, profile: Slot) -> Result<Info, Rejection> {
+        self.model()?.info(profile)
     }
 
-    async fn set_profile_info(&mut self, profile: Slot, info: Info) -> Result<(), Rejection> {
-        self.model.lock().await.set_info(profile, info).await
+    fn set_profile_info(&mut self, profile: Slot, info: Info) -> Result<(), Rejection> {
+        self.model()?.set_info(profile, info)
     }
 
-    async fn profile_revision(&mut self, profile: Slot) -> Result<u32, Rejection> {
-        self.model.lock().await.revision(profile).await
+    fn profile_revision(&mut self, profile: Slot) -> Result<u32, Rejection> {
+        self.model()?.revision(profile)
     }
 
-    async fn key_settings(&mut self, profile: Slot) -> Result<keys::Settings, Rejection> {
-        self.model.lock().await.settings(profile).await
+    fn key_settings(&mut self, profile: Slot) -> Result<keys::Settings, Rejection> {
+        self.model()?.settings(profile)
     }
 
-    async fn set_key_settings(
+    fn set_key_settings(
         &mut self,
         profile: Slot,
         settings: keys::Settings,
     ) -> Result<(), Rejection> {
-        self.model
-            .lock()
-            .await
-            .set_settings(profile, settings)
-            .await
+        self.model()?.set_settings(profile, settings)
     }
 
-    async fn keymap(
+    fn keymap(
         &mut self,
         profile: Slot,
         layer: Layer,
         keymap: &mut Keymap,
     ) -> Result<(), Rejection> {
-        self.model.lock().await.keymap(profile, layer, keymap).await
+        self.model()?.keymap(profile, layer, keymap)
     }
 
-    async fn set_keymap(
+    fn set_keymap(
         &mut self,
         profile: Slot,
         layer: Layer,
         keymap: &Keymap,
     ) -> Result<(), Rejection> {
-        self.model
-            .lock()
-            .await
-            .set_keymap(profile, layer, keymap)
-            .await
+        self.model()?.set_keymap(profile, layer, keymap)
     }
 
-    async fn keymap_link(&mut self, profile: Slot) -> Result<bool, Rejection> {
-        self.model.lock().await.keymap_link(profile).await
+    fn keymap_link(&mut self, profile: Slot) -> Result<bool, Rejection> {
+        self.model()?.keymap_link(profile)
     }
 
-    async fn set_keymap_link(&mut self, profile: Slot, linked: bool) -> Result<(), Rejection> {
-        self.model
-            .lock()
-            .await
-            .set_keymap_link(profile, linked)
-            .await
+    fn set_keymap_link(&mut self, profile: Slot, linked: bool) -> Result<(), Rejection> {
+        self.model()?.set_keymap_link(profile, linked)
     }
 
-    async fn key_overrides(
-        &mut self,
-        profile: Slot,
-        overrides: &mut Overrides,
-    ) -> Result<(), Rejection> {
-        self.model.lock().await.overrides(profile, overrides).await
+    fn key_overrides(&mut self, profile: Slot, overrides: &mut Overrides) -> Result<(), Rejection> {
+        self.model()?.overrides(profile, overrides)
     }
 
-    async fn set_key_overrides(
-        &mut self,
-        profile: Slot,
-        overrides: &Overrides,
-    ) -> Result<(), Rejection> {
-        self.model
-            .lock()
-            .await
-            .set_overrides(profile, overrides)
-            .await
+    fn set_key_overrides(&mut self, profile: Slot, overrides: &Overrides) -> Result<(), Rejection> {
+        self.model()?.set_overrides(profile, overrides)
     }
 
-    async fn advanced_keys(
-        &mut self,
-        profile: Slot,
-        keys: &mut advanced::Keys,
-    ) -> Result<(), Rejection> {
-        self.model.lock().await.advanced(profile, keys).await
+    fn advanced_keys(&mut self, profile: Slot, keys: &mut advanced::Keys) -> Result<(), Rejection> {
+        self.model()?.advanced(profile, keys)
     }
 
-    async fn set_advanced_keys(
-        &mut self,
-        profile: Slot,
-        keys: &advanced::Keys,
-    ) -> Result<(), Rejection> {
-        self.model.lock().await.set_advanced(profile, keys).await
+    fn set_advanced_keys(&mut self, profile: Slot, keys: &advanced::Keys) -> Result<(), Rejection> {
+        self.model()?.set_advanced(profile, keys)
     }
 
-    async fn gamepad_mapping(
+    fn gamepad_mapping(
         &mut self,
         profile: Slot,
         mapping: &mut gamepad::Mapping,
     ) -> Result<(), Rejection> {
-        self.model
-            .lock()
-            .await
-            .gamepad_mapping(profile, mapping)
-            .await
+        self.model()?.gamepad_mapping(profile, mapping)
     }
 
-    async fn set_gamepad_mapping(
+    fn set_gamepad_mapping(
         &mut self,
         profile: Slot,
         mapping: &gamepad::Mapping,
     ) -> Result<(), Rejection> {
-        self.model
-            .lock()
-            .await
-            .set_gamepad_mapping(profile, mapping)
-            .await
+        self.model()?.set_gamepad_mapping(profile, mapping)
     }
 
-    async fn gamepad_settings(&mut self, profile: Slot) -> Result<gamepad::Settings, Rejection> {
-        self.model.lock().await.gamepad_settings(profile).await
+    fn gamepad_settings(&mut self, profile: Slot) -> Result<gamepad::Settings, Rejection> {
+        self.model()?.gamepad_settings(profile)
     }
 
-    async fn set_gamepad_settings(
+    fn set_gamepad_settings(
         &mut self,
         profile: Slot,
         settings: gamepad::Settings,
     ) -> Result<(), Rejection> {
-        self.model
-            .lock()
-            .await
-            .set_gamepad_settings(profile, settings)
-            .await
+        self.model()?.set_gamepad_settings(profile, settings)
     }
 
-    async fn lighting(&mut self, profile: Slot) -> Result<lighting::Settings, Rejection> {
-        self.model.lock().await.lighting(profile).await
+    fn lighting(&mut self, profile: Slot) -> Result<lighting::Settings, Rejection> {
+        self.model()?.lighting(profile)
     }
 
-    async fn set_lighting(
+    fn set_lighting(
         &mut self,
         profile: Slot,
         settings: lighting::Settings,
     ) -> Result<(), Rejection> {
-        self.model
-            .lock()
-            .await
-            .set_lighting(profile, settings)
-            .await
+        self.model()?.set_lighting(profile, settings)
     }
 
-    async fn key_colors(
+    fn key_colors(
         &mut self,
         profile: Slot,
         layer: Layer,
         colors: &mut Option<KeyColors>,
     ) -> Result<(), Rejection> {
-        self.model
-            .lock()
-            .await
-            .key_colors(profile, layer, colors)
-            .await
+        self.model()?.key_colors(profile, layer, colors)
     }
 
-    async fn set_key_colors(
+    fn set_key_colors(
         &mut self,
         profile: Slot,
         layer: Layer,
         colors: Option<&KeyColors>,
     ) -> Result<(), Rejection> {
-        self.model
-            .lock()
-            .await
-            .set_key_colors(profile, layer, colors)
-            .await
+        self.model()?.set_key_colors(profile, layer, colors)
     }
 
-    async fn lightbar(
+    fn lightbar(
         &mut self,
         profile: Slot,
         settings: &mut lightbar::Settings,
     ) -> Result<(), Rejection> {
         self.require_lightbar()?;
-        self.model.lock().await.lightbar(profile, settings).await
+        self.model()?.lightbar(profile, settings)
     }
 
-    async fn set_lightbar(
+    fn set_lightbar(
         &mut self,
         profile: Slot,
         settings: &lightbar::Settings,
     ) -> Result<(), Rejection> {
         self.require_lightbar()?;
-        self.model
-            .lock()
-            .await
-            .set_lightbar(profile, settings)
-            .await
+        self.model()?.set_lightbar(profile, settings)
     }
 
-    async fn global_lightbar(&mut self, entries: &mut lightbar::Entries) -> Result<(), Rejection> {
+    fn global_lightbar(&mut self, entries: &mut lightbar::Entries) -> Result<(), Rejection> {
         self.require_lightbar()?;
-        entries.clone_from(self.model.lock().await.global_lightbar());
+        entries.clone_from(self.model()?.global_lightbar());
         Ok(())
     }
 
-    async fn set_global_lightbar(&mut self, entries: &lightbar::Entries) -> Result<(), Rejection> {
+    fn set_global_lightbar(&mut self, entries: &lightbar::Entries) -> Result<(), Rejection> {
         self.require_lightbar()?;
-        self.model.lock().await.set_global_lightbar(entries);
+        self.model()?.set_global_lightbar(entries);
         Ok(())
     }
 
-    async fn host_signals(&mut self) -> Result<lightbar::HostSignalIds, Rejection> {
+    fn host_signals(&mut self) -> Result<lightbar::HostSignalIds, Rejection> {
         self.require_host_signals()?;
-        let shared = self.model.lock().await.shared();
+        let shared = self.model()?.shared();
         Ok(shared.host_signals().ids())
     }
 
-    async fn set_host_signals(&mut self, signals: lightbar::HostSignals) -> Result<(), Rejection> {
+    fn set_host_signals(&mut self, signals: lightbar::HostSignals) -> Result<(), Rejection> {
         self.require_host_signals()?;
-        let shared = self.model.lock().await.shared();
+        let shared = self.model()?.shared();
         shared.host_signals().set(&signals);
         Ok(())
     }
 
-    async fn switches(&mut self) -> Result<switches::Settings, Rejection> {
-        Ok(self.model.lock().await.switches())
+    fn switches(&mut self) -> Result<switches::Settings, Rejection> {
+        Ok(self.model()?.switches())
     }
 
-    async fn set_switches(&mut self, settings: switches::Settings) -> Result<(), Rejection> {
-        self.model.lock().await.set_switches(&settings)
+    fn set_switches(&mut self, settings: switches::Settings) -> Result<(), Rejection> {
+        self.model()?.set_switches(&settings)
     }
 
-    fn switch_models(&mut self) -> impl Future<Output = Result<switches::Models, Rejection>> {
+    fn switch_models(&mut self) -> Result<switches::Models, Rejection> {
         let mut models = switch_models();
         models.truncate(usize::from(self.capabilities.switch_models));
-        ready(Ok(models))
+        Ok(models)
     }
 
-    async fn save(&mut self) -> Result<(), Rejection> {
-        self.model.lock().await.save().await
+    fn save(&mut self) -> Result<(), Rejection> {
+        self.model()?.save()
     }
 
-    async fn revert(&mut self) -> Result<(), Rejection> {
-        self.model.lock().await.revert().await;
+    fn revert(&mut self) -> Result<(), Rejection> {
+        self.model()?.revert();
         Ok(())
     }
 
-    async fn factory_reset(&mut self) -> Result<(), Rejection> {
-        self.model.lock().await.factory_reset().await
+    fn factory_reset(&mut self) -> Result<(), Rejection> {
+        self.model()?.factory_reset()
     }
 
-    async fn storage_usage(&mut self) -> Result<StorageUsage, Rejection> {
-        self.model.lock().await.storage_usage().await
+    fn storage_usage(&mut self) -> Result<StorageUsage, Rejection> {
+        self.model()?.storage_usage()
     }
 }
 
-impl<M, F, const ROWS: usize, const COLUMNS: usize> core::fmt::Debug
-    for Configurator<'_, M, F, ROWS, COLUMNS>
+impl<M, F, H, const ROWS: usize, const COLUMNS: usize> core::fmt::Debug
+    for Configurator<'_, M, F, H, ROWS, COLUMNS>
 where
     M: RawMutex,
     F: MultiwriteNorFlash,
+    H: Lightbar,
 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter

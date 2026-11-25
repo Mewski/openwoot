@@ -1,5 +1,5 @@
 use openwoot::{
-    analog::NoiseStatistics,
+    analog::{CurveTable, NoiseStatistics},
     keys::Key,
     scan::{Map, Outcome, Position, Scanner, Sensing, Sensors, Travel},
 };
@@ -49,12 +49,20 @@ pub(crate) fn sensors<Noise: NoiseStatistics, const INPUTS: usize>()
     Box::leak(Box::default())
 }
 
+pub(crate) fn curve_tables<const TABLES: usize>() -> &'static mut [CurveTable; TABLES] {
+    Box::leak(Box::new([CurveTable::EMPTY; TABLES]))
+}
+
 pub(crate) fn scanner() -> Bench80 {
     scanner_with_order(ORDER)
 }
 
 pub(crate) fn scanner_with_order(order: [u8; 6]) -> Bench80 {
-    Scanner::new(Simulated::default(), MAP, order, sensors())
+    Scanner::new(Simulated::default(), MAP, order, sensors()).with_curve_tables(curve_tables::<4>())
+}
+
+pub(crate) fn scanner_without_curve_tables() -> Bench80 {
+    Scanner::new(Simulated::default(), MAP, ORDER, sensors())
 }
 
 pub(crate) fn rest_everywhere(scanner: &mut Bench80, magnitude: u16) {

@@ -183,7 +183,9 @@ impl<Bus: I2c, Enable: OutputPin> Is31fl3741<Bus, Enable> {
             return Err(outside);
         };
         *register = first;
-        data.copy_from_slice(values);
+        for (data, value) in data.iter_mut().zip(values) {
+            *data = *value;
+        }
         self.select(page).await?;
         let Some(transfer) = self.buffer.get(..=values.len()) else {
             return Err(outside);

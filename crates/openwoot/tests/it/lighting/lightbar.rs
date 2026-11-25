@@ -1110,7 +1110,6 @@ mod bus_reset {
     use std::pin::pin;
 
     use embassy_futures::block_on;
-    use embassy_sync::mutex::Mutex;
     use embassy_usb_driver::Event;
     use openwoot::{
         diagnostics::Diagnostics,
@@ -1192,12 +1191,12 @@ mod bus_reset {
                 profile_of([host_meter(42, 0, 3), solid_on(4, 9, Some(host_is_zero(7)))]);
         });
         shared.activate(false);
-        let lighting = Mutex::<CriticalSectionRawMutex, _>::new(bar_lighting());
+        let mut lighting = bar_lighting();
         let events = KeyEvents::new();
         let notices = runtime::KeyNotices::new();
         let diagnostics = Diagnostics::new();
-        let task = runtime::Lighting {
-            lighting: &lighting,
+        let mut task = runtime::Lighting {
+            lighting: &mut lighting,
             events: &events,
             notices: &notices,
             host: &STATE,
@@ -1205,15 +1204,17 @@ mod bus_reset {
             diagnostics: &diagnostics,
             profile: &shared,
         };
-        let shown = || bar_colors(block_on(lighting.lock()).hooks_mut());
+        let shown = |lighting: &mut Lighting<Bar, ROWS, COLUMNS, BAR_PAGES, LENGTH>| {
+            bar_colors(lighting.hooks_mut())
+        };
 
         shared.host_signals().set(&[
             HostSignal { id: 42, value: 1.0 },
             HostSignal { id: 7, value: 2.0 },
         ]);
         block_on(task.step(&mut NoLeds, &(), 0, false));
-        assert_eq!(shown()[..4], ["ffffff"; 4]);
-        assert_eq!(shown()[4..], ["000000"; 6]);
+        assert_eq!(shown(task.lighting)[..4], ["ffffff"; 4]);
+        assert_eq!(shown(task.lighting)[4..], ["000000"; 6]);
 
         host.bus_events(run.as_mut(), &[Event::Reset]);
         assert_eq!(
@@ -1232,15 +1233,23 @@ mod bus_reset {
             Some(Ok(()))
         );
         block_on(task.step(&mut NoLeds, &(), 4, false));
-        assert_eq!(shown()[..4], ["000000"; 4], "the host meter is off");
-        assert_eq!(shown()[4..], ["ff0000"; 6], "host signal 7 reads 0");
+        assert_eq!(
+            shown(task.lighting)[..4],
+            ["000000"; 4],
+            "the host meter is off"
+        );
+        assert_eq!(
+            shown(task.lighting)[4..],
+            ["ff0000"; 6],
+            "host signal 7 reads 0"
+        );
 
         shared
             .host_signals()
             .set(&[HostSignal { id: 42, value: 1.0 }]);
         block_on(task.step(&mut NoLeds, &(), 8, false));
         assert_eq!(
-            shown()[..4],
+            shown(task.lighting)[..4],
             ["ffffff"; 4],
             "a new value turns the meter on again"
         );

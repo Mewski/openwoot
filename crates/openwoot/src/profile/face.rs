@@ -6,14 +6,14 @@ use crate::{
     usb::{Face, Speed},
 };
 
-pub async fn stored_face<F: MultiwriteNorFlash>(
+#[must_use]
+pub fn stored_face<F: MultiwriteNorFlash>(
     settings: Option<&mut Settings<F>>,
     factory: Face,
 ) -> Face {
     let stored = match settings {
         Some(settings) => settings
             .load::<device::Settings>(Scope::Global)
-            .await
             .ok()
             .flatten(),
         None => None,

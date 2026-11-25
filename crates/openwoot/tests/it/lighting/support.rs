@@ -1,5 +1,4 @@
 use std::{
-    future::ready,
     pin::pin,
     task::{Context, Poll, Waker},
 };
@@ -119,13 +118,13 @@ impl Configuration for Keyboard {
         })
     }
 
-    fn profiles(&mut self) -> impl Future<Output = Result<Summary, Rejection>> {
-        ready(Ok(Summary {
+    fn profiles(&mut self) -> Result<Summary, Rejection> {
+        Ok(Summary {
             count: 2,
             active: ACTIVE,
             linked: 0,
             selected: None,
-        }))
+        })
     }
 }
 

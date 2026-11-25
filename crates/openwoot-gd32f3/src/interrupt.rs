@@ -8,8 +8,10 @@ use crate::pac;
 pub struct Priority(u8);
 
 impl Priority {
+    pub const DEVICE: Self = Self(4);
     pub const HIGHEST: Self = Self(1);
     pub const KEYS: Self = Self(3);
+    pub const LIGHTING: Self = Self(5);
     pub const LOWEST: Self = Self((1 << pac::NVIC_PRIO_BITS) - 1);
     pub(crate) const SCAN: Self = Self(0);
     pub const TIME: Self = Self::HIGHEST;
@@ -50,6 +52,13 @@ pub trait Handler<Irq: Interrupt> {
 // `Hook::on_interrupt`.
 #[expect(clippy::missing_safety_doc, reason = "the code has no doc comments")]
 pub unsafe trait Binding<Irq: Interrupt, Hook: Handler<Irq>> {}
+
+// SAFETY: a reference proves the binding of the value it refers to, whose vector calls
+// `Hook::on_interrupt`.
+unsafe impl<Irq: Interrupt, Hook: Handler<Irq>, Bound: Binding<Irq, Hook> + ?Sized>
+    Binding<Irq, Hook> for &Bound
+{
+}
 
 #[macro_export]
 macro_rules! bind_interrupts {
@@ -154,5 +163,6 @@ mod tests {
         assert_eq!(Priority::TIME.to_nvic(), 0x10);
         assert_eq!(Priority::LOWEST.to_nvic(), 0xF0);
         assert!(Priority::TIME < Priority::USB && Priority::USB < Priority::KEYS);
+        assert!(Priority::KEYS < Priority::DEVICE && Priority::DEVICE < Priority::LIGHTING);
     }
 }

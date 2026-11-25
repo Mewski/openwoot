@@ -1,41 +1,75 @@
-use core::future::{Future, pending};
+use core::{
+    future::poll_fn,
+    sync::atomic::{AtomicBool, Ordering},
+    task::Poll,
+};
 
 use embedded_storage_async::nor_flash::{ErrorType, MultiwriteNorFlash, NorFlash, ReadNorFlash};
 
-#[derive(Debug)]
-pub(crate) struct Stalled<F>(pub(crate) F);
+#[derive(Debug, Default)]
+pub(crate) struct Gate {
+    waiting: AtomicBool,
+    open: AtomicBool,
+}
 
-impl<F: ErrorType> ErrorType for Stalled<F> {
+impl Gate {
+    pub(crate) fn is_waiting(&self) -> bool {
+        self.waiting.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn open(&self) {
+        self.open.store(true, Ordering::Release);
+    }
+
+    async fn pass(&self) {
+        poll_fn(|_| {
+            self.waiting.store(true, Ordering::Release);
+            if self.open.load(Ordering::Acquire) {
+                Poll::Ready(())
+            } else {
+                std::thread::yield_now();
+                Poll::Pending
+            }
+        })
+        .await;
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct Stalled<'a, F> {
+    pub(crate) flash: F,
+    pub(crate) gate: &'a Gate,
+}
+
+impl<F: ErrorType> ErrorType for Stalled<'_, F> {
     type Error = F::Error;
 }
 
-impl<F: ReadNorFlash> ReadNorFlash for Stalled<F> {
+impl<F: ReadNorFlash> ReadNorFlash for Stalled<'_, F> {
     const READ_SIZE: usize = F::READ_SIZE;
 
     async fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
-        self.0.read(offset, bytes).await
+        self.flash.read(offset, bytes).await
     }
 
     fn capacity(&self) -> usize {
-        self.0.capacity()
+        self.flash.capacity()
     }
 }
 
-impl<F: NorFlash> NorFlash for Stalled<F> {
+impl<F: NorFlash> NorFlash for Stalled<'_, F> {
     const ERASE_SIZE: usize = F::ERASE_SIZE;
     const WRITE_SIZE: usize = F::WRITE_SIZE;
 
-    fn erase(&mut self, _from: u32, _to: u32) -> impl Future<Output = Result<(), Self::Error>> {
-        pending()
+    async fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
+        self.gate.pass().await;
+        self.flash.erase(from, to).await
     }
 
-    fn write(
-        &mut self,
-        _offset: u32,
-        _bytes: &[u8],
-    ) -> impl Future<Output = Result<(), Self::Error>> {
-        pending()
+    async fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
+        self.gate.pass().await;
+        self.flash.write(offset, bytes).await
     }
 }
 
-impl<F: MultiwriteNorFlash> MultiwriteNorFlash for Stalled<F> {}
+impl<F: MultiwriteNorFlash> MultiwriteNorFlash for Stalled<'_, F> {}

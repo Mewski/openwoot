@@ -4,14 +4,17 @@ use embassy_futures::block_on;
 use embassy_usb_driver::{EndpointError, Event};
 use openwoot::{
     lighting::HostControl,
-    protocol::{Channel, Handler},
+    protocol::{Answer, Channel, Handler},
     scan::SensorReadout,
     usb::{Face, FeatureRequests, HostState, Resources, build},
 };
 use openwoot_protocol::{
-    Endpoint, Error, FirmwareVersion, Key, PROTOCOL_VERSION, VarHeader, VarKey, VarSeq, Version,
-    WireError, decode_response, encode_message, encode_request,
-    endpoints::{EnterUpdateMode, GetSensorValues, GetVersion, Restart, SetRawScanning},
+    ERROR_KEY, Endpoint, Error, FirmwareVersion, Key, PROTOCOL_VERSION, VarHeader, VarKey, VarSeq,
+    Version, WireError, decode_message, decode_response, encode_message, encode_request,
+    endpoints::{
+        EnterUpdateMode, GetDiagnostics, GetLedFrame, GetSensorValues, GetVersion, Restart,
+        SetRawScanning,
+    },
     lighting::Effects,
     report,
     sensors::Reading,
@@ -356,6 +359,59 @@ fn a_reply_that_does_not_fit_the_response_buffer_hands_nothing_over() {
 }
 
 #[test]
+fn a_request_with_a_key_shorter_than_eight_bytes_is_unknown_even_when_it_abbreviates_an_endpoint() {
+    let mut handler = Handler::new(VERSION, stock_identity(None));
+    for shape in [
+        &[0x00, 0x11, 7][..],
+        &[0x40, 0x11, 0x22, 7],
+        &[0x80, 0x11, 0x22, 0x33, 0x44, 7],
+    ] {
+        let mut shaped = [0; report::MAX_LEN];
+        shaped[report::FRAME_OFFSET..][..shape.len()].copy_from_slice(shape);
+        let shaped = report::seal(&mut shaped, shape.len()).unwrap();
+        let header = decode_message(shaped)
+            .unwrap()
+            .unwrap()
+            .reply_header(GetVersion::REQ_KEY);
+        assert!(!matches!(header.key, VarKey::Key8(_)));
+        let mut request = [0; report::MAX_LEN];
+        let request = encode_message(&header, &(), &mut request).unwrap();
+        let message = decode_message(request).unwrap().unwrap();
+        let mut expected = [0; report::MAX_LEN];
+        let expected = encode_message(
+            &message.reply_header(ERROR_KEY),
+            &WireError::UnknownKey,
+            &mut expected,
+        )
+        .unwrap();
+        let mut response = [0; report::MAX_LEN];
+        let answer = block_on(handler.respond(request, &mut response));
+        assert_eq!(
+            answer,
+            Answer {
+                reply: Some(expected),
+                handover: None
+            }
+        );
+    }
+}
+
+#[test]
+fn a_keyboard_without_diagnostics_refuses_their_key_before_reading_the_body() {
+    let header = VarHeader {
+        key: VarKey::Key8(GetDiagnostics::REQ_KEY),
+        seq_no: VarSeq::Seq2(13),
+    };
+    let mut request = [0; report::MAX_LEN];
+    let request = encode_message(&header, &[0xFF_u8; 4], &mut request).unwrap();
+    let (response, _) = exchange(request);
+    assert_eq!(
+        decode_response::<GetDiagnostics>(13, &response),
+        Err(Error::Device(WireError::UnknownKey))
+    );
+}
+
+#[test]
 fn a_bus_reset_ends_raw_scanning_host_lighting_and_gamepad_detection() {
     static STATE: HostState = HostState::new();
     static SENSORS: SensorReadout = SensorReadout::new();
@@ -469,6 +525,84 @@ fn a_sensor_reading_nobody_publishes_fails_after_the_peer_time_out_and_frees_the
         assert_eq!(poll(serve.as_mut()), Some(Ok(())));
     }
     assert_eq!(keyboard.update_mode_options, [0]);
+}
+
+#[test]
+fn a_led_frame_nobody_renders_fails_after_the_peer_time_out_and_frees_the_channel() {
+    static HOST_CONTROL: HostControl = HostControl::new();
+    let host = Host::default();
+    let state = HostState::new();
+    let mut resources = Resources::new();
+    let device = build(
+        host.driver(),
+        Face::default(),
+        IDENTITY,
+        &mut resources,
+        &state,
+    );
+    let mut channel =
+        Channel::with_delay(device.channel.output, device.channel.input, host.delay());
+    let mut handler = Handler::new(VERSION, stock_identity(None)).with_host_control(&HOST_CONTROL);
+    let requests = FeatureRequests::new();
+    let mut keyboard = Recorder::default();
+    host.send_packets(CHANNEL_OUT, &encoded::<GetLedFrame>(5, &()), PACKET_SIZE);
+    {
+        let mut serve = pin!(channel.serve(&mut handler, &requests, &mut keyboard));
+        assert_eq!(poll(serve.as_mut()), None);
+        host.elapse_ms(PEER_TIMEOUT_MS - 1);
+        assert_eq!(poll(serve.as_mut()), None);
+        assert_eq!(host.sent_len(CHANNEL_IN), 0);
+        host.elapse_ms(1);
+        assert_eq!(poll(serve.as_mut()), Some(Ok(())));
+    }
+    assert_eq!(
+        decode_response::<GetLedFrame>(5, &host.take_sent(CHANNEL_IN).concat()),
+        Err(Error::Device(WireError::FailedToSpawn))
+    );
+    host.send_packets(CHANNEL_OUT, &encoded::<GetVersion>(6, &()), PACKET_SIZE);
+    assert_eq!(
+        poll(pin!(channel.serve(&mut handler, &requests, &mut keyboard))),
+        Some(Ok(()))
+    );
+    assert_eq!(
+        decode_response::<GetVersion>(6, &host.take_sent(CHANNEL_IN).concat()),
+        Ok(Some(VERSION))
+    );
+}
+
+#[test]
+fn a_sensor_request_that_does_not_decode_is_refused_without_waiting_for_a_reading() {
+    static SENSORS: SensorReadout = SensorReadout::new();
+    let host = Host::default();
+    let state = HostState::new();
+    let mut resources = Resources::new();
+    let device = build(
+        host.driver(),
+        Face::default(),
+        IDENTITY,
+        &mut resources,
+        &state,
+    );
+    let mut channel =
+        Channel::with_delay(device.channel.output, device.channel.input, host.delay());
+    let mut handler = Handler::new(VERSION, stock_identity(None)).with_sensors(&SENSORS);
+    let requests = FeatureRequests::new();
+    let mut keyboard = Recorder::default();
+    let header = VarHeader {
+        key: VarKey::Key8(GetSensorValues::REQ_KEY),
+        seq_no: VarSeq::Seq2(7),
+    };
+    let mut request = [0; report::MAX_LEN];
+    let request = encode_message(&header, &[0xFF_u8; 8], &mut request).unwrap();
+    host.send_packets(CHANNEL_OUT, request, PACKET_SIZE);
+    assert_eq!(
+        poll(pin!(channel.serve(&mut handler, &requests, &mut keyboard))),
+        Some(Ok(()))
+    );
+    assert_eq!(
+        decode_response::<GetSensorValues>(7, &host.take_sent(CHANNEL_IN).concat()),
+        Err(Error::Device(WireError::DeserFailed))
+    );
 }
 
 #[test]

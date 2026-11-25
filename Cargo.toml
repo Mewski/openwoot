@@ -1,5 +1,5 @@
 [workspace]
-members = ["boards/*", "crates/*", "xtask"]
+members = ["boards/*", "boards/*/firmware", "crates/*", "xtask"]
 default-members = [
     "crates/openwoot",
     "crates/openwoot-cli",
@@ -47,6 +47,7 @@ embedded-storage-async = "=0.4.2"
 futures-lite = "=2.6.1"
 gd32f303-pac = { path = "crates/gd32f303-pac" }
 gd32f425-pac = { path = "crates/gd32f425-pac" }
+gimli = { version = "=0.34.0", default-features = false, features = ["read", "std"] }
 gpui-kit = "=0.11.0"
 heapless = { version = "=0.9.4", features = ["serde"] }
 ihex = "=3.0.0"
@@ -91,6 +92,8 @@ thiserror = { version = "=2.0.21", default-features = false }
 toml = { version = "=1.2.2", default-features = false, features = ["parse", "serde", "std"] }
 tray-icon = { version = "=0.26.1", default-features = false, features = ["ksni"] }
 vcell = "=0.1.3"
+wooting-60he-plus = { path = "boards/wooting-60he-plus" }
+wooting-80he = { path = "boards/wooting-80he" }
 x-win = "=5.8.0"
 xcap = "=0.9.10"
 
@@ -123,8 +126,14 @@ unwrap_used = "deny"
 codegen-units = 1
 debug = 2
 lto = "fat"
-opt-level = 3
+opt-level = 2
 panic = "abort"
+
+[profile.release.package.wooting-60he-plus]
+opt-level = "z"
+
+[profile.release.package.wooting-80he]
+opt-level = "z"
 
 [profile.dev]
 panic = "abort"

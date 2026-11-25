@@ -1,5 +1,7 @@
+use core::cell::RefCell;
+
 use embassy_futures::block_on;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use openwoot::{
     analog::{self, SwitchModel},
     diagnostics::{Diagnostics, Hardware},
@@ -180,7 +182,7 @@ pub(super) fn storage() -> Settings<Nor> {
     };
     let partition = Partition::new(Nor::new(6), layout.settings_region());
     let mut settings = Settings::new();
-    let opened = block_on(settings.open(partition, false));
+    let opened = settings.open(partition, false);
     assert!(opened.is_ok(), "{opened:?}");
     settings
 }
@@ -297,7 +299,7 @@ impl World {
     pub(super) fn model<'w>(
         &'w self,
         settings: &'w mut Settings<Nor>,
-    ) -> Mutex<Mutual, Model<'w, Mutual, Nor, ROWS, COLUMNS>> {
+    ) -> RefCell<Model<'w, Mutual, Nor, (), ROWS, COLUMNS>> {
         self.model_with(&FACTORY, settings)
     }
 
@@ -305,10 +307,10 @@ impl World {
         &'w self,
         factory: &'static Factory<ROWS, COLUMNS>,
         settings: &'w mut Settings<Nor>,
-    ) -> Mutex<Mutual, Model<'w, Mutual, Nor, ROWS, COLUMNS>> {
+    ) -> RefCell<Model<'w, Mutual, Nor, (), ROWS, COLUMNS>> {
         let mut model = Model::new(&self.shared, &self.profile, Some(settings), factory, 0, 4);
-        block_on(model.load());
-        Mutex::new(model)
+        model.load();
+        RefCell::new(model)
     }
 
     pub(super) fn keyboard(&self) -> Option<Vec<u8>> {
@@ -371,7 +373,9 @@ fn rapid_trigger_from_the_configuration_channel_applies_between_cycles() {
         },
         ..default_settings()
     };
-    block_on(configurator.set_key_settings(Slot::new(0), settings)).unwrap();
+    configurator
+        .set_key_settings(Slot::new(0), settings)
+        .unwrap();
     let rapid: Vec<bool> = [0, FULL, THREE_QUARTERS, FULL]
         .into_iter()
         .map(|magnitude| {
@@ -384,10 +388,7 @@ fn rapid_trigger_from_the_configuration_channel_applies_between_cycles() {
         })
         .collect();
     assert_eq!(rapid, [false, true, false, true]);
-    assert_eq!(
-        block_on(configurator.key_settings(Slot::new(0))),
-        Ok(settings)
-    );
+    assert_eq!(configurator.key_settings(Slot::new(0)), Ok(settings));
 }
 
 #[test]
@@ -403,7 +404,9 @@ fn an_advanced_key_from_the_configuration_channel_runs_in_the_key_pass() {
         behaviour: Behaviour::Toggle(Action::Keyboard(0x2C)),
     };
     let toggles: advanced::Keys = [toggle].into_iter().collect();
-    block_on(configurator.set_advanced_keys(Slot::new(0), &toggles)).unwrap();
+    configurator
+        .set_advanced_keys(Slot::new(0), &toggles)
+        .unwrap();
     bench.press(KEY_A, FULL);
     bench.cycle();
     bench.press(KEY_A, 0);
@@ -434,14 +437,15 @@ fn a_key_bound_to_the_gamepad_moves_the_stick_of_the_hid_gamepad_report() {
     if let Some(binding) = bindings.get_mut(KEY_A.index(COLUMNS)) {
         *binding = Some(Control::LeftStickRight);
     }
-    block_on(configurator.set_gamepad_mapping(
-        Slot::new(0),
-        &gamepad::Mapping {
-            bindings,
-            exclusive: true,
-        },
-    ))
-    .unwrap();
+    configurator
+        .set_gamepad_mapping(
+            Slot::new(0),
+            &gamepad::Mapping {
+                bindings,
+                exclusive: true,
+            },
+        )
+        .unwrap();
     let _ = world.reports.take();
     bench.press(KEY_A, FULL);
     bench.cycle();
@@ -467,7 +471,7 @@ fn a_profile_key_switches_the_profile_through_the_configuration_model() {
     bench.cycle();
     let requested = block_on(world.shared.profile_request());
     assert_eq!(requested, 1);
-    block_on(configurator.activate_profile(Slot::new(requested))).unwrap();
+    configurator.activate_profile(Slot::new(requested)).unwrap();
     bench.cycle();
     assert_eq!(bench.keys.profiles().active(), 1);
     let report = world
@@ -483,7 +487,7 @@ fn a_profile_key_switches_the_profile_through_the_configuration_model() {
     );
     assert!(report.keys.passes > 0 && report.keys.reports > 0);
     assert_eq!(
-        block_on(configurator.profiles()).map(|summary| summary.active),
+        configurator.profiles().map(|summary| summary.active),
         Ok(Slot::new(1))
     );
     bench.press(PROFILE_KEY, 0);
@@ -509,24 +513,24 @@ fn unsaved_changes_are_dropped_by_revert_and_kept_by_save() {
         rapid_trigger_enabled: true,
         ..default_settings()
     };
-    block_on(configurator.set_key_settings(Slot::new(0), changed)).unwrap();
-    block_on(configurator.revert()).unwrap();
+    configurator
+        .set_key_settings(Slot::new(0), changed)
+        .unwrap();
+    configurator.revert().unwrap();
     assert_eq!(
-        block_on(configurator.key_settings(Slot::new(0))),
+        configurator.key_settings(Slot::new(0)),
         Ok(default_settings())
     );
-    block_on(configurator.set_key_settings(Slot::new(0), changed)).unwrap();
-    block_on(configurator.save()).unwrap();
-    block_on(configurator.revert()).unwrap();
-    assert_eq!(
-        block_on(configurator.key_settings(Slot::new(0))),
-        Ok(changed)
-    );
-    block_on(configurator.set_key_settings(Slot::new(2), changed)).unwrap();
-    assert_eq!(
-        block_on(configurator.key_settings(Slot::new(2))),
-        Ok(changed)
-    );
+    configurator
+        .set_key_settings(Slot::new(0), changed)
+        .unwrap();
+    configurator.save().unwrap();
+    configurator.revert().unwrap();
+    assert_eq!(configurator.key_settings(Slot::new(0)), Ok(changed));
+    configurator
+        .set_key_settings(Slot::new(2), changed)
+        .unwrap();
+    assert_eq!(configurator.key_settings(Slot::new(2)), Ok(changed));
 }
 
 fn is_pressed(bench: &Bench80<'_>, key: Key) -> bool {
@@ -567,7 +571,7 @@ fn a_switch_model_from_the_configuration_channel_moves_travel_and_actuation_at_o
         model: 2,
         travel_offset: 30,
     });
-    block_on(configurator.set_switches(chosen.clone())).unwrap();
+    configurator.set_switches(chosen.clone()).unwrap();
     bench.cycle();
     assert_eq!(
         bench.keys.minimum(KEY_A),
@@ -581,7 +585,7 @@ fn a_switch_model_from_the_configuration_channel_moves_travel_and_actuation_at_o
     let (travel, pressed) = press_from_rest(&mut bench, KEY_A, SHALLOW);
     assert!(pressed, "travel {travel}");
     assert!(travel > factory_travel, "{travel} <= {factory_travel}");
-    block_on(configurator.revert()).unwrap();
+    configurator.revert().unwrap();
     bench.cycle();
     assert_eq!(bench.keys.minimum(KEY_A), Some(factory.minimum));
     assert_eq!(
@@ -589,7 +593,7 @@ fn a_switch_model_from_the_configuration_channel_moves_travel_and_actuation_at_o
         (factory_travel, false)
     );
     assert_eq!(
-        block_on(configurator.switches()).map(|stored| stored == chosen),
+        configurator.switches().map(|stored| stored == chosen),
         Ok(false)
     );
 }

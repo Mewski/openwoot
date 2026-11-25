@@ -8,7 +8,10 @@ use halves::Half;
 use openwoot_image::Hex;
 use thumb::Instruction;
 
-use crate::elf::{Elf, RelocationKind, Symbol, SymbolKind};
+use crate::{
+    elf::{Elf, RelocationKind, Symbol, SymbolKind},
+    link_map::InputSection,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Reference {
@@ -26,22 +29,21 @@ pub(crate) struct CallGraph<'a> {
 }
 
 impl<'a> CallGraph<'a> {
-    pub(crate) fn new(elf: &'a Elf<'a>) -> Result<Self> {
+    pub(crate) fn new(elf: &'a Elf<'a>, input_sections: &[InputSection]) -> Result<Self> {
         let (mut markers, mut nodes): (Vec<Symbol>, Vec<Symbol>) =
             elf.symbols()?.into_iter().partition(Symbol::is_marker);
         nodes.extend(elf.allocated_sections().iter().map(|section| Symbol {
             name: section.name.clone(),
-            link_name: section.name.clone(),
             address: section.address,
             size: 0,
             kind: SymbolKind::Object,
         }));
-        nodes.sort_by(|left, right| {
-            left.address
-                .cmp(&right.address)
-                .then(right.size.cmp(&left.size))
-        });
-        nodes.dedup_by_key(|node| node.address);
+        let nodes = with_unnamed(
+            nodes,
+            input_sections
+                .iter()
+                .filter(|section| elf.section_at(section.address).is_some()),
+        );
         markers.sort_by_key(|marker| marker.address);
         let mut graph = Self {
             elf,
@@ -118,6 +120,28 @@ impl<'a> CallGraph<'a> {
             .filter(|(_, instruction)| instruction.writes_basepri())
             .map(|(address, _)| address)
             .collect())
+    }
+
+    pub(crate) fn literal_loads(&self, node: usize) -> Result<Vec<(u32, u32)>> {
+        let Some(symbol) = self.symbol(node).filter(|_| self.is_function(node)) else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .instructions(symbol)?
+            .into_iter()
+            .filter_map(|(address, instruction)| {
+                instruction
+                    .literal(address)
+                    .map(|literal| (address, literal))
+            })
+            .collect())
+    }
+
+    pub(crate) fn jumps(&self, node: usize) -> Result<Vec<(u32, u32)>> {
+        let Some(symbol) = self.symbol(node).filter(|_| self.is_function(node)) else {
+            return Ok(Vec::new());
+        };
+        Ok(jumps_within(symbol, self.instructions(symbol)?))
     }
 
     pub(crate) fn reachable(&self, roots: impl IntoIterator<Item = usize>) -> Vec<usize> {
@@ -291,6 +315,43 @@ fn require_relocated_calls(calls: usize) -> Result<()> {
     Ok(())
 }
 
+fn jumps_within(function: &Symbol, code: Vec<(u32, Instruction)>) -> Vec<(u32, u32)> {
+    code.into_iter()
+        .filter_map(|(address, instruction)| {
+            instruction
+                .unconditional_branch_target(address)
+                .filter(|&target| function.contains(target))
+                .map(|target| (address, target))
+        })
+        .collect()
+}
+
+fn with_unnamed<'s>(
+    mut nodes: Vec<Symbol>,
+    input_sections: impl Iterator<Item = &'s InputSection>,
+) -> Vec<Symbol> {
+    nodes.sort_by(|left, right| {
+        left.address
+            .cmp(&right.address)
+            .then(right.size.cmp(&left.size))
+    });
+    nodes.dedup_by_key(|node| node.address);
+    let named: HashSet<u32> = nodes.iter().map(|node| node.address).collect();
+    let unnamed: Vec<Symbol> = input_sections
+        .filter(|section| !named.contains(&section.address))
+        .map(|section| Symbol {
+            name: section.name.clone(),
+            address: section.address,
+            size: section.size,
+            kind: SymbolKind::Object,
+        })
+        .collect();
+    nodes.extend(unnamed);
+    nodes.sort_by_key(|node| node.address);
+    nodes.dedup_by_key(|node| node.address);
+    nodes
+}
+
 fn reachable(
     len: usize,
     roots: impl IntoIterator<Item = usize>,
@@ -332,5 +393,65 @@ mod tests {
         let mut nodes = reachable(edges.len(), [3, 5], |node| edges[node].to_vec());
         nodes.sort_unstable();
         assert_eq!(nodes, [0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn an_input_section_without_a_symbol_at_its_start_becomes_a_node_of_its_own() {
+        let symbol = |name: &str, address, size, kind| Symbol {
+            name: name.to_owned(),
+            address,
+            size,
+            kind,
+        };
+        let section = |name: &str, address, size| InputSection {
+            name: name.to_owned(),
+            address,
+            size,
+        };
+        let symbols = vec![
+            symbol("VTABLE", 0x110, 0x10, SymbolKind::Object),
+            symbol(".rodata", 0x100, 0, SymbolKind::Object),
+            symbol("poll", 0x40, 0x20, SymbolKind::Function),
+        ];
+        let sections = [
+            section(".text.poll", 0x40, 0x24),
+            section(".rodata.VTABLE", 0x110, 0x10),
+            section(".rodata..Lanon.1", 0x120, 0x10),
+            section(".rodata..Lanon.2", 0x130, 0x8),
+        ];
+        let nodes = with_unnamed(symbols, sections.iter());
+        let nodes: Vec<(&str, u32, SymbolKind)> = nodes
+            .iter()
+            .map(|node| (node.name.as_str(), node.address, node.kind))
+            .collect();
+        assert_eq!(
+            nodes,
+            [
+                ("poll", 0x40, SymbolKind::Function),
+                (".rodata", 0x100, SymbolKind::Object),
+                ("VTABLE", 0x110, SymbolKind::Object),
+                (".rodata..Lanon.1", 0x120, SymbolKind::Object),
+                (".rodata..Lanon.2", 0x130, SymbolKind::Object),
+            ]
+        );
+    }
+
+    #[test]
+    fn only_unconditional_branches_to_the_inside_of_the_function_are_jumps() {
+        let function = Symbol {
+            name: "poll".to_owned(),
+            address: 0x0806_F000,
+            size: 0x100,
+            kind: SymbolKind::Function,
+        };
+        let code = vec![
+            (0x0806_F010, Instruction::Narrow(0xE002)),
+            (0x0806_F020, Instruction::Wide([0xF047, 0xFC6D])),
+            (0x0806_F030, Instruction::Wide([0xF040, 0x8666])),
+            (0x0806_F040, Instruction::Narrow(0xD002)),
+            (0x0806_F07A, Instruction::Wide([0xF7FF, 0xBA3E])),
+            (0x0806_F0FE, Instruction::Narrow(0xE002)),
+        ];
+        assert_eq!(jumps_within(&function, code), [(0x0806_F010, 0x0806_F018)]);
     }
 }

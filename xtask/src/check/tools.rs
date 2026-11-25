@@ -25,7 +25,7 @@ pub(super) fn clippy(workspace: &Workspace, members: &[Member<'_>]) -> Result<()
     host.args(["clippy", "--workspace", "--all-targets"]);
     for member in members
         .iter()
-        .filter(|member| matches!(member.kind, Kind::Pac | Kind::Board))
+        .filter(|member| matches!(member.kind, Kind::Pac | Kind::Board | Kind::BoardFirmware))
     {
         host.args(["--exclude", member.package.name.as_str()]);
     }
@@ -43,6 +43,8 @@ pub(super) fn clippy(workspace: &Workspace, members: &[Member<'_>]) -> Result<()
             "clippy",
             "--package",
             &board.name,
+            "--package",
+            &board.firmware,
             "--package",
             &board.chip_hal,
             "--target",

@@ -1,4 +1,4 @@
-use embassy_sync::{blocking_mutex::raw::RawMutex, mutex::Mutex};
+use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_usb::driver;
 use static_cell::{ConstStaticCell, StaticCell};
 
@@ -30,7 +30,7 @@ pub struct State<
     pub(super) key_reports: KeyReports<M>,
     pub(super) keys: keys::Shared<M>,
     pub(super) profile: profile::Shared<M>,
-    pub(super) lighting: StaticCell<Mutex<M, lighting::Lighting<H, ROWS, COLUMNS, PAGES, LENGTH>>>,
+    pub(super) lighting: StaticCell<lighting::Lighting<H, ROWS, COLUMNS, PAGES, LENGTH>>,
 }
 
 impl<

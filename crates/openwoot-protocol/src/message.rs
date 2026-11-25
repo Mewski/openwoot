@@ -10,6 +10,10 @@ use crate::{
     report::{self, Contents, FRAME_OFFSET, MAX_FRAME_LEN},
 };
 
+pub trait Body {
+    fn encode(&self, buffer: &mut [u8]) -> Result<usize, Error>;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Message<'a> {
     pub header: VarHeader,
@@ -28,6 +32,17 @@ impl Message<'_> {
     }
 }
 
+impl<T: Serialize> Body for T {
+    fn encode(&self, buffer: &mut [u8]) -> Result<usize, Error> {
+        postcard::to_slice(self, buffer)
+            .map(|encoded| encoded.len())
+            .map_err(|error| match error {
+                postcard::Error::SerializeBufferFull => Error::FrameTooLong,
+                _ => Error::Encode,
+            })
+    }
+}
+
 pub fn encode_message<'a, T>(
     header: &VarHeader,
     message: &T,
@@ -36,17 +51,20 @@ pub fn encode_message<'a, T>(
 where
     T: Serialize + ?Sized,
 {
+    encode_frame(header, &message, report)
+}
+
+pub fn encode_frame<'a>(
+    header: &VarHeader,
+    body: &dyn Body,
+    report: &'a mut [u8],
+) -> Result<&'a [u8], Error> {
     let frame = report.get_mut(FRAME_OFFSET..).ok_or(Error::FrameTooLong)?;
     let frame_capacity = frame.len().min(MAX_FRAME_LEN);
     let frame = frame.get_mut(..frame_capacity).ok_or(Error::FrameTooLong)?;
-    let (header_bytes, body) = header.write_to_slice(frame).ok_or(Error::FrameTooLong)?;
+    let (header_bytes, buffer) = header.write_to_slice(frame).ok_or(Error::FrameTooLong)?;
     let header_len = header_bytes.len();
-    let body_len = postcard::to_slice(message, body)
-        .map_err(|error| match error {
-            postcard::Error::SerializeBufferFull => Error::FrameTooLong,
-            _ => Error::Encode,
-        })?
-        .len();
+    let body_len = body.encode(buffer)?;
     report::seal(report, header_len + body_len)
 }
 

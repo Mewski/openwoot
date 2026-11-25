@@ -20,7 +20,7 @@ CI installs. macOS needs nothing beyond the Xcode command line tools.
 | --- | --- |
 | `cargo test --workspace` | host tests of every crate, including the board crates' libraries |
 | `cargo xtask boards [--json]` | lists the packages under `boards/` |
-| `cargo xtask build <board>` / `--all` | `cargo build --release` for the board's target in link order (below), then writes `build/<board>/openwoot-<board>.elf`, `.hex` and `.bin` |
+| `cargo xtask build <board>` / `--all` | `cargo build --release` of the board's firmware package for the board's target, then writes `build/<board>/openwoot-<board>.elf`, `.hex` and `.bin`, and copies the link map to `.map` |
 | `cargo xtask flash <board> --dry-run` | builds the board and runs `openwoot flash --dry-run` on its HEX file |
 | `cargo xtask check` | the rules of the tree (below), formatting, clippy, and every board image |
 | `cargo xtask pac` | regenerates the PAC crates (needs exactly `svd2rust` 0.37.1 and `form` 0.13.0); CI runs it and fails if the committed PACs differ |
@@ -28,19 +28,36 @@ CI installs. macOS needs nothing beyond the Xcode command line tools.
 The target of a board comes from `[package.metadata.openwoot] target` of its chip HAL. HEX and
 binary files are written in Rust from the loadable segments of the ELF file.
 
-## Link order
+## Speed and size
+
+Each board is two packages: the board support crate `boards/<board>/` and its firmware binary
+`openwoot-<board>` in `boards/<board>/firmware/`. Nearly all of the firmware is generic over the
+board's hardware, so its code is generated in whichever of the two crates names the concrete
+types, and a crate's `opt-level` applies to that code. The release profile builds at
+`opt-level = 2`, as the stock firmware is built with GCC `-O2`; at higher levels the Wooting
+60HE+'s code no longer ends below its zero-wait limit `0x0804_0000`. The workspace
+`Cargo.toml` lists every board support crate with `opt-level = "z"`. The board support crate
+instantiates the configuration side (settings storage, profile model, configuration channel and
+profile tasks, start-up with `Board::new`, which takes `&dyn Interrupts` so that it is not
+generic and stays in this crate) and the lighting task, so these are compiled for size; the
+firmware binary binds the interrupt vectors and runs the key and USB tasks (`scanning`, `device`,
+`reports`), so that code, and every shared function they reach, is compiled for speed, and as the
+final crate of the link the binary sets the optimisation of the whole link-time pass. Lighting
+runs on the lowest interrupt executor, where size-compiled code still renders every 16 ms
+(62.5 Hz). `xtask check` reads the crate of every function from the image's DWARF compile units
+and rejects code that an interrupt vector or a task of the key or device executor reaches in a
+crate compiled for size.
+
+## Zero-wait flash
 
 Both microcontrollers fetch code without wait states only from the start of their flash
 (`ZERO_WAIT` in `memory.x`: 512 KiB on the GD32F425, 256 KiB on the GD32F303); beyond it every
-fetch waits. The images are larger, and the compiler's order of functions is arbitrary, so
-`xtask` builds each board twice when needed: it links the image, builds the call graph from its
-relocations and writes `target/<target>/release/openwoot-<board>.symbol-order`, which lists the
-functions that a device interrupt vector or the key task reaches, then the thread executor, then
-the code of each thread task, the task with the least new code first, each group sorted by
-name. When the list differs from the one the image was linked with, it links again. The board's
-`build.rs` passes the file named by `OPENWOOT_SYMBOL_ORDER` to lld as `--symbol-ordering-file`,
-which puts those functions first in `.text`. A plain `cargo build` links in the compiler's order;
-build and flash images through `xtask`.
+fetch waits. The firmware is linked in the compiler's order, the same for `cargo build` and
+`xtask build`; nothing reorders it. `xtask check` requires all code (`.vector_table` and `.text`)
+to lie below the end of `ZERO_WAIT`, as the stock firmware's code does; constants may extend
+beyond it. The firmware's `build.rs` also has the linker write a map (`-Map`); `xtask build`
+finds it and the ELF file in cargo's JSON messages and copies it next to the image, and the
+checks below read its input sections to give every anonymous constant and vtable its own node.
 
 ## What `cargo xtask check` checks
 
@@ -65,25 +82,32 @@ build and flash images through `xtask`.
   end of RAM, the 72-byte descriptor on the 64-byte boundary behind the vector table, naming the
   image area and RAM of `memory.x`, loadable data inside FLASH, and the host tool's image checks on
   the binary (which compare its descriptor, update protocol included, with the ELF section);
-- no panic reachable from an interrupt vector or the key task (`scanning`, found by its name), on
-  the call graph built from the image's relocations; an image without them, or with a `bl` that
-  has none, is rejected. A `MOVW`/`MOVT` address is joined along the code path from the `MOVW`,
-  following unconditional branches, so several `MOVW`s may share one `MOVT` if they name the same
-  symbol and lower half; any other unpaired half is rejected. The graph follows calls and the addresses taken in code and tables, not
-  calls through pointers stored at run time (wakers, `dyn` objects registered at run time), and it
-  leaves out the panic of an `async fn` resumed after completion. Thread-mode tasks are not
-  checked. Panic sites of pinned dependencies that cannot fire are listed with a reason and the
-  context they are reached from (interrupts or the key task) in
-  `xtask/src/check/panic_paths/reviewed.rs`; a site matches only when its `Location` is loaded
-  after the last call before the panic and lies in the cargo registry, and a listed site that no
-  image contains is reported;
+- no panic reachable from an interrupt vector or a task of an interrupt executor (`scanning` on the
+  key executor, `device` and `reports` on the device executor, `lights` on the lighting executor,
+  found by their names), on the call graph built from the image's relocations; an image without
+  them, or with a `bl` that has none, is rejected. A `MOVW`/`MOVT` address is joined along the code
+  path from the `MOVW`, following unconditional branches, so several `MOVW`s may share one `MOVT`
+  if they name the same symbol and lower half; any other unpaired half is rejected. The graph
+  follows calls and the addresses taken in code and tables, not calls through pointers stored at
+  run time (wakers, `dyn` objects registered at run time), and it leaves out the panic of an
+  `async fn` resumed after completion. Thread-mode tasks (`channel`, `profiles`) are not checked.
+  Panic sites of pinned dependencies that cannot fire are listed with a reason and the contexts
+  they are reached from (`reached_from`: `Origin::Interrupt`, `Origin::Task(Executor::..)`) in
+  `xtask/src/check/panic_paths/reviewed.rs`. A panic call is waived only when every `Location`
+  that can reach it lies in the cargo registry and is listed: the one loaded within 64 bytes
+  before the call and after the last call or unconditional branch and, since the compiler merges
+  panic calls behind one shared block, the ones loaded in the blocks that jump into that block,
+  level by level. A listed site that no image contains is reported;
 - no BASEPRI write, so no critical section, reachable from the scan vector (`ADC` on the GD32F425,
   `ADC0_1` on the GD32F303);
-- every function that a device interrupt vector (the vectors from 16 on; the core exceptions end
-  in `cortex-m-rt`'s handlers, whose `HardFault` lies behind `.text`) or the key task reaches lies
-  inside `ZERO_WAIT` of `memory.x`;
+- the vector table and all of `.text` lie inside `ZERO_WAIT` of `memory.x`, and no function that a
+  device interrupt vector (the vectors from 16 on) or a task of the key or device executor reaches
+  belongs to a crate that the release profile compiles for size (`opt-level` `"s"` or `"z"`; the
+  crate of a function is the crate of its DWARF compile unit, the crate that instantiated it); the
+  lighting executor is size-compiled by design and not checked;
 - per board, statics (from the start of RAM to the end of the last static section) plus the stack
-  bound of the call graph (thread mode plus every interrupt handler and the key task) leave 2048
-  bytes of RAM, and the image leaves 32768 bytes of its area; calls that form a cycle are
-  rejected, functions joined only through tables count once, and the budget is printed for every
-  board.
+  bound of the call graph (thread mode, plus the deepest task of each interrupt executor, plus
+  every interrupt handler) leave 2048 bytes of RAM, and the image leaves 32768 bytes of its area;
+  calls that form a cycle are rejected, functions joined only through tables count once, and the
+  budget is printed for every board (`RAM N bytes static + N bytes stack (N thread, N keys,
+  N device, N lighting, N interrupts)`).

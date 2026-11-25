@@ -1,3 +1,4 @@
+use embassy_futures::block_on;
 use embedded_hal_async::spi::SpiDevice;
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use openwoot_drivers::spi_nor::SpiNor;
@@ -23,29 +24,28 @@ pub struct Storage<'s, F: MultiwriteNorFlash> {
 }
 
 impl<'s, D: SpiDevice> Storage<'s, SpiNor<D>> {
-    pub async fn open(
+    pub fn open(
         mut nor: SpiNor<D>,
         cell: &'s mut Settings<SpiNor<D>>,
         settings: SettingsRegion,
-        device_info: impl DeviceInfoSource,
-        layout_variant: impl LayoutVariantSource,
+        device_info: &impl DeviceInfoSource,
+        layout_variant: &impl LayoutVariantSource,
         format_requested: bool,
     ) -> Self {
-        let nor_identity = match (nor.identification().await, nor.unique_id().await) {
-            (Ok(identification), Ok(unique_id)) => Some(NorIdentity {
-                identification,
-                unique_id,
-            }),
-            _ => None,
-        };
-        let device_info = device_info.read(&mut nor).await.ok();
+        let nor_identity =
+            match block_on(async { (nor.identification().await, nor.unique_id().await) }) {
+                (Ok(identification), Ok(unique_id)) => Some(NorIdentity {
+                    identification,
+                    unique_id,
+                }),
+                _ => None,
+            };
+        let device_info = block_on(device_info.read(&mut nor)).ok();
         let factory_layout_variant = layout_variant.variant(device_info.as_ref());
-        let opened = cell
-            .open(Partition::new(nor, settings), format_requested)
-            .await;
+        let opened = cell.open(Partition::new(nor, settings), format_requested);
         let mut settings = opened.is_ok().then_some(cell);
         let layout_variant = match settings.as_deref_mut() {
-            Some(stored) => LayoutOverride::variant_or(stored, factory_layout_variant).await,
+            Some(stored) => LayoutOverride::variant_or(stored, factory_layout_variant),
             None => factory_layout_variant,
         };
         Self {

@@ -1,11 +1,7 @@
-use core::{
-    future::Future,
-    pin::pin,
-    task::{Context, Poll, Waker},
-};
+use core::cell::RefCell;
+use std::thread;
 
 use embassy_futures::block_on;
-use embassy_sync::mutex::Mutex;
 use openwoot::{
     profile::{Configurator, Model},
     protocol::Configuration,
@@ -17,7 +13,7 @@ use openwoot_protocol::profile::Slot;
 
 use super::{
     pipeline::{Bench80, FACTORY, FULL, PROFILE_KEY, World, capabilities, storage},
-    stalled::Stalled,
+    stalled::{Gate, Stalled},
     support::{COLUMNS, KEY_A, ROWS},
 };
 use crate::{
@@ -34,28 +30,31 @@ const LAYOUT: NorLayout = NorLayout {
     device_info: None,
 };
 
-fn stalled_storage() -> Settings<Stalled<Nor>> {
+fn stalled_storage(gate: &Gate) -> Settings<Stalled<'_, Nor>> {
     let formatted = storage()
         .release()
         .map_or_else(|| Nor::new(6), Partition::release);
     let mut settings = Settings::new();
-    let opened = block_on(settings.open(
-        Partition::new(Stalled(formatted), LAYOUT.settings_region()),
+    let opened = settings.open(
+        Partition::new(
+            Stalled {
+                flash: formatted,
+                gate,
+            },
+            LAYOUT.settings_region(),
+        ),
         false,
-    ));
+    );
     assert!(opened.is_ok(), "{opened:?}");
     settings
-}
-
-fn poll_once<F: Future>(future: core::pin::Pin<&mut F>) -> Poll<F::Output> {
-    future.poll(&mut Context::from_waker(Waker::noop()))
 }
 
 #[test]
 fn typing_goes_on_while_a_profile_switch_waits_for_a_flash_write_that_never_ends() {
     let world = World::new();
-    let mut settings = stalled_storage();
-    let mut opened = Model::<_, _, ROWS, COLUMNS>::new(
+    let gate = Gate::default();
+    let mut settings = stalled_storage(&gate);
+    let mut opened = Model::<_, _, (), ROWS, COLUMNS>::new(
         &world.shared,
         &world.profile,
         Some(&mut settings),
@@ -63,32 +62,41 @@ fn typing_goes_on_while_a_profile_switch_waits_for_a_flash_write_that_never_ends
         0,
         4,
     );
-    block_on(opened.load());
-    let model = Mutex::new(opened);
-    let mut configurator = Configurator::new(&model, capabilities());
+    opened.load();
     let mut bench = Bench80::new(world.task(Mode::NoGamepad));
     bench.press(PROFILE_KEY, FULL);
     bench.cycle();
     let requested = block_on(world.shared.profile_request());
-    let mut activation = pin!(configurator.activate_profile(Slot::new(requested)));
-    assert!(poll_once(activation.as_mut()).is_pending());
-    bench.press(PROFILE_KEY, 0);
-    bench.cycle();
-    for _ in 0..3 {
-        let _ = world.reports.take();
-        bench.press(KEY_A, FULL);
-        bench.cycle();
-        assert_eq!(world.keyboard(), Some(vec![0x04]));
-        bench.press(KEY_A, 0);
-        bench.cycle();
-        assert_eq!(world.keyboard(), Some(vec![]));
-        bench.press(PROFILE_KEY, FULL);
-        bench.cycle();
+    thread::scope(|scope| {
+        let activation = scope.spawn(move || {
+            let model = RefCell::new(opened);
+            let mut configurator = Configurator::new(&model, capabilities());
+            configurator.activate_profile(Slot::new(requested))
+        });
+        while !gate.is_waiting() && !activation.is_finished() {
+            thread::yield_now();
+        }
+        assert!(!activation.is_finished());
         bench.press(PROFILE_KEY, 0);
         bench.cycle();
-    }
-    assert!(poll_once(activation.as_mut()).is_pending());
-    assert_eq!(bench.keys.profiles().active(), 1);
+        for _ in 0..3 {
+            let _ = world.reports.take();
+            bench.press(KEY_A, FULL);
+            bench.cycle();
+            assert_eq!(world.keyboard(), Some(vec![0x04]));
+            bench.press(KEY_A, 0);
+            bench.cycle();
+            assert_eq!(world.keyboard(), Some(vec![]));
+            bench.press(PROFILE_KEY, FULL);
+            bench.cycle();
+            bench.press(PROFILE_KEY, 0);
+            bench.cycle();
+        }
+        assert!(!activation.is_finished());
+        assert_eq!(bench.keys.profiles().active(), 1);
+        gate.open();
+        assert_eq!(activation.join().ok(), Some(Ok(())));
+    });
 }
 
 #[test]

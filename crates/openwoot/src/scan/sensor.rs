@@ -1,6 +1,7 @@
 use super::{Converter, LowerRest, Mode};
 use crate::analog::{
-    BottomOut, Calibration, NoiseState, NoiseStatistics, Rebound, ReboundState, Switch, SwitchModel,
+    BottomOut, Calibration, CurveCache, NoiseState, NoiseStatistics, Rebound, ReboundState, Switch,
+    SwitchModel,
 };
 
 const NOISE_BAND_UNMEASURED: u16 = 0xFFFF;
@@ -274,6 +275,7 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
     pub(super) fn update(
         &mut self,
         converter: &impl Converter,
+        curves: &CurveCache<'_>,
         context: Context,
         magnitude: u16,
         value: u16,
@@ -330,12 +332,19 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
                 return Update { activity, ..quiet };
             }
         }
-        let travel = if rebound { 0 } else { self.travel() };
+        let travel = if rebound { 0 } else { self.travel_with(curves) };
         self.reported = travel != 0;
         Update {
             travel: Some(travel),
             activity,
         }
+    }
+
+    #[inline(always)]
+    fn travel_with(&self, curves: &CurveCache<'_>) -> u16 {
+        curves
+            .travel(&self.switch, self.value, self.rest_level, self.bottom_level)
+            .unwrap_or_else(|| self.travel())
     }
 
     #[inline(never)]

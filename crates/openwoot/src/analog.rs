@@ -15,7 +15,8 @@ mod switch_model;
 
 pub(crate) use bottom_out::BottomOut;
 use bottom_out::VALUE_NONE;
-use curve::Curve;
+use curve::{Curve, Points};
+pub use curve::{CurveCache, CurveTable};
 pub use noise::{Calibration, MinMax, NoiseState, NoiseStatistics, StandardDeviation};
 pub use rebound::{Rebound, ReboundState};
 pub use switch::Switch;

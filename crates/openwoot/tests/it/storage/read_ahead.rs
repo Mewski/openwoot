@@ -18,27 +18,27 @@ fn a_store_with_thousands_of_superseded_records_opens_in_a_few_hundred_flash_rea
     let (mut settings, _) = open(nor, layout, false).unwrap();
     let blobs: Vec<Blob> = (0..u32::from(PROFILES)).map(blob).collect();
     for (profile, value) in (0..PROFILES).zip(&blobs) {
-        block_on(settings.store(Scope::Profile(profile), value)).unwrap();
+        settings.store(Scope::Profile(profile), value).unwrap();
     }
     for switch in 0..PROFILE_SWITCHES {
         let [level, ..] = switch.to_le_bytes();
-        block_on(settings.store(Scope::Global, &Brightness(level))).unwrap();
+        settings.store(Scope::Global, &Brightness(level)).unwrap();
     }
     let (probe, watch) = Probe::new(close(settings).unwrap());
     let mut settings = Settings::new();
-    let opened = block_on(settings.open(Partition::new(probe, layout.settings_region()), false));
+    let opened = settings.open(Partition::new(probe, layout.settings_region()), false);
     assert_eq!(opened, Ok(Opened::Kept));
     let reads = watch.reads();
     assert!(reads < OPENING_READS, "{reads} reads");
     for (profile, value) in (0..PROFILES).zip(&blobs) {
         assert_eq!(
-            block_on(settings.load::<Blob>(Scope::Profile(profile))).unwrap(),
+            settings.load::<Blob>(Scope::Profile(profile)).unwrap(),
             Some(*value)
         );
     }
     let [last, ..] = (PROFILE_SWITCHES - 1).to_le_bytes();
     assert_eq!(
-        block_on(settings.load::<Brightness>(Scope::Global)).unwrap(),
+        settings.load::<Brightness>(Scope::Global).unwrap(),
         Some(Brightness(last))
     );
 }
