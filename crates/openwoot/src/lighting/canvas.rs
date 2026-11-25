@@ -155,9 +155,8 @@ mod tests {
         assert_eq!(painter.key(0, 0), Some(rgb(232, 255, 255)));
         painter.scale_key(0, 0, 128);
         assert_eq!(painter.key(0, 0), Some(rgb(116, 128, 128)));
-        assert_eq!(dirty.queued(), &[1, 0]);
-        assert_eq!(dirty.pop(), Some(1));
         assert_eq!(dirty.pop(), Some(0));
+        assert_eq!(dirty.pop(), Some(1));
         assert_eq!(dirty.pop(), None);
         assert_eq!(frame.page(0), Some(&[116, 128, 128, 0, 0, 0]));
     }

@@ -57,6 +57,7 @@ where
                 sensors: &state.sensors,
                 face,
                 diagnostics: &state.diagnostics,
+                led_window: &state.led_window,
             },
             lighting: Lighting {
                 lighting: state.lighting.init(lighting),
@@ -66,6 +67,7 @@ where
                 host_control: &state.host_control,
                 diagnostics: &state.diagnostics,
                 profile: &state.profile,
+                led_window: &state.led_window,
             },
         }
     }

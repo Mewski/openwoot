@@ -36,7 +36,7 @@ use openwoot_protocol::{
 use crate::{
     lighting::{COLUMNS, GEOMETRY, LENGTH, MAP, PAGES, ROWS, VARIANT},
     storage::{Nor, Probe, SECTOR, Watch},
-    support::{Host, IDENTITY, Outcome, poll, setup},
+    support::{Host, IDENTITY, Outcome, between_scans, poll, setup},
 };
 
 type Mutual = CriticalSectionRawMutex;
@@ -334,7 +334,10 @@ fn factory_profiles_light_the_leds_once_the_host_configures_the_keyboard() {
     assert!(poll(device.as_mut()).is_none());
     assert!(lighting.host.is_active());
     for now_ms in [20, 40, 300] {
-        block_on(lighting.step(&mut leds, &(), now_ms, lighting.host.is_active()));
+        between_scans(
+            lighting.led_window,
+            lighting.step(&mut leds, &(), now_ms, lighting.host.is_active()),
+        );
     }
     assert_eq!(leds.calls.first(), Some(&Call::Running(true)));
     assert!(leds.writes() >= PAGES);

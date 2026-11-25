@@ -129,12 +129,23 @@ where
             let mut write = PageWrite::new(page, layout, linear, scale);
             self.hooks
                 .apply_page_brightness(page, linear, write.values_mut(), self.fade_level);
-            return Some(write);
+            if !self.sent.holds(&write) {
+                return Some(write);
+            }
         }
+    }
+
+    pub fn confirm_write(&mut self, write: &PageWrite<LENGTH>) {
+        self.sent.record(write);
+    }
+
+    pub fn requeue_write(&mut self, write: &PageWrite<LENGTH>) {
+        self.dirty.requeue(write.page);
     }
 
     pub fn invalidate(&mut self) {
         self.dirty.push_all();
+        self.sent.forget();
     }
 
     fn apply_layer_colors(&mut self) {

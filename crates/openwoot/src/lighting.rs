@@ -17,6 +17,7 @@ mod matrix;
 mod output;
 mod overlay;
 mod readback;
+mod sent_pages;
 mod signals;
 mod truncate;
 

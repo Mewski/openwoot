@@ -1,4 +1,5 @@
 use std::{
+    cell::{Cell, RefCell},
     collections::HashMap,
     future::Future,
     pin::{Pin, pin},
@@ -6,10 +7,10 @@ use std::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     },
-    task::{Context, Wake, Waker},
+    task::{Context, Poll, Wake, Waker},
 };
 
-use embassy_futures::join::join3;
+use embassy_futures::{join::join3, yield_now};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, MockDriver};
 use embassy_usb_driver::{Event, Speed as BusSpeed};
@@ -22,9 +23,10 @@ use openwoot::{
     },
     keys::{Key, Keys, Notice, Output, RapidTrigger, Shared, Switch, Tuning},
     layout::Standard,
-    lighting::KeyEvents,
+    lighting::{HostControl, KeyEvents, LedMatrix},
+    profile,
     protocol::{self, Handler},
-    runtime::{Device, KeyNotices, KeyReports, KeyTask, Progress, Usb},
+    runtime::{self, Device, KeyNotices, KeyReports, KeyTask, LedWindow, Progress, Usb},
     scan::{self, Map, Position, Scanner, SensorReadout},
     usb::{Face, HostState, KeyboardFormat, Mode, PollingRate, Resources, Speed},
 };
@@ -41,11 +43,11 @@ use openwoot_protocol::{
 };
 
 use crate::{
-    lighting::lighting,
+    lighting::{PAGES, START_MS, lighting},
     scan::{Bench, Simulated, sensors},
     support::{
-        EXAMPLE_SERIAL, Host, IDENTITY, Outcome, Recorder, parse_configuration, poll, setup,
-        stock_identity,
+        EXAMPLE_SERIAL, Host, IDENTITY, Outcome, Recorder, hold_clock, parse_configuration, poll,
+        setup, stock_identity,
     },
 };
 
@@ -496,6 +498,7 @@ struct Peers {
     notices: KeyNotices,
     sensors: SensorReadout,
     diagnostics: Diagnostics,
+    led_window: LedWindow,
 }
 
 impl Peers {
@@ -506,6 +509,7 @@ impl Peers {
             notices: KeyNotices::new(),
             sensors: SensorReadout::new(),
             diagnostics: Diagnostics::new(),
+            led_window: LedWindow::new(),
         }
     }
 
@@ -523,6 +527,7 @@ impl Peers {
             sensors: &self.sensors,
             face: Face::default(),
             diagnostics: &self.diagnostics,
+            led_window: &self.led_window,
         }
     }
 
@@ -531,6 +536,13 @@ impl Peers {
             .report(UsbReadout::default(), Hardware::default())
             .keys
             .reports
+    }
+
+    fn cycles(&self) -> u32 {
+        self.diagnostics
+            .report(UsbReadout::default(), Hardware::default())
+            .scan
+            .cycles
     }
 }
 
@@ -899,6 +911,7 @@ fn a_brightness_release_behind_a_full_notice_queue_still_stops_the_repeat() {
 
 #[test]
 fn the_key_task_waits_on_a_timer_for_its_scanner_and_recovers_stalled_scans() {
+    let _clock = hold_clock();
     let clock = MockDriver::get();
     let host = HostState::new();
     let key_reports = KeyReports::new();
@@ -941,4 +954,201 @@ fn the_key_task_waits_on_a_timer_for_its_scanner_and_recovers_stalled_scans() {
     clock.advance(Duration::from_millis(50));
     assert!(run.as_mut().poll(&mut context).is_pending());
     assert_eq!(scan_counts(), (1, 2));
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TransferStart {
+    scanning: bool,
+    cycles: u32,
+}
+
+#[derive(Default)]
+struct LedBus {
+    busy: Cell<bool>,
+    starts: RefCell<Vec<TransferStart>>,
+}
+
+struct SlowLeds<'a> {
+    bus: &'a LedBus,
+    scan: &'a scan::Shared<Bench, 6, 15>,
+    peers: &'a Peers,
+    polls: usize,
+}
+
+impl SlowLeds<'_> {
+    async fn transfer(&self) -> Result<(), ()> {
+        self.bus.starts.borrow_mut().push(TransferStart {
+            scanning: self.scan.is_running(),
+            cycles: self.peers.cycles(),
+        });
+        self.bus.busy.set(true);
+        for _ in 0..self.polls {
+            yield_now().await;
+        }
+        self.bus.busy.set(false);
+        Ok(())
+    }
+}
+
+impl LedMatrix for SlowLeds<'_> {
+    type Error = ();
+
+    async fn initialize(&mut self) -> Result<(), ()> {
+        self.transfer().await
+    }
+
+    async fn set_running(&mut self, _running: bool) -> Result<(), ()> {
+        self.transfer().await
+    }
+
+    async fn write(&mut self, _bank: u8, _first_register: u8, _values: &[u8]) -> Result<(), ()> {
+        self.transfer().await
+    }
+}
+
+fn installed_scan() -> scan::Shared<Bench, 6, 15> {
+    let scan = scan::Shared::new();
+    assert!(scan.install(|| Scanner::new(
+        Simulated::default(),
+        MAP,
+        [0, 1, 2, 3, 4, 5],
+        sensors()
+    )));
+    scan
+}
+
+fn transfers_beside_the_scan(polls_per_transfer: usize) -> Vec<TransferStart> {
+    let _clock = hold_clock();
+    let host = HostState::new();
+    let key_reports = KeyReports::new();
+    let peers = Peers::new();
+    let task = peers.task(&host, &key_reports);
+    let scan = installed_scan();
+    let mut keys = Keys::<Standard, ROWS, COLUMNS>::new(Standard);
+    let bus = LedBus::default();
+    let mut leds = SlowLeds {
+        bus: &bus,
+        scan: &scan,
+        peers: &peers,
+        polls: polls_per_transfer,
+    };
+    let mut engine = lighting(255, Effects::new());
+    let mut lights = runtime::Lighting {
+        lighting: &mut engine,
+        events: &KeyEvents::new(),
+        notices: &KeyNotices::new(),
+        host: &host,
+        host_control: &HostControl::new(),
+        diagnostics: &Diagnostics::new(),
+        profile: &profile::Shared::<Mutual>::new(),
+        led_window: &peers.led_window,
+    };
+    let mut context = Context::from_waker(Waker::noop());
+    let mut run = pin!(task.run(&scan, &mut keys));
+    let mut step = pin!(lights.step(&mut leds, &(), START_MS, true));
+    let mut delivered = None;
+    for _ in 0..MAX_CONVERSIONS {
+        if let Poll::Ready(outcome) = step.as_mut().poll(&mut context) {
+            delivered = Some(outcome);
+            break;
+        }
+        assert!(run.as_mut().poll(&mut context).is_pending());
+        assert!(
+            !(bus.busy.get() && scan.is_running()),
+            "a scan cycle started during an LED transfer"
+        );
+        if scan.is_running() {
+            scan.on_conversion();
+        }
+    }
+    assert_eq!(delivered, Some(true), "the LED transfers never finished");
+    bus.starts.take()
+}
+
+#[test]
+fn no_conversion_runs_while_an_led_transfer_is_on_the_bus() {
+    let starts = transfers_beside_the_scan(7);
+    assert_eq!(starts.len(), 1 + PAGES, "{starts:?}");
+    assert!(
+        starts.iter().all(|start| !start.scanning),
+        "an LED transfer started during a scan cycle: {starts:?}"
+    );
+}
+
+#[test]
+fn the_key_task_lets_one_led_page_out_between_two_scan_cycles() {
+    let starts = transfers_beside_the_scan(1);
+    let cycles: Vec<u32> = starts.iter().map(|start| start.cycles).collect();
+    let expected: Vec<u32> = (1..=u32::try_from(1 + PAGES).unwrap()).collect();
+    assert_eq!(
+        cycles, expected,
+        "the wake-up waits for the calibration and the first cycle, then one transfer follows each cycle"
+    );
+}
+
+#[test]
+fn an_led_transfer_that_never_ends_holds_the_scan_back_for_the_transfer_limit_only() {
+    let _clock = hold_clock();
+    let clock = MockDriver::get();
+    let host = HostState::new();
+    let key_reports = KeyReports::new();
+    let peers = Peers::new();
+    let task = peers.task(&host, &key_reports);
+    let scan = installed_scan();
+    let mut keys = Keys::<Standard, ROWS, COLUMNS>::new(Standard);
+    let bus = LedBus::default();
+    let mut leds = SlowLeds {
+        bus: &bus,
+        scan: &scan,
+        peers: &peers,
+        polls: usize::MAX,
+    };
+    let mut engine = lighting(255, Effects::new());
+    let mut lights = runtime::Lighting {
+        lighting: &mut engine,
+        events: &KeyEvents::new(),
+        notices: &KeyNotices::new(),
+        host: &host,
+        host_control: &HostControl::new(),
+        diagnostics: &Diagnostics::new(),
+        profile: &profile::Shared::<Mutual>::new(),
+        led_window: &peers.led_window,
+    };
+    let mut context = Context::from_waker(Waker::noop());
+    let mut run = pin!(task.run(&scan, &mut keys));
+    let mut step = pin!(lights.step(&mut leds, &(), START_MS, true));
+    for _ in 0..MAX_CONVERSIONS {
+        assert!(step.as_mut().poll(&mut context).is_pending());
+        if bus.busy.get() {
+            break;
+        }
+        assert!(run.as_mut().poll(&mut context).is_pending());
+        if scan.is_running() {
+            scan.on_conversion();
+        }
+    }
+    assert!(bus.busy.get(), "the LED transfer never started");
+    for _ in 0..10 {
+        assert!(step.as_mut().poll(&mut context).is_pending());
+        assert!(run.as_mut().poll(&mut context).is_pending());
+    }
+    assert!(!scan.is_running());
+    clock.advance(LedWindow::TRANSFER_LIMIT - Duration::from_ticks(1));
+    assert!(run.as_mut().poll(&mut context).is_pending());
+    assert!(!scan.is_running(), "the scan resumed before the limit");
+    clock.advance(Duration::from_ticks(1));
+    assert!(run.as_mut().poll(&mut context).is_pending());
+    assert!(scan.is_running(), "the scan still waits for the LED bus");
+    let cycles = peers.cycles();
+    for cycle in 1..=3 {
+        finish_scan(&scan);
+        assert!(step.as_mut().poll(&mut context).is_pending());
+        assert!(run.as_mut().poll(&mut context).is_pending());
+        assert!(
+            scan.is_running(),
+            "the scan waited again for the same transfer"
+        );
+        assert_eq!(peers.cycles(), cycles + cycle);
+    }
+    assert_eq!(bus.starts.borrow().len(), 1);
 }

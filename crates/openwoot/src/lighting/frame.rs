@@ -105,7 +105,8 @@ mod tests {
         Painter::new(&mut scratch, &MAP, &VARIANT, None).set_led(Led(3), rgb(10, 20, 30));
         scratch.pages[1][4] = 77;
         scratch.merge_into(&mut main, &MAP.pages, &mut dirty);
-        assert_eq!(dirty.queued(), &[1]);
+        assert_eq!(dirty.pop(), Some(1));
+        assert_eq!(dirty.pop(), None);
         assert_eq!(main.page(1), Some(&[9, 20, 30, 0, 0, 0]));
     }
 }

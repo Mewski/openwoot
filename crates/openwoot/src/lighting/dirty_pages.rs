@@ -1,7 +1,7 @@
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DirtyPages<const PAGES: usize> {
-    queue: [u8; PAGES],
-    length: usize,
+    dirty: [bool; PAGES],
+    next: usize,
 }
 
 impl<const PAGES: usize> Default for DirtyPages<PAGES> {
@@ -14,39 +14,73 @@ impl<const PAGES: usize> DirtyPages<PAGES> {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            queue: [0; PAGES],
-            length: 0,
+            dirty: [false; PAGES],
+            next: 0,
         }
     }
 
     pub fn push(&mut self, page: usize) {
-        let Ok(page) = u8::try_from(page) else {
-            return;
-        };
-        if usize::from(page) >= PAGES || self.queued().contains(&page) {
-            return;
-        }
-        if let Some(slot) = self.queue.get_mut(self.length) {
-            *slot = page;
-            self.length += 1;
+        if let Some(dirty) = self.dirty.get_mut(page) {
+            *dirty = true;
         }
     }
 
     pub fn push_all(&mut self) {
-        for page in 0..PAGES {
-            self.push(page);
-        }
+        self.dirty = [true; PAGES];
     }
 
     pub fn pop(&mut self) -> Option<usize> {
-        let first = *self.queued().first()?;
-        self.queue.copy_within(1..self.length, 0);
-        self.length -= 1;
-        Some(usize::from(first))
+        let page = (self.next..PAGES)
+            .chain(0..self.next)
+            .find(|page| self.dirty.get(*page) == Some(&true))?;
+        if let Some(dirty) = self.dirty.get_mut(page) {
+            *dirty = false;
+        }
+        self.next = page + 1;
+        Some(page)
     }
 
-    #[must_use]
-    pub fn queued(&self) -> &[u8] {
-        self.queue.get(..self.length).unwrap_or_default()
+    pub fn requeue(&mut self, page: usize) {
+        if let Some(dirty) = self.dirty.get_mut(page) {
+            *dirty = true;
+            self.next = page;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pages_go_out_in_turn_from_the_one_after_the_last_taken() {
+        let mut dirty = DirtyPages::<4>::new();
+        dirty.push(2);
+        dirty.push(0);
+        dirty.push(2);
+        dirty.push(9);
+        assert_eq!(dirty.pop(), Some(0));
+        dirty.push(0);
+        assert_eq!(dirty.pop(), Some(2));
+        dirty.push_all();
+        assert_eq!(dirty.pop(), Some(3));
+        assert_eq!(dirty.pop(), Some(0));
+        assert_eq!(dirty.pop(), Some(1));
+        assert_eq!(dirty.pop(), Some(2));
+        assert_eq!(dirty.pop(), None);
+    }
+
+    #[test]
+    fn a_requeued_page_goes_out_first() {
+        let mut dirty = DirtyPages::<4>::new();
+        dirty.push_all();
+        assert_eq!(dirty.pop(), Some(0));
+        assert_eq!(dirty.pop(), Some(1));
+        dirty.requeue(1);
+        assert_eq!(dirty.pop(), Some(1));
+        assert_eq!(dirty.pop(), Some(2));
+        dirty.requeue(7);
+        assert_eq!(dirty.pop(), Some(3));
+        assert_eq!(dirty.pop(), None);
     }
 }

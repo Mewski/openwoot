@@ -3,7 +3,7 @@ use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_time::{Duration, Instant, Timer};
 use openwoot_protocol::keys::ScanMode;
 
-use super::{KeyNotices, KeyReports};
+use super::{KeyNotices, KeyReports, LedWindow};
 use crate::{
     analog::SwitchModel,
     diagnostics::Diagnostics,
@@ -29,6 +29,7 @@ pub struct KeyTask<'d, M: RawMutex> {
     pub sensors: &'d SensorReadout,
     pub face: Face,
     pub diagnostics: &'d Diagnostics,
+    pub led_window: &'d LedWindow,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -64,6 +65,7 @@ impl<M: RawMutex> KeyTask<'_, M> {
                 Either::First(false) => Timer::after(RETRY_DELAY).await,
                 Either::Second(()) => self.recover::<S, INPUTS, ADDRESSES, ROWS, COLUMNS>(scan),
             }
+            self.led_window.grant().await;
         }
         let mut progress = Progress::default();
         loop {
@@ -76,6 +78,7 @@ impl<M: RawMutex> KeyTask<'_, M> {
                 Either::First(false) => Timer::after(RETRY_DELAY).await,
                 Either::Second(()) => self.recover::<S, INPUTS, ADDRESSES, ROWS, COLUMNS>(scan),
             }
+            self.led_window.grant().await;
         }
     }
 

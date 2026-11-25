@@ -2,7 +2,7 @@ use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_usb::driver;
 use static_cell::{ConstStaticCell, StaticCell};
 
-use super::{KeyNotices, KeyReports};
+use super::{KeyNotices, KeyReports, LedWindow};
 use crate::{
     diagnostics::{Diagnostics, Hardware, Readout},
     keys,
@@ -30,6 +30,7 @@ pub struct State<
     pub(super) key_reports: KeyReports<M>,
     pub(super) keys: keys::Shared<M>,
     pub(super) profile: profile::Shared<M>,
+    pub(super) led_window: LedWindow,
     pub(super) lighting: StaticCell<lighting::Lighting<H, ROWS, COLUMNS, PAGES, LENGTH>>,
 }
 
@@ -55,6 +56,7 @@ impl<
             key_reports: KeyReports::new(),
             keys: keys::Shared::new(),
             profile: profile::Shared::new(),
+            led_window: LedWindow::new(),
             lighting: StaticCell::new(),
         }
     }

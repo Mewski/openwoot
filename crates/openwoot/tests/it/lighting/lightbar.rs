@@ -1195,6 +1195,7 @@ mod bus_reset {
         let events = KeyEvents::new();
         let notices = runtime::KeyNotices::new();
         let diagnostics = Diagnostics::new();
+        let window = runtime::LedWindow::new();
         let mut task = runtime::Lighting {
             lighting: &mut lighting,
             events: &events,
@@ -1203,6 +1204,7 @@ mod bus_reset {
             host_control: &HOST_CONTROL,
             diagnostics: &diagnostics,
             profile: &shared,
+            led_window: &window,
         };
         let shown = |lighting: &mut Lighting<Bar, ROWS, COLUMNS, BAR_PAGES, LENGTH>| {
             bar_colors(lighting.hooks_mut())

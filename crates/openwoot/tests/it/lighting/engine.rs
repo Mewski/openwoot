@@ -74,7 +74,24 @@ fn apply(lighting: &mut TestLighting, operation: &[&str], now_ms: u32) {
     }
 }
 
-fn run_scenario(line: &str) -> (String, Vec<u64>) {
+struct Scenario<'a> {
+    name: String,
+    duration: u32,
+    brightness: u8,
+    effects: Effects,
+    operations: Vec<(u32, Vec<&'a str>)>,
+}
+
+impl Scenario<'_> {
+    fn operations_at(&self, now_ms: u32) -> impl Iterator<Item = &[&str]> {
+        self.operations
+            .iter()
+            .filter(move |(time, _)| *time == now_ms)
+            .map(|(_, operation)| operation.as_slice())
+    }
+}
+
+fn parse_scenario(line: &str) -> Scenario<'_> {
     let words: Vec<&str> = line.split_whitespace().skip(1).collect();
     let name = words[0].to_owned();
     let duration: u32 = words[1].parse().unwrap();
@@ -112,11 +129,22 @@ fn run_scenario(line: &str) -> (String, Vec<u64>) {
             .all(|(time, _)| (START_MS..=START_MS + duration).contains(time)),
         "{name} has an operation outside its {duration} ms"
     );
-    let mut lighting = lighting(brightness, effects);
+    Scenario {
+        name,
+        duration,
+        brightness,
+        effects,
+        operations,
+    }
+}
+
+fn run_scenario(line: &str) -> (String, Vec<u64>) {
+    let scenario = parse_scenario(line);
+    let mut lighting = lighting(scenario.brightness, scenario.effects.clone());
     let mut chip = Chip::new();
     let mut digests = Vec::new();
-    for now_ms in START_MS..=START_MS + duration {
-        for (_, operation) in operations.iter().filter(|(time, _)| *time == now_ms) {
+    for now_ms in START_MS..=START_MS + scenario.duration {
+        for operation in scenario.operations_at(now_ms) {
             apply(&mut lighting, operation, now_ms);
         }
         lighting.update(now_ms, &());
@@ -125,7 +153,32 @@ fn run_scenario(line: &str) -> (String, Vec<u64>) {
             digests.push(chip.digest());
         }
     }
-    (name, digests)
+    (scenario.name, digests)
+}
+
+fn sent_and_needed_pages(scenario: &Scenario<'_>) -> (usize, usize) {
+    let mut every_page = lighting(scenario.brightness, scenario.effects.clone());
+    let mut skipping = lighting(scenario.brightness, scenario.effects.clone());
+    let mut reference = Chip::new();
+    let mut chip = Chip::new();
+    let (mut sent, mut needed) = (0, 0);
+    for now_ms in START_MS..=START_MS + scenario.duration {
+        for operation in scenario.operations_at(now_ms) {
+            apply(&mut every_page, operation, now_ms);
+            apply(&mut skipping, operation, now_ms);
+        }
+        every_page.update(now_ms, &());
+        skipping.update(now_ms, &());
+        sent += reference.drain(&mut every_page);
+        needed += chip.sync(&mut skipping);
+        assert!(
+            chip == reference,
+            "{} left the driver holding other values at {now_ms} ms",
+            scenario.name
+        );
+        assert_eq!(skipping.frame(), every_page.frame(), "{}", scenario.name);
+    }
+    (sent, needed)
 }
 
 #[test]
@@ -170,6 +223,36 @@ fn outputs_match_the_reference_firmware_through_fades_overlays_and_layers() {
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+#[test]
+fn pages_the_driver_already_holds_are_skipped_and_every_register_ends_the_same() {
+    for line in GOLDEN.lines().filter(|line| line.starts_with("e ")) {
+        let (sent, needed) = sent_and_needed_pages(&parse_scenario(line));
+        assert!(needed <= sent, "{line}");
+    }
+    let rainbow = |brightness| Scenario {
+        name: format!("rainbow at brightness {brightness}"),
+        duration: 1000,
+        brightness,
+        effects: single(1, [0, 4, 1, 0]),
+        operations: vec![(START_MS, vec!["W"]), (START_MS + 300, vec!["P", "2", "3"])],
+    };
+    let (sent, needed) = sent_and_needed_pages(&rainbow(0));
+    assert!(
+        needed <= PAGES && sent > 10 * PAGES,
+        "a dark animation sent {needed} of {sent} pages"
+    );
+    let (sent, needed) = sent_and_needed_pages(&rainbow(12));
+    assert!(
+        needed < sent,
+        "a dim animation sent {needed} of {sent} pages"
+    );
+    let (sent, needed) = sent_and_needed_pages(&rainbow(255));
+    assert!(
+        needed <= sent,
+        "a bright animation sent {needed} of {sent} pages"
+    );
 }
 
 #[test]

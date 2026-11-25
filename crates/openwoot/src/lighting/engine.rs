@@ -17,6 +17,7 @@ use super::{
     key_colors::{LayerColors, paint},
     leds::{Geometry, LedMap, Variant},
     overlay::{CLASS_KEYS, FADE_FULL, Overlay, OverlayId, Overlays, Span},
+    sent_pages::SentPages,
     signals::HeldKeys,
 };
 use crate::keys::Key;
@@ -48,6 +49,7 @@ pub struct Lighting<
     hooks: H,
     frame: Frame<PAGES, LENGTH>,
     dirty: DirtyPages<PAGES>,
+    sent: SentPages<PAGES, LENGTH>,
     effects: EffectStack<ROWS, COLUMNS>,
     overlays: Overlays,
     colors: LayerColors<ROWS, COLUMNS>,
@@ -84,6 +86,7 @@ where
             hooks,
             frame: Frame::new(),
             dirty: DirtyPages::new(),
+            sent: SentPages::new(),
             effects: EffectStack::new(),
             overlays: Overlays::new(),
             colors: LayerColors::new(),

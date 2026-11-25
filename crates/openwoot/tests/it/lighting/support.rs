@@ -8,7 +8,7 @@ use openwoot::{
     keys::Key,
     lighting::{
         Bar, FramePage, Gains, Geometry, HostControl, Led, LedMap, LedPosition, Lightbar, Lighting,
-        Signals, Variant, from_rgb565, rgb,
+        PageWrite, Signals, Variant, from_rgb565, rgb,
     },
     protocol::{Configuration, Handler},
 };
@@ -143,10 +143,17 @@ impl Chip {
     pub(crate) fn drain(&mut self, lighting: &mut TestLighting) -> usize {
         let mut writes = 0;
         while let Some(write) = lighting.next_write() {
-            let bank = usize::from(write.bank);
-            let first = usize::from(write.first_register);
-            self.registers[bank][first..first + write.values().len()]
-                .copy_from_slice(write.values());
+            self.store(&write);
+            writes += 1;
+        }
+        writes
+    }
+
+    pub(crate) fn sync(&mut self, lighting: &mut TestLighting) -> usize {
+        let mut writes = 0;
+        while let Some(write) = lighting.next_write() {
+            self.store(&write);
+            lighting.confirm_write(&write);
             writes += 1;
         }
         writes
@@ -173,6 +180,12 @@ impl Chip {
             }
         }
         hash
+    }
+
+    fn store(&mut self, write: &PageWrite<LENGTH>) {
+        let bank = usize::from(write.bank);
+        let first = usize::from(write.first_register);
+        self.registers[bank][first..first + write.values().len()].copy_from_slice(write.values());
     }
 }
 

@@ -55,16 +55,18 @@ hands back one part per task; the firmware binary's `start` spawns each task on 
 Each level pre-empts the ones below it, so the key pass never waits behind USB, lighting or a
 settings write, the USB device and the reports never wait behind a frame or flash I/O, and
 lighting, compiled for size on the lowest executor, keeps its render cadence of one frame every
-16 ms (62.5 Hz). Thread mode runs only the configuration side, the one part that writes the
-flash.
+16 ms (62.5 Hz). The scan waits for lighting on purpose, as the stock main loop does: every
+transfer to the LED driver runs between two scan cycles, never during one (see
+[LED transfers between scan cycles](#led-transfers-between-scan-cycles)). Thread mode runs only
+the configuration side, the one part that writes the flash.
 
 | Task | Runs |
 | --- | --- |
-| `scanning` | `runtime::KeyTask::run`: calibration, then scan cycles (`scan::Shared::cycle`), each followed by one pass of the key engine (`keys::Keys`); publishes the reports into `runtime::KeyReports`, key events and notices for the lighting task, and asks for a remote wake-up when a key is pressed while the host sleeps |
+| `scanning` | `runtime::KeyTask::run`: calibration, then scan cycles (`scan::Shared::cycle`), each followed by one pass of the key engine (`keys::Keys`) and then by at most one transfer to the LED driver (`runtime::LedWindow::grant`); publishes the reports into `runtime::KeyReports`, key events and notices for the lighting task, and asks for a remote wake-up when a key is pressed while the host sleeps |
 | `device` | builds the USB device from its `Send` parts (`runtime::UsbParts::build`, which gives `runtime::UsbTasks { device, channel, reports }`), passes the configuration channel to thread mode (`configuration::hand_over`, a static `Signal`), spawns `reports` with the device executor's `SendSpawner` it was given, then runs `runtime::Device::run`: enumeration, control requests, suspend and resume; while the host sleeps it waits for the bus to resume or for a wake-up request, and wakes the host if the host armed remote wake-up |
 | `channel` | waits for the channel from `device`, then serves the configuration channel on interface 2 (`runtime::Channel`): requests through the interrupt endpoints and stock feature reports, answered by `protocol::Handler`; owns the chip HAL's `Bootloader` (`protocol::UpdateMode`) for update mode |
 | `reports` | `runtime::Reports::run`: each time the host configures the device, one idle report on every HID input endpoint, then one forwarder per endpoint (keyboard; system, consumer and mouse; key states; gamepad or XInput) that sends what `KeyReports` holds for it; the LED pattern on the XInput output endpoint sets the player (`usb::HostState::xinput_player`, which `GetGamepadState` reports) |
-| `lights` | the lighting engine on the LED driver (`runtime::Lighting`), woken by key events, notices and host-lighting requests, every 4 ms and when its next frame falls due; it renders a frame at most every 16 ms |
+| `lights` | the lighting engine on the LED driver (`runtime::Lighting`), woken by key events, notices and host-lighting requests, every 4 ms and when its next frame falls due; it renders a frame at most every 16 ms, and each write to the LED driver waits for a gap between two scan cycles |
 | `profiles` | `profile::Configurator::serve`: activates the profile the keys request and saves the brightness after the brightness keys |
 
 `KeyReports` keeps, per report type, the report the key task offered last and the reports its
@@ -192,9 +194,11 @@ A press reaches the keyboard report at the end of the scan cycle that samples it
 cycle when it lands before its key's conversion, at the end of the next cycle when it lands after
 it (`keys::latency` tests). A single-input cycle of the 80HE map converts 85 times and waits
 481 µs between conversions (513 µs with 375 ns per conversion); the key step that follows takes
-about 150 µs, so a press is published 0.15 to 1.5 ms after it happens. Delivery then waits for
-the `reports` task to load the report into the keyboard endpoint and for the host's next poll of
-that endpoint.
+about 150 µs, so a press is published 0.15 to 1.5 ms after it happens. While LED pages go out, the
+gap before the next cycle also holds one LED transfer of about 1 ms
+([LED transfers between scan cycles](#led-transfers-between-scan-cycles)), which delays a press
+that lands after its key's conversion by as much. Delivery then waits for the `reports` task to
+load the report into the keyboard endpoint and for the host's next poll of that endpoint.
 
 `xtask check` reads every board image with its relocations (the boards link with
 `--emit-relocs`) and its link map (`-Map`, passed by the firmware's `build.rs`; `xtask build`
@@ -245,6 +249,50 @@ in `.bss`, not in `.data`.
 The chip HALs paint the stack at reset (`cortex-m-rt` `paint-stack`); `GetDiagnostics`
 (`openwoot/diagnostics`) reports the stack size and the deepest use since reset, and
 `openwoot status` prints it as `stack peak`.
+
+### LED transfers between scan cycles
+
+A write to the IS31FL3741 disturbs the hall-sensor samples converted while it runs: input 2 of
+the 80HE reads 20 to 40 counts high, enough for sub-actuation travel on idle keys
+([lessons](hardware.md#lessons-from-the-wooting-80he)). As in the stock main loop
+(`startup_run_active_task`: one scan cycle, the key pass, at most one dirty page through a
+blocking transfer, then the next cycle), no transfer to the LED driver overlaps a conversion:
+
+- `runtime::LedWindow` lies in `runtime::State` and is shared by the key task and the lighting
+  task. The lighting task enters it around every write to the driver (a frame page with its page
+  select, the wake and the shutdown write) and waits there until the key task opens it.
+- After each scan cycle and its key pass, and after a calibration attempt that failed or ran
+  out, the key task calls `LedWindow::grant`: when a transfer waits, it opens the window and
+  waits for the end of the transfer, at most `LedWindow::TRANSFER_LIMIT` (2 ms; a page of 36
+  registers with its page select takes about 1 ms at 400 kHz); otherwise it returns at once. One
+  grant per gap lets at most one transfer out between two cycles, and the next cycle starts as
+  soon as it ends.
+- A transfer that runs past the limit (the I2C driver gives each step 10 ms) lets the scan
+  resume, and the key task does not wait for it again; the lighting task asks for the next gap
+  once it ends. A hung LED bus therefore holds the scan back by the limit at most.
+- The driver's initialization runs outside the window. At start-up the lighting task
+  initializes the driver while the key task runs the calibration sweep, which has no gaps, as
+  stock's `main` runs `rgb_driver_init` after `adc_scan_start_sweep`; the initialization starts
+  with a software reset that leaves the driver shut down, so no LED current switches, and a
+  sweep sample that the bus traffic raises only raises that key's rest level, which idle
+  recalibration lowers again. After three failed steps the lighting task first writes a shutdown
+  in a gap and then initializes the driver again.
+- The cost: while pages are dirty, every gap holds one transfer, so the scan rate falls by the
+  share of the LED bus (stock pays the same; on the 80HE the default rainbow wave writes 300 pages
+  a second and the scan runs 1111 instead of 1466 cycles a second), and a press can wait one
+  transfer longer. Static lighting, idle-off and fast-scan mode write nothing and cost nothing.
+- A frame whose 10 pages all changed needs about 15 ms of gaps, close to the 16 ms frame period,
+  so page writes give way to the next frame: a step stops waiting for a gap 2 ms before its next
+  frame falls due (`Lighting::requeue_write` gives the page back) and the pages left follow that
+  frame. They go out in turn from the page after the last one written (`lighting::DirtyPages`
+  keeps a cursor, and a page given back goes first), so even when every frame changes every page
+  each page is written within two frames. Between steps the lights task sleeps until the start of
+  the millisecond its next frame falls due in (or 4 ms), so frames keep their 16 ms period.
+- The lighting engine sends no page whose output the driver already holds: `Lighting::next_write`
+  skips a page equal to the one last confirmed with `Lighting::confirm_write`, and a failed write,
+  a wake and a re-initialization (`Lighting::invalidate`) make every page go out again. A dark
+  animation thus costs no bus time (the rainbow wave at brightness 0 writes no page, and the scan
+  keeps its 1466 cycles a second), a dim one less.
 
 ## Image descriptor
 

@@ -10,7 +10,7 @@ use openwoot::{
     lighting::KeyEvents,
     profile::{self, Configurator, Factory, Model, Preset},
     protocol::Configuration,
-    runtime::{KeyNotices, KeyReports, KeyTask, Progress},
+    runtime::{KeyNotices, KeyReports, KeyTask, LedWindow, Progress},
     scan::{self, Map, Position, Scanner, SensorReadout},
     storage::{NorLayout, Partition, Settings},
     usb::{Face, HostState, Mode},
@@ -264,6 +264,7 @@ pub(super) struct World {
     host: HostState,
     sensors: SensorReadout,
     diagnostics: Diagnostics,
+    led_window: LedWindow,
 }
 
 impl World {
@@ -277,6 +278,7 @@ impl World {
             host: HostState::new(),
             sensors: SensorReadout::new(),
             diagnostics: Diagnostics::new(),
+            led_window: LedWindow::new(),
         }
     }
 
@@ -293,6 +295,7 @@ impl World {
                 ..Face::default()
             },
             diagnostics: &self.diagnostics,
+            led_window: &self.led_window,
         }
     }
 
