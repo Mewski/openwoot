@@ -22,7 +22,7 @@ use openwoot_protocol::{
 
 use super::support::{COLUMNS, GEOMETRY, LENGTH, ROWS, VARIANT};
 
-const GOLDEN: &str = include_str!("lightbar.txt");
+const GOLDEN: &str = include_str!("../../fixtures/lighting/lightbar.txt");
 const BAR_PAGES: usize = 10;
 const KEY_LEDS: usize = ROWS * COLUMNS;
 const BAR_LEDS: [Led; 10] = [

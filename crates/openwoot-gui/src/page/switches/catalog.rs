@@ -126,26 +126,9 @@ mod tests {
 
     use super::*;
 
-    const FIRMWARE_MODELS: &str = include_str!("../../../../openwoot/src/analog/switch_model.rs");
-
-    fn firmware_model_count() -> u8 {
-        FIRMWARE_MODELS
-            .lines()
-            .find_map(|line| {
-                line.trim()
-                    .strip_prefix("pub const COUNT: u8 = ")?
-                    .strip_suffix(';')?
-                    .parse()
-                    .ok()
-            })
-            .expect("the firmware names its number of switch models")
-    }
-
     #[test]
-    fn every_switch_model_of_the_firmware_has_a_product_name() {
-        let count = firmware_model_count();
-        assert!(count > 0);
-        for model in 0..count {
+    fn every_switch_model_has_a_product_name() {
+        for model in 0..openwoot_protocol::switches::MODEL_COUNT {
             let product = product(model).expect("the catalogue lists the model");
             assert_ne!(product.brand, "");
             assert_ne!(product.name, "");

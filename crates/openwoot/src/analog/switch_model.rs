@@ -4,7 +4,7 @@ use super::Curve;
 pub struct SwitchModel(u8);
 
 impl SwitchModel {
-    pub const COUNT: u8 = 49;
+    pub const COUNT: u8 = openwoot_protocol::switches::MODEL_COUNT;
     pub const DEFAULT: Self = Self(0);
 
     #[must_use]

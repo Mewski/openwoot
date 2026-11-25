@@ -6,7 +6,7 @@ use openwoot_protocol::lighting::{Effects, Rgb};
 
 use super::support::{Chip, PAGES, START_MS, TestLighting, base_color, effect, lighting, settle};
 
-const GOLDEN: &str = include_str!("outputs.txt");
+const GOLDEN: &str = include_str!("../../fixtures/lighting/outputs.txt");
 const SCENARIOS: usize = 8;
 
 fn key(row: &str, column: &str) -> Key {

@@ -13,7 +13,7 @@ use super::support::{
     COLUMNS, GEOMETRY, LENGTH, MAP, PAGES, ROWS, VARIANT, base_color, byte, effect,
 };
 
-const GOLDEN: &str = include_str!("effects.txt");
+const GOLDEN: &str = include_str!("../../fixtures/lighting/effects.txt");
 const SCENARIOS: usize = 37;
 
 struct Scenario {

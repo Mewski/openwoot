@@ -106,4 +106,5 @@ Follows the Rust Book (ch. 11.3) for unit tests and matklad's "Delete Cargo Inte
 
 - Unit tests live in the file they test, in `#[cfg(test)] mod tests { use super::*; ... }` at the end of the file.
 - Integration tests: one integration test crate per package, `tests/it/main.rs`, declaring one module per behaviour area (`tests/it/keys.rs`, `tests/it/flash.rs`) and shared setup as a plain module (`tests/it/support.rs`). One binary links faster than one per file, and no `mod.rs` is needed.
+- Test data (golden outputs, recorded inputs) lives in `tests/fixtures/<area>/`, never next to the Rust files in `tests/it/`.
 - Test names state the behaviour (`rapid_trigger_releases_after_upstroke`). No test-only code outside test modules and `tests/`.
