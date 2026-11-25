@@ -486,9 +486,8 @@ impl<C: Configuration> Handler<C> {
                 Ok(())
             },
             plain GetProfileState => |()| {
-                let lighting = host_control?;
+                let leds = host_control?.led_state().await;
                 let active = configuration.profiles()?.active;
-                let leds = lighting.led_state().await;
                 Ok(profile::State {
                     active,
                     host_control: leds.host_control,

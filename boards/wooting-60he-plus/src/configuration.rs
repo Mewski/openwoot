@@ -69,12 +69,12 @@ pub fn start(mut board: Board, version: Version) -> Tasks {
         identity,
         lighting::lighting(variant),
     );
-    let travels = Travels {
-        travel: scan::SCAN.travel(),
-        map: keys::sensor_map(variant),
-        shared: state.keys(),
-        mode: face.mode,
-    };
+    let travels = Travels::new(
+        scan::SCAN.travel(),
+        &keys::sensor_map(variant),
+        state.keys(),
+        face.mode,
+    );
     Tasks {
         keys: firmware.keys,
         usb: firmware.usb,

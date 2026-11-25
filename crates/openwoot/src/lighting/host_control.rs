@@ -1,6 +1,6 @@
 use core::{
     cell::RefCell,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
 use embassy_sync::{
@@ -18,7 +18,7 @@ use openwoot_protocol::{
 use super::{
     Lighting,
     hooks::{Lightbar, Signals},
-    readback::{LedState, Readback, Subject},
+    readback::{Readback, Subject},
 };
 use crate::keys::Key;
 
@@ -31,7 +31,14 @@ pub struct HostControl {
     keys: Mailbox<MAX_KEYS>,
     lightbar: Mailbox<MAX_LEDS>,
     readback: Readback,
+    led_state: AtomicU8,
     session_ended: AtomicBool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LedState {
+    pub(crate) host_control: bool,
+    pub(crate) idle_off: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +61,7 @@ impl HostControl {
             keys: Mutex::new(RefCell::new(KeyColors::new())),
             lightbar: Mutex::new(RefCell::new(lightbar::Colors::new())),
             readback: Readback::new(),
+            led_state: AtomicU8::new(0),
             session_ended: AtomicBool::new(false),
         }
     }
@@ -97,6 +105,14 @@ impl HostControl {
                 Request::Leave => lighting.leave_host_control(now_ms),
             }
         }
+        self.led_state.store(
+            LedState {
+                host_control: lighting.host_control() || lighting.host_lightbar(),
+                idle_off: lighting.is_idle_off(),
+            }
+            .to_bits(),
+            Ordering::Release,
+        );
         self.answer_readback(lighting);
     }
 
@@ -152,7 +168,10 @@ impl HostControl {
     }
 
     pub(crate) async fn led_state(&self) -> LedState {
-        self.readback.read(Subject::State).await
+        if !self.requests.is_empty() {
+            self.readback.read(Subject::State).await;
+        }
+        LedState::from_bits(self.led_state.load(Ordering::Acquire))
     }
 
     pub(crate) fn end_session(&self) {
@@ -193,13 +212,7 @@ impl HostControl {
                 }
             });
         }
-        self.readback.publish(
-            subject,
-            LedState {
-                host_control: lighting.host_control() || lighting.host_lightbar(),
-                idle_off: lighting.is_idle_off(),
-            },
-        );
+        self.readback.publish(subject);
     }
 }
 
@@ -215,6 +228,28 @@ impl core::fmt::Debug for HostControl {
             .debug_struct("HostControl")
             .field("pending", &self.requests.len())
             .finish_non_exhaustive()
+    }
+}
+
+impl LedState {
+    const HOST_CONTROL: u8 = 1;
+    const IDLE_OFF: u8 = 1 << 1;
+
+    const fn to_bits(self) -> u8 {
+        let host_control = if self.host_control {
+            Self::HOST_CONTROL
+        } else {
+            0
+        };
+        let idle_off = if self.idle_off { Self::IDLE_OFF } else { 0 };
+        host_control | idle_off
+    }
+
+    const fn from_bits(bits: u8) -> Self {
+        Self {
+            host_control: bits & Self::HOST_CONTROL != 0,
+            idle_off: bits & Self::IDLE_OFF != 0,
+        }
     }
 }
 

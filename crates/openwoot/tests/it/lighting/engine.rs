@@ -257,6 +257,17 @@ fn brightness_sum(lighting: &TestLighting, key: Key) -> u32 {
 }
 
 #[test]
+fn the_next_frame_falls_due_one_frame_period_after_the_last_render() {
+    let mut lighting = lighting(255, single(1, [0, 4, 1, 0]));
+    lighting.update(START_MS + 16, &());
+    assert_eq!(lighting.until_frame_ms(START_MS + 21), 11);
+    lighting.update(START_MS + 31, &());
+    assert_eq!(lighting.until_frame_ms(START_MS + 31), 1);
+    lighting.update(START_MS + 32, &());
+    assert_eq!(lighting.until_frame_ms(START_MS + 32), 16);
+}
+
+#[test]
 fn a_reactive_press_after_a_quiet_pause_still_flashes() {
     let mut lighting = lighting(255, single(6, [60, 2, 1, 0]));
     let mut chip = Chip::new();

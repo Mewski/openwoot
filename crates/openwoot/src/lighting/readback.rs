@@ -7,21 +7,9 @@ pub(super) enum Subject {
     State,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct LedState {
-    pub(crate) host_control: bool,
-    pub(crate) idle_off: bool,
-}
-
 pub(super) struct Readback {
     request: Signal<CriticalSectionRawMutex, Subject>,
-    published: Signal<CriticalSectionRawMutex, Publication>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct Publication {
-    subject: Subject,
-    state: LedState,
+    published: Signal<CriticalSectionRawMutex, Subject>,
 }
 
 struct Withdrawal<'a>(&'a Signal<CriticalSectionRawMutex, Subject>);
@@ -38,20 +26,15 @@ impl Readback {
         self.request.try_take()
     }
 
-    pub(super) fn publish(&self, subject: Subject, state: LedState) {
-        self.published.signal(Publication { subject, state });
+    pub(super) fn publish(&self, subject: Subject) {
+        self.published.signal(subject);
     }
 
-    pub(super) async fn read(&self, subject: Subject) -> LedState {
+    pub(super) async fn read(&self, subject: Subject) {
         let _withdrawal = Withdrawal(&self.request);
         self.published.reset();
         self.request.signal(subject);
-        loop {
-            let publication = self.published.wait().await;
-            if publication.subject == subject {
-                return publication.state;
-            }
-        }
+        while self.published.wait().await != subject {}
     }
 }
 
@@ -70,11 +53,6 @@ mod tests {
 
     use super::*;
 
-    const IDLE_OFF: LedState = LedState {
-        host_control: false,
-        idle_off: true,
-    };
-
     #[test]
     fn a_read_waits_for_the_publication_of_its_subject() {
         let readback = Readback::new();
@@ -82,10 +60,10 @@ mod tests {
         let mut context = Context::from_waker(Waker::noop());
         assert!(read.as_mut().poll(&mut context).is_pending());
         assert_eq!(readback.requested(), Some(Subject::Lightbar));
-        readback.publish(Subject::Frame, LedState::default());
+        readback.publish(Subject::Frame);
         assert!(read.as_mut().poll(&mut context).is_pending());
-        readback.publish(Subject::Lightbar, IDLE_OFF);
-        assert_eq!(read.as_mut().poll(&mut context), Poll::Ready(IDLE_OFF));
+        readback.publish(Subject::Lightbar);
+        assert_eq!(read.as_mut().poll(&mut context), Poll::Ready(()));
     }
 
     #[test]

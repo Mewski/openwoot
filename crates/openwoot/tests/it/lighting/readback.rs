@@ -49,7 +49,8 @@ fn profile_state(
     lighting: &mut BarLighting,
     now_ms: u32,
 ) -> Result<profile::State, Rejection> {
-    read::<GetProfileState, _, _>(handler, host_control, lighting, now_ms)
+    host_control.apply(lighting, now_ms);
+    ask::<GetProfileState, _>(handler, &())
 }
 
 #[test]
@@ -167,6 +168,27 @@ fn the_profile_state_tells_whether_the_host_drives_the_keys_or_the_light_bar() {
     assert_eq!(
         profile_state(&mut handler, &HOST_CONTROL, &mut lighting, START_MS + 4),
         Ok(state(false, false))
+    );
+}
+
+#[test]
+fn the_profile_state_answers_at_once_unless_host_lighting_requests_are_queued() {
+    static HOST_CONTROL: HostControl = HostControl::new();
+    let mut handler = connect(10, &HOST_CONTROL);
+    let mut lighting = lit_lighting(&red_bar(true));
+    assert_eq!(
+        ask::<GetProfileState, _>(&mut handler, &()),
+        Ok(state(false, false))
+    );
+    let keys: KeyColors = core::iter::repeat_n(RED, ROWS * COLUMNS).collect();
+    assert_eq!(ask::<SetHostColors, _>(&mut handler, &keys), Ok(()));
+    assert_eq!(
+        read::<GetProfileState, _, _>(&mut handler, &HOST_CONTROL, &mut lighting, START_MS),
+        Ok(state(true, false))
+    );
+    assert_eq!(
+        ask::<GetProfileState, _>(&mut handler, &()),
+        Ok(state(true, false))
     );
 }
 

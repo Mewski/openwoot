@@ -14,6 +14,8 @@ use crate::{
     usb::HostState,
 };
 
+const POLL_INTERVAL_MS: u32 = 4;
+
 pub struct Lighting<
     'd,
     M: RawMutex,
@@ -39,7 +41,6 @@ where
     H: Lightbar + Signals,
 {
     const FAILED_STEPS_BEFORE_INITIALIZE: u8 = 3;
-    const POLL_INTERVAL: Duration = Duration::from_millis(4);
 
     pub async fn run(&mut self, matrix: &mut impl LedMatrix, input: &impl KeyTravel) -> ! {
         let mut initialized = false;
@@ -69,7 +70,7 @@ where
                 self.events.ready_to_receive(),
                 self.notices.ready(),
                 self.host_control.ready(),
-                Timer::after(Self::POLL_INTERVAL),
+                Timer::after(pause(self.lighting.until_frame_ms(now_ms()))),
             )
             .await;
         }
@@ -158,16 +159,38 @@ fn now_ms() -> u32 {
     u32::try_from(Instant::now().as_millis() & u64::from(u32::MAX)).unwrap_or_default()
 }
 
+fn pause(until_frame_ms: u32) -> Duration {
+    let pause_ms = if until_frame_ms < POLL_INTERVAL_MS {
+        until_frame_ms.max(1)
+    } else {
+        POLL_INTERVAL_MS
+    };
+    Duration::from_millis(u64::from(pause_ms))
+}
+
 fn deepest_travel<const ROWS: usize, const COLUMNS: usize>(input: &impl KeyTravel) -> u16 {
-    (0..ROWS)
-        .flat_map(|row| (0..COLUMNS).map(move |column| (row, column)))
-        .filter_map(|(row, column)| {
-            Some(Key::new(
-                u8::try_from(row).ok()?,
-                u8::try_from(column).ok()?,
-            ))
-        })
-        .map(|key| input.travel(key))
-        .max()
-        .unwrap_or(0)
+    let mut deepest = 0;
+    for row in 0..ROWS {
+        for column in 0..COLUMNS {
+            if let (Ok(row), Ok(column)) = (u8::try_from(row), u8::try_from(column)) {
+                deepest = deepest.max(input.travel(Key::new(row, column)));
+            }
+        }
+    }
+    deepest
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_task_wakes_for_a_frame_that_falls_due_before_the_next_poll() {
+        assert_eq!(pause(3), Duration::from_millis(3));
+        assert_eq!(pause(1), Duration::from_millis(1));
+        assert_eq!(pause(0), Duration::from_millis(1));
+        assert_eq!(pause(4), Duration::from_millis(4));
+        assert_eq!(pause(15), Duration::from_millis(4));
+        assert_eq!(pause(u32::MAX), Duration::from_millis(4));
+    }
 }

@@ -141,6 +141,13 @@ where
     }
 
     #[must_use]
+    pub const fn until_frame_ms(&self, now_ms: u32) -> u32 {
+        self.effect_stamp_ms
+            .wrapping_add(FRAME_PERIOD_MS)
+            .wrapping_sub(now_ms)
+    }
+
+    #[must_use]
     pub fn key_color(&self, key: Key) -> Option<Rgb> {
         let led = self.variant.led(key.row(), key.column())?;
         self.map
