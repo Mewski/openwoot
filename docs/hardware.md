@@ -131,7 +131,7 @@ Start-up: software reset, shutdown, enable line high, all scaling registers `0xf
 
 ### NOR flash bus
 
-`hal::spi::Spi` is a mode-0 master, 8 bit, most significant bit first, with software chip select; every transfer runs by DMA in both directions and the receive channel's interrupt wakes the waiting task. Details and the chip layout: [storage](storage.md).
+`hal::spi::Spi` is a mode-0 master, 8 bit, most significant bit first, with software chip select; every transfer runs by DMA in both directions and the receive channel's interrupt wakes the waiting task. On the GD32F425 the DMA reads data to send only from the SRAM: a write whose data lies below it (a constant in the flash image) is copied through a 16-byte staging buffer first. Details and the chip layout: [storage](storage.md).
 
 | | Wooting 80HE | Wooting 60HE+ |
 | --- | --- | --- |
@@ -186,6 +186,7 @@ The scan channel shares its controller with the NOR bus on both boards. The conv
 - The GD32F425 USBHS accepts OUT data only on an enabled endpoint with a packet count, as GigaDevice's library programs it; `embassy-usb-synopsys-otg` clears NAK only after the first transfer. The HAL therefore arms endpoint 0 before every control OUT data stage and before the status stage that follows the last IN data packet, and re-arms each OUT endpoint after every packet read (`usb::ControlPipe`, `usb::OutEndpoint`).
 - The bus can report suspend before the first bus reset. A bus reset ends the suspended state; without that, the device stays "suspended" after enumeration and sends no reports.
 - The scan DMA channel must have priority over the SPI channels (see [DMA priorities](#dma-priorities)); with equal priority a settings write stalled the scan. The HAL counts converter overruns and restarts the transport, and the key task restarts a cycle that does not end within 50 ms.
+- The NOR bus raised the single-data-mode exception on the four dummy bytes that the flash identification command sends at start-up. A write discards what it receives into one fixed address, and the GD32F425 DMA flags the exception when that receive channel is served late; here the transmit channel read the four bytes from the internal flash (a constant in the image), which delays the receive channel. The transfer had completed and its received bytes are discarded, yet the HAL counted a DMA error (`openwoot status` showed `flash bus errors: 1 (1 DMA error)` after every start) and the stock identification answered zeros for the flash ids (command 3, selector 3). It first showed after an unrelated change to the firmware (the previous image did not raise it) and is gone when the bytes are copied to RAM first, which the HAL now does for every write whose data is not in the SRAM.
 
 ## Unverified on the Wooting 60HE+
 
