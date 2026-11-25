@@ -10,23 +10,23 @@ pub enum Batching {
 }
 
 impl Batching {
-    pub(super) fn members(
+    pub(super) fn for_each_member(
         self,
         batch: u8,
         inputs: usize,
         addresses: usize,
-    ) -> impl Iterator<Item = Position> {
+        mut visit: impl FnMut(Position),
+    ) {
         let batch = usize::from(batch);
-        let (pair_inputs, column_inputs) = match self {
-            Self::InputPairs => (2 * batch..(2 * batch + 2).min(inputs), 0..0),
-            Self::Addresses => (0..0, 0..inputs),
+        let (members_inputs, members_addresses) = match self {
+            Self::InputPairs => (2 * batch..(2 * batch + 2).min(inputs), 0..addresses),
+            Self::Addresses => (0..inputs, batch..batch + 1),
         };
-        let pair_members =
-            pair_inputs.flat_map(move |input| (0..addresses).map(move |address| (input, address)));
-        let column_members = column_inputs.map(move |input| (input, batch));
-        pair_members
-            .chain(column_members)
-            .map(|(input, address)| Position::new(input as u8, address as u8))
+        for input in members_inputs {
+            for address in members_addresses.clone() {
+                visit(Position::new(input as u8, address as u8));
+            }
+        }
     }
 
     const fn count(self, inputs: usize, addresses: usize) -> usize {
@@ -182,10 +182,11 @@ mod tests {
     use super::*;
 
     fn members(batching: Batching, batch: u8, inputs: usize, addresses: usize) -> Vec<(u8, u8)> {
-        batching
-            .members(batch, inputs, addresses)
-            .map(|position| (position.input(), position.address()))
-            .collect()
+        let mut members = Vec::new();
+        batching.for_each_member(batch, inputs, addresses, |position| {
+            members.push((position.input(), position.address()));
+        });
+        members
     }
 
     #[test]

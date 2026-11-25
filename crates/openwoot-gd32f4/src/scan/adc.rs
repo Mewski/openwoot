@@ -8,7 +8,7 @@
 use crate::{
     interrupt::{self, Priority},
     pac, rcu,
-    register::{clear_bits, modify_bits, read_bits, set_bits},
+    register::{clear_bits, modify_bits, read_bits, set_bits, write_bits},
     time::microseconds,
 };
 
@@ -143,17 +143,23 @@ pub(super) fn configure_sequence(length: u32) {
 }
 
 #[inline(always)]
-pub(super) fn acknowledge() {
-    clear_bits(adc().stat(), STAT_EOC);
+pub(super) fn acknowledge() -> bool {
+    let stat = adc().stat();
+    let status = read_bits(stat);
+    write_bits(stat, status & !STAT_EOC);
+    status & STAT_ROVF != 0
 }
 
 #[inline(always)]
+pub(super) fn clear_overflow() {
+    clear_bits(adc().stat(), STAT_ROVF);
+}
+
 pub(super) fn take_overflow() -> bool {
-    let adc = adc();
-    if read_bits(adc.stat()) & STAT_ROVF == 0 {
+    if read_bits(adc().stat()) & STAT_ROVF == 0 {
         return false;
     }
-    clear_bits(adc.stat(), STAT_ROVF);
+    clear_overflow();
     true
 }
 

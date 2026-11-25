@@ -105,12 +105,9 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Shared<S, INPUTS, 
         true
     }
 
-    pub async fn cycle(&self, now_ms: u32) -> bool {
-        if self.with(|scanner| scanner.prepare(now_ms)).is_none() || !self.start() {
-            return false;
-        }
-        self.finished().await;
-        true
+    #[must_use]
+    pub fn begin(&self, now_ms: u32) -> bool {
+        self.with(|scanner| scanner.prepare(now_ms)).is_some() && self.start()
     }
 
     pub fn recover(&self) -> bool {
@@ -122,7 +119,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Shared<S, INPUTS, 
     #[inline(always)]
     pub fn on_conversion(&self) {
         S::Converter::acknowledge();
-        if !self.is_running() {
+        if !self.running.load(Ordering::Relaxed) {
             return;
         }
         let outcome = match self.scanner.try_lock() {

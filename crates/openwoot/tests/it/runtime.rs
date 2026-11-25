@@ -613,8 +613,13 @@ impl<'a> Matrix<'a> {
         let now_ms = self.now_ms;
         self.scan.with(|scanner| scanner.prepare(now_ms));
         self.convert();
-        self.task
-            .step(&self.scan, &mut self.keys, &mut self.progress, now_ms);
+        if self
+            .task
+            .pass(&self.scan, &mut self.keys, &mut self.progress, now_ms)
+        {
+            self.task
+                .deliver(&mut self.keys, &mut self.progress, now_ms);
+        }
     }
 
     fn press(&self, key: Key, magnitude: u16) {
@@ -1151,4 +1156,70 @@ fn an_led_transfer_that_never_ends_holds_the_scan_back_for_the_transfer_limit_on
         assert_eq!(peers.cycles(), cycles + cycle);
     }
     assert_eq!(bus.starts.borrow().len(), 1);
+}
+
+#[test]
+fn the_six_input_scan_leaves_the_cpu_idle_for_a_while_every_millisecond() {
+    let _clock = hold_clock();
+    let clock = MockDriver::get();
+    let host = HostState::new();
+    let key_reports = KeyReports::new();
+    let peers = Peers::new();
+    let task = peers.task(&host, &key_reports);
+    let scan = installed_scan();
+    scan.with(|scanner| scanner.request_mode(scan::Mode::Parallel));
+    let mut keys = Keys::<Standard, ROWS, COLUMNS>::new(Standard);
+    let mut context = Context::from_waker(Waker::noop());
+    let mut run = pin!(task.run(&scan, &mut keys));
+    assert!(run.as_mut().poll(&mut context).is_pending());
+    finish_scan(&scan);
+    assert!(run.as_mut().poll(&mut context).is_pending());
+    for _ in 0..5 {
+        finish_scan(&scan);
+        assert!(run.as_mut().poll(&mut context).is_pending());
+        assert!(
+            scan.is_running(),
+            "the scan paused before a millisecond passed"
+        );
+    }
+    clock.advance(KeyTask::<Mutual>::IDLE_EVERY);
+    finish_scan(&scan);
+    assert!(run.as_mut().poll(&mut context).is_pending());
+    assert!(
+        !scan.is_running(),
+        "the scan kept the CPU for over a millisecond"
+    );
+    clock.advance(KeyTask::<Mutual>::IDLE_FOR - Duration::from_ticks(1));
+    assert!(run.as_mut().poll(&mut context).is_pending());
+    assert!(!scan.is_running(), "the idle slice ended early");
+    clock.advance(Duration::from_ticks(1));
+    assert!(run.as_mut().poll(&mut context).is_pending());
+    assert!(
+        scan.is_running(),
+        "the scan did not resume after the idle slice"
+    );
+    assert_eq!(peers.cycles(), 6);
+}
+
+#[test]
+fn the_single_input_scan_never_pauses_for_idle_time() {
+    let _clock = hold_clock();
+    let clock = MockDriver::get();
+    let host = HostState::new();
+    let key_reports = KeyReports::new();
+    let peers = Peers::new();
+    let task = peers.task(&host, &key_reports);
+    let scan = installed_scan();
+    let mut keys = Keys::<Standard, ROWS, COLUMNS>::new(Standard);
+    let mut context = Context::from_waker(Waker::noop());
+    let mut run = pin!(task.run(&scan, &mut keys));
+    assert!(run.as_mut().poll(&mut context).is_pending());
+    finish_scan(&scan);
+    assert!(run.as_mut().poll(&mut context).is_pending());
+    for _ in 0..5 {
+        clock.advance(KeyTask::<Mutual>::IDLE_EVERY);
+        finish_scan(&scan);
+        assert!(run.as_mut().poll(&mut context).is_pending());
+        assert!(scan.is_running(), "the single-input scan paused");
+    }
 }

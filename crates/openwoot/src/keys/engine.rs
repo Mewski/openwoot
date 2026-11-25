@@ -21,6 +21,7 @@ use crate::{
 const CAPS_LOCK: u8 = 0x39;
 const SCROLL_LOCK: u8 = 0x47;
 const NUM_LOCK: u8 = 0x53;
+const ALL_TOUCHED: u32 = u32::MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Switch {
@@ -35,6 +36,7 @@ pub struct Switch {
 #[derive(Debug)]
 pub struct Keys<F: Functions, const ROWS: usize, const COLUMNS: usize> {
     records: [[Record; COLUMNS]; ROWS],
+    touched: [u32; ROWS],
     tuning: Tuning,
     advanced: Advanced,
     pending: Pending,
@@ -62,6 +64,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         const { assert!(ROWS <= 8 && COLUMNS <= 32 && ROWS * COLUMNS < 256) };
         Self {
             records: [[Record::EMPTY; COLUMNS]; ROWS],
+            touched: [ALL_TOUCHED; ROWS],
             tuning: Tuning::default(),
             advanced: Advanced::new(),
             pending: Pending::new(),
@@ -137,6 +140,24 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
     #[must_use]
     pub fn holds_events(&self, key: Key) -> bool {
         self.record(key).is_some_and(Record::holds_events)
+    }
+
+    pub fn take_hold_changes(&mut self, mut apply: impl FnMut(Key, bool)) {
+        for row in (0u8..).take(ROWS) {
+            let touched = self
+                .touched
+                .get_mut(usize::from(row))
+                .map_or(0, core::mem::take);
+            if touched == 0 {
+                continue;
+            }
+            for column in (0u8..).take(COLUMNS) {
+                if touched >> column & 1 != 0 {
+                    let key = Key::new(row, column);
+                    apply(key, self.holds_events(key));
+                }
+            }
+        }
     }
 
     #[must_use]
@@ -255,6 +276,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         }
         self.advanced.replace(entries);
         self.pending.clear();
+        self.touched = [ALL_TOUCHED; ROWS];
         for record in self.records.iter_mut().flatten() {
             record.advanced = [None; LAYERS];
             record.active = [false; LAYERS];
@@ -276,6 +298,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         self.restart_advanced();
         self.output.notify(Notice::ShowLayer(0));
         let mut lifted: Vec<Key, NOTICE_CAPACITY> = Vec::new();
+        self.touched = [ALL_TOUCHED; ROWS];
         for (row, records) in (0..).zip(self.records.iter_mut()) {
             for (column, record) in (0..).zip(records.iter_mut()) {
                 record.actuation.reset();
@@ -380,6 +403,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         }
         self.advanced.restart();
         self.pending.clear();
+        self.touched = [ALL_TOUCHED; ROWS];
         for record in self.records.iter_mut().flatten() {
             record.active = [false; LAYERS];
         }
@@ -397,9 +421,11 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
     }
 
     fn slot_mut(&mut self, key: Key) -> Option<&mut Record> {
-        self.records
-            .get_mut(key.row())
-            .and_then(|row| row.get_mut(key.column()))
+        let record = self.records.get_mut(key.row())?.get_mut(key.column())?;
+        if let Some(touched) = self.touched.get_mut(key.row()) {
+            *touched |= 1 << key.column;
+        }
+        Some(record)
     }
 
     fn bind(&mut self, key: Key, layer: u8, index: u8) {
@@ -441,29 +467,34 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
     }
 
     fn process_event(&mut self, key: Key, travel: u16, travels: &impl Fn(Key) -> u16) {
-        let Some(record) = self.record(key).copied() else {
+        let Some(record) = self.record(key) else {
             return;
         };
-        let mut layer = self.binding_layer(&record);
+        let mut layer = self.binding_layer(record);
         let mut index = record.advanced(layer);
+        let (actuation, active) = (record.actuation, record.active);
         let state = index.and_then(|index| self.advanced.state(index).copied());
         self.decide(key, travel, index);
         if self.press_state(key) == (true, true) {
             self.resolve_pending(key, index, travels);
-            let resolved = self.binding_layer(&record);
-            if resolved != layer && record.advanced(resolved) != index {
-                if let Some(slot) = self.record_mut(key) {
-                    slot.actuation = record.actuation;
-                    slot.active = record.active;
+            if let Some(mut before) = self.record(key).copied() {
+                before.actuation = actuation;
+                before.active = active;
+                let resolved = self.binding_layer(&before);
+                if resolved != layer && before.advanced(resolved) != index {
+                    if let Some(slot) = self.record_mut(key) {
+                        slot.actuation = actuation;
+                        slot.active = active;
+                    }
+                    if let (Some(index), Some(state)) = (index, state)
+                        && let Some(slot) = self.advanced.state_mut(index)
+                    {
+                        *slot = state;
+                    }
+                    layer = resolved;
+                    index = before.advanced(resolved);
+                    self.decide(key, travel, index);
                 }
-                if let (Some(index), Some(state)) = (index, state)
-                    && let Some(slot) = self.advanced.state_mut(index)
-                {
-                    *slot = state;
-                }
-                layer = resolved;
-                index = record.advanced(resolved);
-                self.decide(key, travel, index);
             }
         }
         if self
@@ -603,8 +634,8 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
                 key,
                 event: KeyEvent::Pressed,
             });
-            if let Some(record) = self.record(key).copied() {
-                layer = self.binding_layer(&record);
+            if let Some(record) = self.record(key) {
+                layer = self.binding_layer(record);
             }
         } else {
             let locked = self.layers.locked();
@@ -615,18 +646,19 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
                 key,
                 event: KeyEvent::Released,
             });
-            if let Some(record) = self.record(key).copied() {
-                let rapid = matches!(trigger(&record, &self.tuning), Trigger::Rapid(_));
+            let reset = self.record(key).is_some_and(|record| {
+                let rapid = matches!(trigger(record, &self.tuning), Trigger::Rapid(_));
                 let needs_reset = index.is_some()
-                    && self.current_entry(&record).is_none_or(|(_, entry)| {
+                    && self.current_entry(record).is_none_or(|(_, entry)| {
                         matches!(entry.behaviour, Behaviour::DynamicKeystroke { .. })
                     });
-                if !rapid || needs_reset {
-                    self.output.notify(Notice::Key {
-                        key,
-                        event: KeyEvent::Reset,
-                    });
-                }
+                !rapid || needs_reset
+            });
+            if reset {
+                self.output.notify(Notice::Key {
+                    key,
+                    event: KeyEvent::Reset,
+                });
             }
         }
         if let Some(record) = self.record_mut(key) {
@@ -719,8 +751,8 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
             return false;
         }
         let pair_owns = index.is_some()
-            && self.record(key).copied().is_some_and(|record| {
-                self.current_entry(&record)
+            && self.record(key).is_some_and(|record| {
+                self.current_entry(record)
                     .is_some_and(|(_, entry)| entry.behaviour.is_pair())
             });
         if !pair_owns && let Some(record) = self.record_mut(key) {
@@ -730,22 +762,24 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
     }
 
     fn emit(&mut self, key: Key, travel: u16, layer: u8) {
-        let Some(record) = self.record(key).copied() else {
+        let Some(record) = self.record(key) else {
             return;
         };
-        if let Some(index) = record.advanced(self.binding_layer(&record)) {
+        let bound = record.advanced(self.binding_layer(record));
+        let any_active = record.any_active();
+        if let Some(index) = bound {
             self.run_advanced(key, travel, Some(index));
             self.apply_gamepad_binding(key, travel, layer);
             return;
         }
-        if record.any_active() {
+        if any_active {
             self.run_advanced(key, travel, None);
         }
-        let Some(record) = self.record(key).copied() else {
+        let Some(record) = self.record(key) else {
             return;
         };
         let action = record.action(layer);
-        let pressed = record.actuation.is_pressed() && self.allows(&record, action, layer);
+        let pressed = record.actuation.is_pressed() && self.allows(record, action, layer);
         self.apply_action(action, key, layer, travel, false, pressed);
         self.apply_gamepad_binding(key, travel, layer);
     }
@@ -763,18 +797,16 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         if self.mode == Mode::NoGamepad || layer != 0 {
             return;
         }
-        let Some(record) = self.record(key).copied() else {
+        let Some((Some(control), pressed)) = self
+            .record(key)
+            .map(|record| (record.gamepad, record.actuation.is_pressed()))
+        else {
             return;
         };
-        if let Some(control) = record.gamepad {
-            let mode = self.mode;
-            self.output.gamepad_input_mut().apply(
-                mode,
-                control,
-                travel,
-                record.actuation.is_pressed(),
-            );
-        }
+        let mode = self.mode;
+        self.output
+            .gamepad_input_mut()
+            .apply(mode, control, travel, pressed);
     }
 
     fn run_advanced(&mut self, key: Key, travel: u16, current: Option<u8>) {

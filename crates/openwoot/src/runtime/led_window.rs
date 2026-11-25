@@ -34,6 +34,11 @@ impl LedWindow {
         }
     }
 
+    #[must_use]
+    pub fn is_wanted(&self) -> bool {
+        self.state.load(Ordering::Acquire) == WANTED
+    }
+
     pub async fn grant(&self) {
         if self
             .state
@@ -82,6 +87,19 @@ mod tests {
         let window = LedWindow::new();
         let mut context = Context::from_waker(Waker::noop());
         assert_eq!(pin!(window.grant()).poll(&mut context), Poll::Ready(()));
+    }
+
+    #[test]
+    fn a_transfer_is_wanted_from_its_entry_until_its_grant() {
+        let window = LedWindow::new();
+        let mut context = Context::from_waker(Waker::noop());
+        assert!(!window.is_wanted());
+        let mut enter = pin!(window.enter());
+        assert!(enter.as_mut().poll(&mut context).is_pending());
+        assert!(window.is_wanted());
+        let mut grant = pin!(window.grant());
+        assert!(grant.as_mut().poll(&mut context).is_pending());
+        assert!(!window.is_wanted());
     }
 
     #[test]

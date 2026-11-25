@@ -1,4 +1,6 @@
 pub trait Recheck: Default {
+    fn reconverts(&self, input: u8) -> bool;
+
     fn reconvert_single(&mut self, input: u8, value: u16, filtered: u16) -> bool;
 
     fn defer(&mut self, input: u8, value: u16, filtered: u16) -> bool;
@@ -13,6 +15,11 @@ pub trait Recheck: Default {
 }
 
 impl Recheck for () {
+    #[inline(always)]
+    fn reconverts(&self, _input: u8) -> bool {
+        false
+    }
+
     #[inline(always)]
     fn reconvert_single(&mut self, _input: u8, _value: u16, _filtered: u16) -> bool {
         false
@@ -50,6 +57,11 @@ pub struct RecheckFrom<const FIRST_INPUT: u8> {
 }
 
 impl<const FIRST_INPUT: u8> Recheck for RecheckFrom<FIRST_INPUT> {
+    #[inline(always)]
+    fn reconverts(&self, input: u8) -> bool {
+        input >= FIRST_INPUT
+    }
+
     #[inline(always)]
     fn reconvert_single(&mut self, input: u8, value: u16, filtered: u16) -> bool {
         if input >= FIRST_INPUT && !self.second_single && value != filtered {

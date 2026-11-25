@@ -108,7 +108,7 @@ Each key has a hall-effect sensor on a 16:1 analog multiplexer. All multiplexers
 | overruns | `ADC0` overrun flag counted (`scan overruns` in `openwoot status`); the transport restarts | not detected |
 | layout variant | from the device-information record | bit 0 of the user option byte |
 
-Between cycles the trigger source is parked (80HE: `TIMER0` channel 0, which never runs; 60HE+: software trigger). On the 60HE+ every change of the trigger source is two writes (clear, then set): a write to `ADC_CTL1` with `ADCON` set that leaves every other bit unchanged starts a conversion. A cycle that does not end within 50 ms is restarted by the key task (`scan::Converter::recover`).
+Between cycles the trigger source is parked (80HE: `TIMER0` channel 0, which never runs; 60HE+: software trigger). The first conversion of a cycle or of the sweep selects the timer as the source (`Converter::trigger_at`, `Converter::trigger_after`); within the cycle the source stays, and each further conversion only re-arms the timer (`Converter::retrigger_after`). On the 60HE+ every change of the trigger source is two writes (clear, then set): a write to `ADC_CTL1` with `ADCON` set that leaves every other bit unchanged starts a conversion. A cycle that does not end within 50 ms is restarted by the key task (`scan::Converter::recover`).
 
 ### Time driver
 

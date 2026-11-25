@@ -1,22 +1,14 @@
 use super::Scanner;
-use crate::scan::{Advance, Position, Sensing};
+use crate::scan::{Advance, Sensing, Sensor};
 
 impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS, ADDRESSES> {
     pub(super) fn restart_batch(&mut self) {
-        for position in self.batch_positions() {
-            if let Some(sensor) = self.sensors.get_mut(position) {
-                sensor.restart_noise();
-            }
-        }
+        self.for_each_batch_sensor(Sensor::restart_noise);
     }
 
     pub(super) fn poll_batch(&mut self) -> bool {
         let mut sampling = false;
-        for position in self.batch_positions() {
-            if let Some(sensor) = self.sensors.get_mut(position) {
-                sampling |= sensor.poll_recalibration();
-            }
-        }
+        self.for_each_batch_sensor(|sensor| sampling |= sensor.poll_recalibration());
         sampling
     }
 
@@ -47,11 +39,20 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
         self.stop_sampling();
     }
 
-    fn batch_positions(&self) -> impl Iterator<Item = Position> + use<S, INPUTS, ADDRESSES> {
-        let map = self.map;
-        self.recalibration
-            .batching()
-            .members(self.recalibration.batch(), INPUTS, ADDRESSES)
-            .filter(move |&position| map.key(position).is_some())
+    fn for_each_batch_sensor(&mut self, mut visit: impl FnMut(&mut Sensor<S::Noise>)) {
+        let map = &self.map;
+        let sensors = &mut *self.sensors;
+        self.recalibration.batching().for_each_member(
+            self.recalibration.batch(),
+            INPUTS,
+            ADDRESSES,
+            |position| {
+                if map.key(position).is_some()
+                    && let Some(sensor) = sensors.get_mut(position)
+                {
+                    visit(sensor);
+                }
+            },
+        );
     }
 }

@@ -1,5 +1,6 @@
 mod advanced;
 mod gamepad;
+mod holds;
 mod latency;
 mod layers;
 mod limits;

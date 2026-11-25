@@ -7,8 +7,8 @@ use single::successors;
 use sweep::Sweep;
 
 use super::{
-    Context, Converter, Decision, Event, Events, Grid, Map, Mode, Position, Recalibration,
-    Reference, Sensing, Sensor, Sensors, Travel, Update,
+    Context, Converter, Decision, Event, Events, Grid, KeyPositions, Map, Mode, Position,
+    Recalibration, Reference, Sensing, Sensor, Sensors, Travel, Update,
 };
 use crate::{
     analog::{CurveCache, CurveTable, Switch},
@@ -54,6 +54,7 @@ pub struct Scanner<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> {
     parallel_values: [u16; INPUTS],
     successors: Grid<Position, INPUTS>,
     map: Map<INPUTS, ADDRESSES>,
+    positions: KeyPositions,
     recalibration: Recalibration,
     sweep_done: bool,
     applied: Option<Mode>,
@@ -87,6 +88,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
             converter,
             map,
             successors: successors(&map),
+            positions: KeyPositions::new(&map),
             order,
             sensors,
             curves: CurveCache::default(),
@@ -193,6 +195,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
     pub fn set_map(&mut self, map: Map<INPUTS, ADDRESSES>) {
         self.map = map;
         self.successors = successors(&map);
+        self.positions = KeyPositions::new(&map);
         self.pending = None;
         self.assign_curves();
     }
@@ -215,6 +218,21 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
             }
         }
         self.rebound_filter = enabled;
+    }
+
+    #[must_use]
+    #[inline]
+    pub fn key_position(&self, key: Key) -> Option<Position> {
+        self.positions.get(key)
+    }
+
+    pub fn hold_events(&mut self, key: Key, holds: bool) {
+        if let Some(sensor) = self
+            .key_position(key)
+            .and_then(|position| self.sensors.get_mut(position))
+        {
+            sensor.hold_events(holds);
+        }
     }
 
     pub fn apply_switches(&mut self, mut switch_for: impl FnMut(Key) -> Switch) {
@@ -270,7 +288,8 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
 
     #[inline(always)]
     pub fn on_conversion(&mut self, travel: &Travel<INPUTS, ADDRESSES>) -> Outcome {
-        if let Some(trigger) = self.trigger.take() {
+        if let Some(trigger) = self.trigger {
+            self.trigger = None;
             match trigger {
                 Trigger::After(delay_us) => self.converter.trigger_after(delay_us),
                 Trigger::At(ticks) => self.converter.trigger_at(ticks),

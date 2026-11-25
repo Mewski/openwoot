@@ -23,6 +23,8 @@ pub trait Converter {
 
     fn trigger_after(&mut self, delay_us: u16);
 
+    fn retrigger_after(&mut self, delay_us: u16);
+
     fn trigger_at(&mut self, ticks: u16);
 
     fn end_cycle(&mut self, period_us: u16);

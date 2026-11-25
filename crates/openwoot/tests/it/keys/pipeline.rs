@@ -240,8 +240,13 @@ impl<'a> Bench80<'a> {
         self.scan.with(|scanner| scanner.prepare(now_ms));
         self.run();
         after_sampling(self);
-        self.task
-            .step(&self.scan, &mut self.keys, &mut self.progress, now_ms);
+        if self
+            .task
+            .pass(&self.scan, &mut self.keys, &mut self.progress, now_ms)
+        {
+            self.task
+                .deliver(&mut self.keys, &mut self.progress, now_ms);
+        }
     }
 
     pub(super) fn press(&self, key: Key, magnitude: u16) {

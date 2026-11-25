@@ -34,6 +34,7 @@ pub(crate) struct Simulated<const INPUTS: usize> {
     parallel: bool,
     enabled: [bool; INPUTS],
     order: Vec<u8>,
+    timer_triggers: bool,
 }
 
 impl<const INPUTS: usize> Default for Simulated<INPUTS> {
@@ -52,6 +53,7 @@ impl<const INPUTS: usize> Default for Simulated<INPUTS> {
             order: (0..INPUTS)
                 .map(|input| u8::try_from(input).unwrap_or(u8::MAX))
                 .collect(),
+            timer_triggers: true,
         }
     }
 }
@@ -162,16 +164,28 @@ impl<const INPUTS: usize> Converter for Simulated<INPUTS> {
     }
 
     fn trigger_after(&mut self, delay_us: u16) {
+        self.timer_triggers = true;
+        self.advance(delay_us);
+        self.operations.push(Operation::TriggerAfter(delay_us));
+    }
+
+    fn retrigger_after(&mut self, delay_us: u16) {
+        assert!(
+            self.timer_triggers,
+            "a conversion was re-armed while the timer does not trigger the converter"
+        );
         self.advance(delay_us);
         self.operations.push(Operation::TriggerAfter(delay_us));
     }
 
     fn trigger_at(&mut self, ticks: u16) {
+        self.timer_triggers = true;
         self.advance(ticks);
         self.operations.push(Operation::TriggerAt(ticks));
     }
 
     fn end_cycle(&mut self, period_us: u16) {
+        self.timer_triggers = false;
         self.operations.push(Operation::EndCycle(period_us));
     }
 

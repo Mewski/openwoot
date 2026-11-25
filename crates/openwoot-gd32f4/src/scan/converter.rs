@@ -123,8 +123,8 @@ impl<const INPUTS: usize> Converter<INPUTS> {
 impl<const INPUTS: usize> scan::Converter for Converter<INPUTS> {
     #[inline(always)]
     fn acknowledge() {
-        adc::acknowledge();
-        if adc::take_overflow() {
+        if adc::acknowledge() {
+            adc::clear_overflow();
             OVERRUNS.increment();
             adc::restart_transport(transport::restart);
         }
@@ -198,6 +198,14 @@ impl<const INPUTS: usize> scan::Converter for Converter<INPUTS> {
         trigger::set_compare(u32::from(delay_us));
         adc::clear_trigger();
         adc::set_trigger(Trigger::Timer);
+        trigger::start();
+    }
+
+    #[inline(always)]
+    fn retrigger_after(&mut self, delay_us: u16) {
+        trigger::stop();
+        trigger::set_counter(0);
+        trigger::set_compare(u32::from(delay_us));
         trigger::start();
     }
 

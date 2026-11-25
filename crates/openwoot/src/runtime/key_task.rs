@@ -39,9 +39,13 @@ pub struct Progress {
     rebound_filter: Option<bool>,
     suspended: bool,
     factory_switch: Option<SwitchModel>,
+    switches_synced: bool,
 }
 
 impl<M: RawMutex> KeyTask<'_, M> {
+    pub const IDLE_EVERY: Duration = Duration::from_millis(1);
+    pub const IDLE_FOR: Duration = Duration::from_micros(100);
+
     pub async fn run<
         S,
         F,
@@ -68,21 +72,50 @@ impl<M: RawMutex> KeyTask<'_, M> {
             self.led_window.grant().await;
         }
         let mut progress = Progress::default();
+        let mut started = None;
+        let mut idle_at = Instant::now() + Self::IDLE_EVERY;
         loop {
-            let now_ms = now_ms();
-            match select(scan.cycle(now_ms), Timer::after(CYCLE_TIMEOUT)).await {
-                Either::First(true) => {
-                    self.diagnostics.scan_cycle_completed();
-                    self.step(scan, keys, &mut progress, now_ms);
+            let cycle_ms = if let Some(cycle_ms) = started.take() {
+                cycle_ms
+            } else {
+                let cycle_ms = now_ms();
+                if !scan.begin(cycle_ms) {
+                    Timer::after(RETRY_DELAY).await;
+                    self.led_window.grant().await;
+                    continue;
                 }
-                Either::First(false) => Timer::after(RETRY_DELAY).await,
-                Either::Second(()) => self.recover::<S, INPUTS, ADDRESSES, ROWS, COLUMNS>(scan),
+                cycle_ms
+            };
+            match select(scan.finished(), Timer::after(CYCLE_TIMEOUT)).await {
+                Either::First(()) => {
+                    self.diagnostics.scan_cycle_completed();
+                    let passed = self.pass(scan, keys, &mut progress, cycle_ms);
+                    let lights_wait = self.led_window.is_wanted();
+                    let single =
+                        scan.with(|scanner| scanner.mode()) == Some(Some(scan::Mode::Single));
+                    if !lights_wait && single {
+                        let next_ms = now_ms();
+                        started = scan.begin(next_ms).then_some(next_ms);
+                    }
+                    if passed {
+                        self.deliver(keys, &mut progress, cycle_ms);
+                    }
+                    if lights_wait {
+                        self.led_window.grant().await;
+                    } else if !single && Instant::now() >= idle_at {
+                        Timer::after(Self::IDLE_FOR).await;
+                        idle_at = Instant::now() + Self::IDLE_EVERY;
+                    }
+                }
+                Either::Second(()) => {
+                    self.recover::<S, INPUTS, ADDRESSES, ROWS, COLUMNS>(scan);
+                    self.led_window.grant().await;
+                }
             }
-            self.led_window.grant().await;
         }
     }
 
-    pub fn step<
+    pub fn pass<
         S,
         F,
         const INPUTS: usize,
@@ -95,7 +128,8 @@ impl<M: RawMutex> KeyTask<'_, M> {
         keys: &mut Keys<F, ROWS, COLUMNS>,
         progress: &mut Progress,
         now_ms: u32,
-    ) where
+    ) -> bool
+    where
         S: Sensing,
         F: Functions,
     {
@@ -110,13 +144,15 @@ impl<M: RawMutex> KeyTask<'_, M> {
         keys.set_gamepad_detection(self.host.gamepad_detection());
         keys.set_xinput_player(self.host.xinput_player());
         let travel = scan.travel();
-        let processed = scan.with(|scanner| {
+        let passed = scan.with(|scanner| {
             let switched = self.fit_switches::<S, INPUTS, ADDRESSES, COLUMNS>(scanner, progress);
-            let map = *scanner.map();
-            for (position, key) in map.iter() {
-                if let Some(sensor) = scanner.sensor(position) {
-                    keys.set_switch(key, Switch::from_switch(sensor.switch()));
+            if switched || !progress.switches_synced {
+                for (position, key) in scanner.map().iter() {
+                    if let Some(sensor) = scanner.sensor(position) {
+                        keys.set_switch(key, Switch::from_switch(sensor.switch()));
+                    }
                 }
+                progress.switches_synced = true;
             }
             let mut parts = self.shared.take_changes();
             if switched {
@@ -163,21 +199,20 @@ impl<M: RawMutex> KeyTask<'_, M> {
                     .iter()
                     .map(|event| (event.key, event.travel)),
                 u16::try_from(elapsed_ms).unwrap_or(u16::MAX),
-                |key| map.position(key).map_or(0, |position| travel.get(position)),
+                |key| {
+                    scanner
+                        .key_position(key)
+                        .map_or(0, |position| travel.get(position))
+                },
             );
-            for (position, key) in map.iter() {
-                let holds = keys.holds_events(key);
-                if let Some(sensor) = scanner.sensor_mut(position) {
-                    sensor.hold_events(holds);
-                }
-            }
+            keys.take_hold_changes(|key, holds| scanner.hold_events(key, holds));
             true
-        });
-        if processed == Some(true) {
+        }) == Some(true);
+        if passed {
             progress.last_ms = Some(now_ms);
             self.diagnostics.keys_passed();
-            self.deliver(keys, progress, now_ms);
         }
+        passed
     }
 
     fn fit_switches<
@@ -205,7 +240,7 @@ impl<M: RawMutex> KeyTask<'_, M> {
         true
     }
 
-    fn deliver<F: Functions, const ROWS: usize, const COLUMNS: usize>(
+    pub fn deliver<F: Functions, const ROWS: usize, const COLUMNS: usize>(
         &self,
         keys: &mut Keys<F, ROWS, COLUMNS>,
         progress: &mut Progress,

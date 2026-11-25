@@ -14,14 +14,20 @@ impl<const INPUTS: usize, const ADDRESSES: usize> Map<INPUTS, ADDRESSES> {
     )]
     pub const fn from_codes(codes: [[u8; ADDRESSES_PER_INPUT]; INPUTS]) -> Self {
         const { assert!(ADDRESSES <= ADDRESSES_PER_INPUT && INPUTS <= u8::MAX as usize) };
+        let mut sensed = [false; 256];
         let mut input = 0;
         while input < INPUTS {
-            let mut address = ADDRESSES;
+            let mut address = 0;
             while address < ADDRESSES_PER_INPUT {
-                assert!(
-                    Key::from_code(codes[input][address]).is_none(),
-                    "a key behind an address the scan never selects"
-                );
+                let code = codes[input][address];
+                if Key::from_code(code).is_some() {
+                    assert!(
+                        address < ADDRESSES,
+                        "a key behind an address the scan never selects"
+                    );
+                    assert!(!sensed[code as usize], "a key behind two sensors");
+                    sensed[code as usize] = true;
+                }
                 address += 1;
             }
             input += 1;
@@ -102,5 +108,14 @@ mod tests {
     fn the_map_lists_keys_address_by_address() {
         let positions: Vec<_> = MAP.iter().map(|(position, _)| position.index()).collect();
         assert_eq!(positions, [0, 17, 2, 18]);
+    }
+
+    #[test]
+    #[should_panic(expected = "a key behind two sensors")]
+    fn a_key_behind_two_sensors_is_rejected() {
+        let mut codes = [[0xFF; ADDRESSES_PER_INPUT]; 2];
+        codes[0][1] = 0x44;
+        codes[1][0] = 0x44;
+        let _ = Map::<2, 3>::from_codes(codes);
     }
 }

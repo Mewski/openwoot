@@ -9,22 +9,24 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
             self.reference.latch(sample);
         }
         let magnitude = self.reference.magnitude(sample);
-        let context = self.context();
-        let mut sensor = converted.and_then(|position| self.sensors.get_mut(position));
+        let input = self.input;
+        let reconverts = self.recheck.reconverts(input);
         let mut value = 0;
-        if let Some(sensor) = sensor.as_deref_mut() {
+        if reconverts
+            && let Some(sensor) = converted.and_then(|position| self.sensors.get_mut(position))
+        {
             value = sensor.filter(magnitude);
             if self
                 .recheck
-                .reconvert_single(self.input, value, sensor.filtered())
+                .reconvert_single(input, value, sensor.filtered())
             {
-                self.converter.trigger_after(DELAY_SAME_INPUT_US);
+                self.converter.retrigger_after(DELAY_SAME_INPUT_US);
                 return Outcome::Running;
             }
             sensor.set_filtered(value);
         }
 
-        let current = Position::new(self.input, self.address);
+        let current = Position::new(input, self.address);
         let next = self
             .successors
             .get(current)
@@ -33,21 +35,29 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
         let cycle_end = next.index() <= current.index();
         self.address = next.address();
         self.converter.select_address(next.address());
-        let previous = self.input;
-        if previous == next.input() {
+        if input == next.input() {
             if !cycle_end {
-                self.converter.trigger_after(DELAY_SAME_INPUT_US);
+                self.converter.retrigger_after(DELAY_SAME_INPUT_US);
             }
         } else {
-            self.converter.select_input(previous, next.input());
+            self.converter.select_input(input, next.input());
             self.input = next.input();
             if !cycle_end {
-                self.converter.trigger_after(DELAY_INPUT_US);
+                self.converter.retrigger_after(DELAY_INPUT_US);
             }
         }
 
-        let update = sensor
-            .map(|sensor| sensor.update(&self.converter, &self.curves, context, magnitude, value));
+        let context = self.context();
+        let mut update = None;
+        if let Some(sensor) = converted.and_then(|position| self.sensors.get_mut(position)) {
+            if !reconverts {
+                value = sensor.filter(magnitude);
+                self.recheck
+                    .reconvert_single(input, value, sensor.filtered());
+                sensor.set_filtered(value);
+            }
+            update = Some(sensor.update(&self.converter, &self.curves, context, magnitude, value));
+        }
         self.pending = Some(next);
         if let (Some(position), Some(update)) = (converted, update) {
             self.finish_key(position, update, travel);

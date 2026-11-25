@@ -95,6 +95,23 @@ fn a_key_that_holds_its_events_reports_at_rest_every_cycle() {
 }
 
 #[test]
+fn holding_the_events_of_a_key_holds_those_of_its_sensor() {
+    let mut scanner = scanner();
+    let travel = Travel::new();
+    let now_ms = settled(&mut scanner, &travel);
+    let key = Key { row: 3, column: 4 };
+    scanner.hold_events(key, true);
+    cycle(&mut scanner, &travel, now_ms);
+    assert_eq!(event_travels(&scanner), [(key, 0)]);
+    scanner.hold_events(key, false);
+    cycle(&mut scanner, &travel, now_ms + 1);
+    assert_eq!(event_travels(&scanner), []);
+    scanner.hold_events(Key { row: 7, column: 31 }, true);
+    cycle(&mut scanner, &travel, now_ms + 2);
+    assert_eq!(event_travels(&scanner), []);
+}
+
+#[test]
 fn the_rebound_filter_reports_a_bounce_after_a_release_as_no_travel() {
     let mut scanner = scanner();
     let travel = Travel::new();

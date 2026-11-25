@@ -198,6 +198,14 @@ impl<const INPUTS: usize> scan::Converter for Converter<INPUTS> {
         trigger::start();
     }
 
+    #[inline(always)]
+    fn retrigger_after(&mut self, delay_us: u16) {
+        trigger::stop();
+        trigger::set_counter(0);
+        trigger::set_compare(u32::from(delay_us));
+        trigger::start();
+    }
+
     fn trigger_at(&mut self, ticks: u16) {
         let compare = ticks.wrapping_sub(1);
         trigger::stop();

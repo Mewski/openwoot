@@ -48,7 +48,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
                 samples_left,
                 ..sweep
             });
-            self.converter.trigger_after(DELAY_SWEEP_REPEAT_US);
+            self.converter.retrigger_after(DELAY_SWEEP_REPEAT_US);
             return Outcome::Running;
         }
         let mut next = Sweep {
@@ -64,7 +64,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
                 .key(Position::new(self.input, self.address))
                 .is_none();
             self.converter
-                .trigger_after(if !sweep.is_parallel() && unkeyed {
+                .retrigger_after(if !sweep.is_parallel() && unkeyed {
                     DELAY_SAME_INPUT_US
                 } else {
                     DELAY_ADDRESS_US
@@ -91,7 +91,7 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
             self.converter.sweep_enter_parallel(Some(&self.order));
         }
         self.sweep = Some(next);
-        self.converter.trigger_after(DELAY_INPUT_US);
+        self.converter.retrigger_after(DELAY_INPUT_US);
         Outcome::Running
     }
 
