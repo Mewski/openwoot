@@ -60,7 +60,7 @@ fn main() -> ExitCode {
     application.run(move |cx| {
         gpui_kit::init(cx);
         theme::apply(cx);
-        shell::bind_keys(cx);
+        shell::install_commands(cx);
         let store = cx.new(|cx| Store::new(device, presence, cx));
         let opened = store.clone();
         let background = Background::start(store, Rc::new(move |cx| open_window(&opened, cx)), cx);

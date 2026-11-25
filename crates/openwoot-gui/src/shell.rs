@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext as _, BoxShadow, Context, Div, Entity, FocusHandle,
-    FontWeight, Hsla, InteractiveElement as _, IntoElement, KeyBinding, MouseButton,
-    ParentElement as _, Render, SharedString, Stateful, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Window,
+    FontWeight, Hsla, InteractiveElement as _, IntoElement, KeyBinding, Menu, MenuItem,
+    MouseButton, ParentElement as _, Render, SharedString, Stateful,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window,
     assets::IconName as Glyph,
     component::{
         ActiveTheme as _, Icon, IconName, Sizable as _, Theme, WindowExt as _, h_flex,
@@ -126,9 +126,9 @@ const TAG_TEXT: f32 = 12.0;
 const HELP_MENU_WIDTH: f32 = 220.0;
 const NAME_GAP: f32 = 8.0;
 
-gpui_kit::actions!(openwoot, [Undo, Redo, OpenBackgroundService]);
+gpui_kit::actions!(openwoot, [Undo, Redo, OpenBackgroundService, Quit]);
 
-pub(crate) fn bind_keys(cx: &mut App) {
+pub(crate) fn install_commands(cx: &mut App) {
     let (undo, redo) = if cfg!(target_os = "macos") {
         ("cmd-z", "cmd-shift-z")
     } else {
@@ -138,6 +138,11 @@ pub(crate) fn bind_keys(cx: &mut App) {
         KeyBinding::new(undo, Undo, Some(KEY_CONTEXT)),
         KeyBinding::new(redo, Redo, Some(KEY_CONTEXT)),
     ]);
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    if cfg!(target_os = "macos") {
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.set_menus([Menu::new("openwoot").items([MenuItem::action("Quit openwoot", Quit)])]);
+    }
 }
 
 pub(crate) struct Shell {
