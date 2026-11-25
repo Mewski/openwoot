@@ -95,6 +95,14 @@ pub struct Storage {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+pub struct StorageUsage {
+    pub capacity: u32,
+    pub used: u32,
+    pub records: u32,
+    pub items: u32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
 pub struct Usb {
     pub configured: bool,
     pub suspended: bool,

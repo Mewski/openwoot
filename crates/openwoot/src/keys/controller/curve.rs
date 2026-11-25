@@ -76,7 +76,7 @@ fn output(point: CurvePoint) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use openwoot_protocol::gamepad::Normalization;
+    use openwoot_protocol::gamepad::{Normalization, StickBias};
 
     use super::*;
 
@@ -85,7 +85,7 @@ mod tests {
             curve: points.map(|(travel, output)| CurvePoint { travel, output }),
             normalization: Normalization::Circular,
             single_direction_axes: false,
-            left_stick_up_bias: None,
+            left_stick_up_bias: StickBias::DISABLED,
         }
     }
 

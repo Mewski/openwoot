@@ -10,6 +10,7 @@ use embassy_sync::{
 use openwoot_protocol::sensors::{Reading, Values};
 
 use super::{Scanner, Sensing, Sensor, Travel};
+use crate::keys::Key;
 
 pub struct SensorReadout {
     raw_scanning: AtomicBool,
@@ -55,17 +56,30 @@ impl SensorReadout {
             if values.resize(ROWS * COLUMNS, None).is_err() {
                 return;
             }
+            let mut store = |key: Key, value: Option<u16>| {
+                if let Some(slot) = values.get_mut(key.index(COLUMNS)) {
+                    *slot = value;
+                }
+            };
+            if reading == Reading::ScanOrder {
+                for (order, (_, key)) in (0..=u16::MAX).zip(scanner.conversion_order()) {
+                    store(key, Some(order));
+                }
+                return;
+            }
             for (position, key) in scanner.map().iter() {
                 let sensor = scanner.sensor(position);
                 let value = match reading {
                     Reading::Travel => Some(travel.get(position)),
                     Reading::Value => sensor.map(Sensor::value),
                     Reading::RestLevel => sensor.map(Sensor::rest_level),
+                    Reading::SingleRestLevel => sensor.map(|sensor| sensor.single().rest_level),
+                    Reading::ParallelRestLevel => sensor.map(|sensor| sensor.parallel().rest_level),
                     Reading::BottomLevel => sensor.map(Sensor::bottom_level),
+                    Reading::AboveRest => sensor.map(|sensor| u16::from(sensor.is_above_rest())),
+                    Reading::ScanOrder => None,
                 };
-                if let Some(slot) = values.get_mut(key.index(COLUMNS)) {
-                    *slot = value;
-                }
+                store(key, value);
             }
         });
         self.published.signal(reading);

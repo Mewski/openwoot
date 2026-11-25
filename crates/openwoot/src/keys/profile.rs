@@ -1,7 +1,7 @@
 use heapless::Vec;
 use openwoot_protocol::{
     advanced,
-    gamepad::{self, CurvePoint, Normalization},
+    gamepad::{self, CurvePoint, Normalization, StickBias},
     keys::{self, Keymap, Overrides},
 };
 use serde::{Deserialize, Serialize};
@@ -75,6 +75,11 @@ impl Parts {
     }
 
     #[must_use]
+    pub const fn without(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
+
+    #[must_use]
     pub const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
@@ -108,7 +113,7 @@ pub const fn default_gamepad_settings() -> gamepad::Settings {
         curve: IDENTITY_CURVE,
         normalization: Normalization::Circular,
         single_direction_axes: false,
-        left_stick_up_bias: None,
+        left_stick_up_bias: StickBias::DISABLED,
     }
 }
 
@@ -139,7 +144,7 @@ impl Record for gamepad::Mapping {
 
 impl Record for gamepad::Settings {
     const ITEM: u8 = 0x15;
-    const VERSION: u8 = 1;
+    const VERSION: u8 = 2;
 }
 
 impl Record for ActiveProfile {

@@ -1,12 +1,17 @@
-use openwoot_protocol::lighting::{KeyColors, Rgb};
+use openwoot_protocol::{
+    lightbar,
+    lighting::{KeyColors, Rgb},
+};
 
 use super::Lighting;
 use crate::{
     keys::Key,
     lighting::{
         canvas::{Canvas, Painter},
+        color::BLACK,
         hooks::{Lightbar, Signals},
         key_colors::{color_map, paint},
+        leds::Led,
         overlay::{FADE_FULL, OverlayId},
     },
 };
@@ -47,6 +52,7 @@ where
     }
 
     pub fn leave_host_control(&mut self, now_ms: u32) {
+        self.reset_host_lightbar();
         if !self.host_control {
             return;
         }
@@ -89,5 +95,52 @@ where
         }
         let colors = *self.colors.shown();
         paint(&mut self.main_canvas(), &colors);
+    }
+
+    pub fn set_host_lightbar(&mut self, colors: &[Rgb]) {
+        self.hooks.set_host_colors(colors);
+    }
+
+    pub fn reset_host_lightbar(&mut self) {
+        self.hooks.reset_host_colors();
+    }
+
+    #[must_use]
+    pub fn host_lightbar(&self) -> bool {
+        self.hooks.host_driven()
+    }
+
+    pub fn shown_keys(&self, colors: &mut KeyColors) {
+        colors.clear();
+        for row in 0..ROWS {
+            for column in 0..COLUMNS {
+                let color = self
+                    .variant
+                    .led(row, column)
+                    .map_or(BLACK, |led| self.shown_led(led));
+                if colors.push(color).is_err() {
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn shown_lightbar(&self, colors: &mut lightbar::Colors) {
+        colors.clear();
+        for led in self.hooks.leds() {
+            if colors.push(self.shown_led(*led)).is_err() {
+                return;
+            }
+        }
+    }
+
+    fn shown_led(&self, led: Led) -> Rgb {
+        if self.idle.is_off() {
+            return BLACK;
+        }
+        self.map
+            .position(led)
+            .and_then(|position| self.frame.color(position))
+            .unwrap_or(BLACK)
     }
 }

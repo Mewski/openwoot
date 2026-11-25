@@ -40,10 +40,10 @@ impl Point {
 
     pub(crate) const fn help(self) -> &'static str {
         match self {
-            Self::Press => "The key passes its actuation point",
-            Self::BottomOut => "The key is fully pressed",
-            Self::Lift => "The key rises from full press",
-            Self::Release => "The key is released",
+            Self::Press => "Start of the key press",
+            Self::BottomOut => "Key fully pressed",
+            Self::Lift => "Key released from fully pressed",
+            Self::Release => "Release of the key",
         }
     }
 
@@ -97,6 +97,16 @@ impl Kind {
         }
     }
 
+    pub(crate) const fn abbreviation(self) -> &'static str {
+        match self {
+            Self::DynamicKeystroke => "DKS",
+            Self::ModTap => "Mod Tap",
+            Self::Toggle => "Toggle Key",
+            Self::DepthPriority => "Rappy Snappy",
+            Self::Socd => "SOCD",
+        }
+    }
+
     pub(crate) const fn badge(self) -> &'static str {
         match self {
             Self::DynamicKeystroke => "DKS",
@@ -109,11 +119,13 @@ impl Kind {
 
     pub(crate) const fn help(self) -> &'static str {
         match self {
-            Self::DynamicKeystroke => "Up to 4 actions on 4 parts of one key press",
-            Self::ModTap => "One action when the key is held, another when it is tapped",
-            Self::Toggle => "Tap to lock an action on or off, hold for the normal behaviour",
-            Self::DepthPriority => "Of 2 keys, the one pressed further down activates",
-            Self::Socd => "Of 2 keys pressed together, your setting decides which activates",
+            Self::DynamicKeystroke => "4 different actions on a single key based on key position.",
+            Self::ModTap => "2 different actions on a single key based on press behaviour.",
+            Self::Toggle => "Lock an action between its on and off state by tapping the key.",
+            Self::DepthPriority => {
+                "Activates whichever of the 2 selected keys is pressed down further."
+            }
+            Self::Socd => "Activates the 2 selected keys based on your chosen settings.",
         }
     }
 
@@ -221,19 +233,19 @@ pub(crate) fn interrupts() -> [Choice<Interrupt>; 4] {
     [
         choice(
             Interrupt::Auto,
-            "Hold key, if it is a modifier",
-            "Uses the hold action when it is a modifier like Shift, Ctrl or Alt",
+            "Hold Key, if it is a modifier",
+            "Uses the hold function when it's a modifier like Shift, Ctrl, or Alt.",
         ),
+        choice(Interrupt::Tap, "Tap Key", "Always uses the tap function."),
         choice(
-            Interrupt::Tap,
-            "Tap key",
-            "Always uses the tap action; suits home row modifiers",
+            Interrupt::Hold,
+            "Hold Key",
+            "Always uses the hold function.",
         ),
-        choice(Interrupt::Hold, "Hold key", "Always uses the hold action"),
         choice(
             Interrupt::Ignore,
             "Never",
-            "Turns just-in-time off; the key waits for the full hold duration",
+            "Your key waits for the full delay before activating.",
         ),
     ]
 }
@@ -242,46 +254,58 @@ pub(crate) fn socd_resolutions(first: &str, second: &str) -> [Choice<Resolution>
     [
         choice(
             Resolution::LastPressed,
-            "Last input priority",
-            "The key pressed last overrides the other",
+            "Last Input Priority",
+            "The last activated key overrides the previous.",
         ),
         choice(
             Resolution::First,
-            &format!("Absolute priority ({first})"),
-            &format!("{first} always takes priority over {second}"),
+            &format!("Absolute Priority ({first} Key)"),
+            &format!("The {first} Key will always take priority over the {second} Key."),
         ),
         choice(
             Resolution::Second,
-            &format!("Absolute priority ({second})"),
-            &format!("{second} always takes priority over {first}"),
+            &format!("Absolute Priority ({second} Key)"),
+            &format!("The {second} Key will always take priority over the {first} Key."),
         ),
         choice(
             Resolution::Neither,
             "Neutral",
-            "When both keys are pressed, neither registers",
+            "When both keys are activated, neither are registered.",
         ),
         choice(
             Resolution::Both,
-            "No cleaning",
-            "Both keys register, as without Snappy Tappy",
+            "No Cleaning",
+            "When both keys are activated, both are registered.",
         ),
     ]
 }
 
 pub(crate) fn bottomed_out_resolutions(first: &str, second: &str) -> [Choice<Resolution>; 5] {
     [
-        choice(Resolution::Both, "Both", "Both keys register"),
-        choice(Resolution::Neither, "Neither", "Neither key registers"),
-        choice(Resolution::First, first, &format!("Only {first} registers")),
+        choice(
+            Resolution::Both,
+            "Both",
+            "When both keys are fully pressed, both are registered.",
+        ),
+        choice(
+            Resolution::Neither,
+            "Neutral",
+            "When both keys are fully pressed, neither are registered.",
+        ),
+        choice(
+            Resolution::First,
+            &format!("Absolute Priority ({first} Key)"),
+            &format!("The {first} Key will always take priority over the {second} Key."),
+        ),
         choice(
             Resolution::Second,
-            second,
-            &format!("Only {second} registers"),
+            &format!("Absolute Priority ({second} Key)"),
+            &format!("The {second} Key will always take priority over the {first} Key."),
         ),
         choice(
             Resolution::LastPressed,
-            "Last pressed",
-            "The key pressed last registers",
+            "Last Input Priority",
+            "The last activated key overrides the previous.",
         ),
     ]
 }

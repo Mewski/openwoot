@@ -50,7 +50,11 @@ pub(crate) fn sensors<Noise: NoiseStatistics, const INPUTS: usize>()
 }
 
 pub(crate) fn scanner() -> Bench80 {
-    Scanner::new(Simulated::default(), MAP, ORDER, sensors())
+    scanner_with_order(ORDER)
+}
+
+pub(crate) fn scanner_with_order(order: [u8; 6]) -> Bench80 {
+    Scanner::new(Simulated::default(), MAP, order, sensors())
 }
 
 pub(crate) fn rest_everywhere(scanner: &mut Bench80, magnitude: u16) {

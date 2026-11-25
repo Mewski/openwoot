@@ -1,19 +1,21 @@
-use crate::gpio::{OutputType, Pin, Pull, Speed};
+use crate::gpio::{Line, Pin};
+
+pub(super) const ALTERNATE_FUNCTION: u8 = 4;
 
 pub trait ClockPin {
-    fn into_i2c(self);
+    fn into_line(self) -> Line;
 }
 
 pub trait DataPin {
-    fn into_i2c(self);
+    fn into_line(self) -> Line;
 }
 
 macro_rules! i2c_pins {
     ($pin_trait:ident: $(($port:literal, $index:literal)),+) => {
         $(
             impl<Mode> $pin_trait for Pin<$port, $index, Mode> {
-                fn into_i2c(self) {
-                    let _ = self.into_alternate::<4>(OutputType::OpenDrain, Speed::High, Pull::None);
+                fn into_line(self) -> Line {
+                    Line::new($port, $index)
                 }
             }
         )+

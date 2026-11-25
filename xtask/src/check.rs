@@ -1,7 +1,5 @@
 mod board_image;
 mod budget;
-mod call_graph;
-mod entry_points;
 mod names;
 mod packages;
 mod panic_paths;
@@ -11,6 +9,7 @@ mod scan_interrupt;
 mod symmetry;
 mod tools;
 mod tree;
+mod zero_wait;
 
 use std::{collections::BTreeSet, path::Path};
 
@@ -59,6 +58,9 @@ pub(crate) fn run(root: &Path) -> Result<()> {
             problems.push(format!("`{}`: panic reachable: {problem}", board.name));
         }
         for problem in analysis.critical_sections {
+            problems.push(format!("`{}`: {problem}", board.name));
+        }
+        for problem in analysis.code_beyond_zero_wait {
             problems.push(format!("`{}`: {problem}", board.name));
         }
         reviewed.extend(analysis.panics.reviewed);

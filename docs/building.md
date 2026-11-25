@@ -20,13 +20,27 @@ CI installs. macOS needs nothing beyond the Xcode command line tools.
 | --- | --- |
 | `cargo test --workspace` | host tests of every crate, including the board crates' libraries |
 | `cargo xtask boards [--json]` | lists the packages under `boards/` |
-| `cargo xtask build <board>` / `--all` | `cargo build --release` for the board's target, then writes `build/<board>/openwoot-<board>.elf`, `.hex` and `.bin` |
+| `cargo xtask build <board>` / `--all` | `cargo build --release` for the board's target in link order (below), then writes `build/<board>/openwoot-<board>.elf`, `.hex` and `.bin` |
 | `cargo xtask flash <board> --dry-run` | builds the board and runs `openwoot flash --dry-run` on its HEX file |
 | `cargo xtask check` | the rules of the tree (below), formatting, clippy, and every board image |
 | `cargo xtask pac` | regenerates the PAC crates (needs exactly `svd2rust` 0.37.1 and `form` 0.13.0); CI runs it and fails if the committed PACs differ |
 
 The target of a board comes from `[package.metadata.openwoot] target` of its chip HAL. HEX and
 binary files are written in Rust from the loadable segments of the ELF file.
+
+## Link order
+
+Both microcontrollers fetch code without wait states only from the start of their flash
+(`ZERO_WAIT` in `memory.x`: 512 KiB on the GD32F425, 256 KiB on the GD32F303); beyond it every
+fetch waits. The images are larger, and the compiler's order of functions is arbitrary, so
+`xtask` builds each board twice when needed: it links the image, builds the call graph from its
+relocations and writes `target/<target>/release/openwoot-<board>.symbol-order`, which lists the
+functions that a device interrupt vector or the key task reaches, then the thread executor, then
+the code of each thread task, the task with the least new code first, each group sorted by
+name. When the list differs from the one the image was linked with, it links again. The board's
+`build.rs` passes the file named by `OPENWOOT_SYMBOL_ORDER` to lld as `--symbol-ordering-file`,
+which puts those functions first in `.text`. A plain `cargo build` links in the compiler's order;
+build and flash images through `xtask`.
 
 ## What `cargo xtask check` checks
 
@@ -65,6 +79,9 @@ binary files are written in Rust from the loadable segments of the ELF file.
   image contains is reported;
 - no BASEPRI write, so no critical section, reachable from the scan vector (`ADC` on the GD32F425,
   `ADC0_1` on the GD32F303);
+- every function that a device interrupt vector (the vectors from 16 on; the core exceptions end
+  in `cortex-m-rt`'s handlers, whose `HardFault` lies behind `.text`) or the key task reaches lies
+  inside `ZERO_WAIT` of `memory.x`;
 - per board, statics (from the start of RAM to the end of the last static section) plus the stack
   bound of the call graph (thread mode plus every interrupt handler and the key task) leave 2048
   bytes of RAM, and the image leaves 32768 bytes of its area; calls that form a cycle are

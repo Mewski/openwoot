@@ -12,15 +12,31 @@ name = "openwoot-gui"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = { workspace = true }
 async-channel = { workspace = true }
 async-io = { workspace = true }
+auto-launch = { workspace = true }
 futures-lite = { workspace = true }
 gpui-kit = { workspace = true }
 openwoot-host = { workspace = true }
 openwoot-protocol = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+steamlocate = { workspace = true }
 thiserror = { workspace = true }
+tray-icon = { workspace = true }
+x-win = { workspace = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+moxcms = { workspace = true }
+xcap = { workspace = true }
+
+[target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
+ashpd = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { workspace = true }
+objc2-core-graphics = { workspace = true }
 
 [lints]
 workspace = true

@@ -7,11 +7,11 @@ use location::Location;
 use openwoot_image::Hex;
 pub(super) use reviewed::REVIEWED;
 
-use super::{
+use crate::{
     call_graph::{CallGraph, Reference},
+    elf::Elf,
     entry_points::EntryPoints,
 };
-use crate::elf::Elf;
 
 const LOCATION_WINDOW: u32 = 64;
 

@@ -12,6 +12,8 @@ use openwoot_protocol::{configuration::Invalid, switches};
 use super::{FittedSwitches, Parts, Profile, fitting::tune};
 use crate::analog::{self, SwitchModel};
 
+const NONE_SELECTED: u8 = 0xFF;
+
 pub trait ProfileSource {
     fn read<R>(&self, read: impl FnOnce(&Profile) -> R) -> Option<R>;
 }
@@ -21,6 +23,8 @@ pub struct Shared<M: RawMutex> {
     changes: AtomicU8,
     profiles: AtomicU8,
     active: AtomicU8,
+    selected: AtomicU8,
+    returning: AtomicU8,
     requests: Signal<M, u8>,
     rebound_filter: AtomicBool,
     switches: Mutex<M, RefCell<FittedSwitches>>,
@@ -35,6 +39,8 @@ impl<M: RawMutex> Shared<M> {
             changes: AtomicU8::new(0),
             profiles: AtomicU8::new(1),
             active: AtomicU8::new(0),
+            selected: AtomicU8::new(NONE_SELECTED),
+            returning: AtomicU8::new(0),
             requests: Signal::new(),
             rebound_filter: AtomicBool::new(false),
             switches: Mutex::new(RefCell::new(FittedSwitches::new())),
@@ -57,6 +63,22 @@ impl<M: RawMutex> Shared<M> {
         self.profiles.store(count, Ordering::Relaxed);
         self.active.store(active, Ordering::Relaxed);
         self.mark(Parts::PROFILES);
+    }
+
+    pub fn set_links(&self, selected: Option<u8>, returning: u8) {
+        self.selected
+            .store(selected.unwrap_or(NONE_SELECTED), Ordering::Relaxed);
+        self.returning.store(returning, Ordering::Relaxed);
+        self.mark(Parts::PROFILES);
+    }
+
+    #[must_use]
+    pub fn links(&self) -> (Option<u8>, u8) {
+        let selected = self.selected.load(Ordering::Relaxed);
+        (
+            (selected != NONE_SELECTED).then_some(selected),
+            self.returning.load(Ordering::Relaxed),
+        )
     }
 
     pub fn set_rebound_filter(&self, enabled: bool) {

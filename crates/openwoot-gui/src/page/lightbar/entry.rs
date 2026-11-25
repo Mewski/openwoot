@@ -5,7 +5,7 @@ use openwoot_protocol::{
     lightbar::{
         Background, Blink, Builtin, Comparator, Comparison, Condition, Custom, Effect, Entry,
         Group, KeyRect, Logic, MAX_GROUPS, MAX_LEDS, MAX_TERMS, Meter, Mirror, Operand,
-        ProfileIndicator, Range, Signal, Solid, Target, Term, Waveform,
+        ProfileIndicator, Range, Signal, Solid, Target, Term, Title, Waveform,
     },
     lighting::Color,
 };
@@ -94,9 +94,9 @@ impl Kind {
 
     pub(super) const fn name(self) -> &'static str {
         match self {
-            Self::Meter => "Progress bar",
-            Self::ProfileIndicator => "Profile indicator",
-            Self::Mirror => "Sync with keyboard",
+            Self::Meter => "Progress Bar",
+            Self::ProfileIndicator => "Profile Indicator",
+            Self::Mirror => "Sync with Keyboard",
             Self::Blink => "Pulse",
             Self::Solid | Self::Custom => "Solid",
         }
@@ -166,9 +166,9 @@ impl Timing {
 
     pub(super) const fn label(self) -> &'static str {
         match self {
-            Self::While => "While match",
-            Self::Matched => "On match",
-            Self::Changed => "On change",
+            Self::While => "whileMatch",
+            Self::Matched => "onMatch",
+            Self::Changed => "onChange",
         }
     }
 
@@ -440,6 +440,24 @@ pub(super) const fn comparator_symbol(comparator: Comparator) -> &'static str {
     }
 }
 
+pub(super) fn title(name: &str) -> Title {
+    let mut title = Title::new();
+    for character in name.chars() {
+        if title.push(character).is_err() {
+            break;
+        }
+    }
+    title
+}
+
+pub(super) fn entry_name(entry: &Entry) -> &str {
+    if entry.title.is_empty() {
+        Kind::of(&entry.effect).name()
+    } else {
+        entry.title.as_str()
+    }
+}
+
 pub(super) const fn lightbar_range(effect: &Effect) -> Option<Range> {
     match effect {
         Effect::Meter(Meter { range, .. })
@@ -551,6 +569,7 @@ mod tests {
             key_rows: 6,
             key_columns: 17,
             profiles: 4,
+            linked_profiles: 0,
             layouts: heapless::Vec::new(),
             lightbar_leds: leds,
             host_signals: false,
@@ -657,6 +676,7 @@ mod tests {
         let mut trigger = Timing::Changed.apply(&default_term());
         set_term_time(&mut trigger, 0);
         let entry = Entry {
+            title: Title::new(),
             condition: Some(single(trigger)),
             effect: Kind::Solid.effect(MATRIX),
         };
@@ -664,6 +684,7 @@ mod tests {
         let mut held = Timing::Matched.apply(&default_term());
         set_term_time(&mut held, 60_001);
         let entry = Entry {
+            title: Title::new(),
             condition: Some(single(held)),
             effect: Kind::Solid.effect(MATRIX),
         };

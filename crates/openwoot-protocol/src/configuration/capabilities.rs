@@ -13,6 +13,7 @@ pub struct Capabilities {
     pub key_rows: u8,
     pub key_columns: u8,
     pub profiles: u8,
+    pub linked_profiles: u8,
     pub layouts: Vec<Layout, LAYOUTS>,
     pub lightbar_leds: u8,
     pub host_signals: bool,

@@ -10,7 +10,7 @@ const STAT0_OUERR: u32 = 1 << 11;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
-    #[error("the LED bus did not finish a transfer within 10 ms")]
+    #[error("the LED bus did not finish a step of a transfer within 10 ms")]
     Timeout,
     #[error("the LED bus saw a misplaced start or stop condition")]
     Bus,

@@ -3,30 +3,39 @@ use std::{collections::BTreeSet, fmt, rc::Rc};
 use gpui_kit::{
     AnyElement, App, AppContext as _, ClickEvent, Context, Div, ElementId, Entity, FontWeight,
     Hsla, InteractiveElement as _, IntoElement, MouseButton, MouseMoveEvent, ParentElement as _,
-    Pixels, Render, RenderOnce, SharedString, Stateful, StatefulInteractiveElement as _,
-    Styled as _, Window,
-    component::{ActiveTheme as _, tooltip::Tooltip},
-    div,
-    prelude::FluentBuilder as _,
-    px, relative,
+    Pixels, Render, RenderOnce, SharedString, Size, Stateful, StatefulInteractiveElement as _,
+    Styled as _, Window, component::ActiveTheme as _, div, linear_color_stop, linear_gradient,
+    prelude::FluentBuilder as _, px, relative,
 };
 use openwoot_protocol::geometry::{self, Shape};
 
-use crate::{store::Keyboard, theme};
+use crate::{
+    panel::{Tip, raised, tip_surface, with_tip},
+    store::Keyboard,
+    theme,
+};
 
 const UNIT: f32 = 100.0;
-const KEY_GAP: f32 = 4.0;
-const CASE_PADDING: u16 = 22;
-const FRAME_PIXELS: f32 = KEY_GAP + 2.0;
-const DEFAULT_KEY_PIXELS: f32 = 48.0;
-const MIN_KEY_PIXELS: f32 = 30.0;
-const MAX_KEY_PIXELS: f32 = 60.0;
+const CASE_TOP: u16 = 80;
+const CASE_SIDE: u16 = 50;
+const CASE_LEFT: u16 = 40;
+const CASE_RIGHT: u16 = 48;
+const CASE_BOTTOM: u16 = 45;
+const CASE_RADIUS: f32 = 0.27;
+const CASE_LIP: f32 = 2.0;
+const KEY_INSET: f32 = 1.0;
+const KEY_RADIUS: f32 = 0.075;
+const LEGEND_SHARE: f32 = 0.25;
+const DETAIL_SHARE: f32 = 0.19;
+const FILL_OPACITY: f32 = 0.7;
+const HOVER_FILL_OPACITY: f32 = 0.5;
+const DEFAULT_KEY_PIXELS: f32 = 44.0;
+const MIN_KEY_PIXELS: f32 = 16.0;
 const DRAG_PREVIEW_PIXELS: f32 = 44.0;
 const MARKER_PIXELS: f32 = 14.0;
 const MARKER_INSET: f32 = 3.0;
-const CALLOUT_HEIGHT: f32 = 26.0;
-const TOOLTIP_WIDTH: f32 = 280.0;
-const CALLOUT_GAP: f32 = 4.0;
+const CALLOUT_HEIGHT: f32 = 39.0;
+const CALLOUT_GAP: f32 = 7.0;
 
 type KeyClick = Rc<dyn Fn(usize, &ClickEvent, &mut Window, &mut App)>;
 type KeyAction = Rc<dyn Fn(usize, &mut Window, &mut App)>;
@@ -84,6 +93,7 @@ pub(crate) struct KeyboardView {
     on_secondary: Option<KeyAction>,
     decorators: Vec<KeyDecorator>,
     on_marker: Option<MarkerPress>,
+    raised: bool,
 }
 
 impl Selection {
@@ -160,6 +170,7 @@ impl KeyboardView {
             on_secondary: None,
             decorators: Vec::new(),
             on_marker: None,
+            raised: false,
         }
     }
 
@@ -168,11 +179,17 @@ impl KeyboardView {
         self
     }
 
-    pub(crate) fn fit_width(mut self, available: Pixels) -> Self {
-        if self.width > 0 {
-            let units = f32::from(self.width + 2 * CASE_PADDING) / UNIT;
-            let room = f32::from(available) - FRAME_PIXELS;
-            self.key_pixels = (room / units).clamp(MIN_KEY_PIXELS, MAX_KEY_PIXELS);
+    pub(crate) fn raise_selection(mut self) -> Self {
+        self.raised = true;
+        self
+    }
+
+    pub(crate) fn fit(mut self, room: Size<Pixels>) -> Self {
+        if self.width > 0 && self.height > 0 {
+            let across = f32::from(self.width + 2 * CASE_SIDE) / UNIT;
+            let down = f32::from(self.height + CASE_TOP + CASE_BOTTOM) / UNIT;
+            let pixels = (f32::from(room.width) / across).min(f32::from(room.height) / down);
+            self.key_pixels = pixels.max(MIN_KEY_PIXELS);
         }
         self
     }
@@ -315,26 +332,34 @@ impl KeyboardView {
     }
 
     fn case(&self, plate: Div, caps: theme::Keycaps) -> Stateful<Div> {
+        let radius = px(self.key_pixels * CASE_RADIUS);
+        let rim = px(1.0);
         div()
             .id(self.id.clone())
             .flex_none()
-            .rounded(px(16.0))
-            .bg(caps.side)
-            .pb(px(10.0))
-            .shadow_lg()
+            .pl(self.scale(CASE_SIDE - CASE_LEFT))
+            .pr(self.scale(CASE_SIDE - CASE_RIGHT))
             .child(
-                div()
-                    .p(self.scale(CASE_PADDING))
-                    .rounded(px(16.0))
-                    .bg(caps.case)
-                    .border_1()
-                    .border_color(caps.plate)
-                    .child(div().p(px(KEY_GAP / 2.0)).child(plate)),
+                div().rounded(radius).bg(caps.lip).pb(px(CASE_LIP)).child(
+                    div()
+                        .rounded(radius)
+                        .bg(linear_gradient(
+                            180.0,
+                            linear_color_stop(caps.case_top, 0.0),
+                            linear_color_stop(caps.case_bottom, 1.0),
+                        ))
+                        .border_1()
+                        .border_color(caps.rim)
+                        .pt(self.scale(CASE_TOP) - rim)
+                        .pl(self.scale(CASE_LEFT) - rim)
+                        .pr(self.scale(CASE_RIGHT) - rim)
+                        .pb(self.scale(CASE_BOTTOM) - rim - px(CASE_LIP))
+                        .child(plate),
+                ),
             )
     }
 
     fn callout(&self, key: &geometry::Key, text: SharedString, cx: &App) -> Div {
-        let theme = cx.theme();
         div()
             .absolute()
             .left(self.scale(key.x))
@@ -343,24 +368,7 @@ impl KeyboardView {
             .h(px(CALLOUT_HEIGHT))
             .flex()
             .justify_center()
-            .child(
-                div()
-                    .flex_none()
-                    .h_full()
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .rounded(px(6.0))
-                    .bg(theme.popover)
-                    .border_1()
-                    .border_color(theme.primary)
-                    .shadow_lg()
-                    .whitespace_nowrap()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.popover_foreground)
-                    .child(text),
-            )
+            .child(div().flex_none().child(tip_surface(Tip::Text(text), cx)))
     }
 }
 
@@ -370,11 +378,11 @@ impl RenderOnce for KeyboardView {
         let theme = cx.theme();
         let caps = theme::keycaps();
         let outline = theme.primary;
-        let hover = theme.secondary_hover;
         let travel_fill = theme.primary.opacity(0.4);
-        let gap = px(KEY_GAP);
-        let legend_size = px((self.key_pixels * 0.24).clamp(9.0, 13.0));
-        let detail_size = px((self.key_pixels * 0.19).clamp(8.0, 11.0));
+        let inset = px(KEY_INSET);
+        let radius = px(self.key_pixels * KEY_RADIUS);
+        let legend_size = px(self.key_pixels * LEGEND_SHARE);
+        let detail_size = px(self.key_pixels * DETAIL_SHARE);
         let mut plate = div()
             .relative()
             .w(self.scale(self.width))
@@ -382,10 +390,13 @@ impl RenderOnce for KeyboardView {
             .flex_none();
         for (index, key, face) in &self.keys {
             let selected = self.selection.contains(*index);
-            let top = face.fill.unwrap_or(caps.top);
+            let (top, hovered_top) = match face.fill {
+                Some(fill) => (fill.opacity(FILL_OPACITY), fill.opacity(HOVER_FILL_OPACITY)),
+                None => (caps.top, caps.top),
+            };
             let legend = match face.fill {
                 _ if face.dimmed => caps.detail.opacity(0.6),
-                Some(fill) => readable_on(fill),
+                Some(fill) => readable_on(blend(fill, caps.case_top)),
                 None => caps.legend,
             };
             let detail_color = if face.fill.is_some() {
@@ -393,6 +404,7 @@ impl RenderOnce for KeyboardView {
             } else {
                 caps.detail
             };
+            let border = if selected { outline } else { caps.border };
             for (part, (x, y, part_width, part_height)) in key_parts(key).into_iter().enumerate() {
                 let labelled = part == 0;
                 let key_index = *index;
@@ -401,21 +413,21 @@ impl RenderOnce for KeyboardView {
                     .group(group.clone())
                     .id(group.clone())
                     .absolute()
-                    .left(self.scale(x) + gap / 2.0)
-                    .top(self.scale(y) + gap / 2.0)
-                    .w(self.scale(part_width) - gap)
-                    .h(self.scale(part_height) - gap)
-                    .rounded(px(4.0))
+                    .left(self.scale(x) + inset)
+                    .top(self.scale(y) + inset)
+                    .w(self.scale(part_width) - inset * 2.0)
+                    .h(self.scale(part_height) - inset * 2.0)
+                    .rounded(radius)
                     .bg(top)
                     .overflow_hidden()
-                    .border_2()
-                    .border_color(if selected { outline } else { top })
+                    .border_1()
+                    .border_color(border)
                     .cursor_pointer()
                     .hover(|style| {
                         if selected {
-                            style
+                            style.bg(hovered_top)
                         } else {
-                            style.border_color(hover)
+                            style.bg(hovered_top).border_color(caps.border_hover)
                         }
                     })
                     .children(fills(face, travel_fill))
@@ -425,20 +437,28 @@ impl RenderOnce for KeyboardView {
                             legend,
                             detail_color,
                             (legend_size, detail_size),
-                            (self.scale(part_height) - gap, group),
+                            (self.scale(part_height) - inset * 2.0, group),
                         ))
                     })
                     .when_some(face.marker.filter(|_| labelled), |this, color| {
-                        this.child(self.marker(key_index, color, caps.side))
-                    })
-                    .when_some(face.tooltip.clone().filter(|_| labelled), |this, text| {
-                        this.tooltip(move |window, cx| {
-                            Tooltip::new(text.clone())
-                                .max_w(px(TOOLTIP_WIDTH))
-                                .build(window, cx)
-                        })
+                        this.child(self.marker(key_index, color, caps.case_bottom))
                     });
-                plate = plate.child(self.interactive(element, key_index, &sweep, outline));
+                let element = match face.tooltip.clone().filter(|_| labelled) {
+                    Some(text) => with_tip(
+                        element,
+                        SharedString::from(format!("key-tip-{index}")),
+                        Tip::Text(text),
+                        window,
+                        cx,
+                    ),
+                    None => element,
+                };
+                let element = self.interactive(element, key_index, &sweep, outline);
+                plate = if self.raised && selected {
+                    plate.child(raised(element))
+                } else {
+                    plate.child(element)
+                };
             }
         }
         let callouts = self.keys.iter().filter_map(|(_, key, face)| {
@@ -674,5 +694,12 @@ fn readable_on(fill: Hsla) -> Hsla {
         gpui_kit::black()
     } else {
         gpui_kit::white()
+    }
+}
+
+fn blend(fill: Hsla, under: Hsla) -> Hsla {
+    Hsla {
+        l: fill.l * FILL_OPACITY + under.l * (1.0 - FILL_OPACITY),
+        ..fill
     }
 }

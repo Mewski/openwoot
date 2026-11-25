@@ -220,7 +220,7 @@ impl Validate for Action {
                 Err(Invalid::ConsumerUsageOutsideRange(usage))
             }
             Self::Layer(Layer::Base) => Err(Invalid::MomentaryBaseLayer),
-            Self::Function(Function::Profile(profile)) => profile.validate(capabilities),
+            Self::Function(Function::Profile(profile)) => profile.check_onboard(capabilities),
             _ => Ok(()),
         }
     }
@@ -288,6 +288,7 @@ mod tests {
             key_rows: 1,
             key_columns: 1,
             profiles: 1,
+            linked_profiles: 0,
             layouts: Vec::new(),
             lightbar_leds: 0,
             host_signals: false,

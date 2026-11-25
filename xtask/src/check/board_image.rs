@@ -5,13 +5,13 @@ use openwoot_image::{Descriptor, Hex, Image, MemoryLayout};
 
 use super::{
     budget::Budget,
-    call_graph::CallGraph,
-    entry_points::EntryPoints,
     panic_paths::{self, Findings},
-    scan_interrupt,
+    scan_interrupt, zero_wait,
 };
 use crate::{
+    call_graph::CallGraph,
     elf::Elf,
+    entry_points::EntryPoints,
     firmware,
     workspace::{Board, Workspace},
 };
@@ -22,6 +22,7 @@ pub(super) struct Analysis {
     pub(super) budget: Budget,
     pub(super) panics: Findings,
     pub(super) critical_sections: Vec<String>,
+    pub(super) code_beyond_zero_wait: Vec<String>,
 }
 
 pub(super) fn check(workspace: &Workspace, board: &Board) -> Result<Analysis> {
@@ -108,6 +109,7 @@ pub(super) fn check(workspace: &Workspace, board: &Board) -> Result<Analysis> {
         budget: Budget::measure(&elf, &layout, &graph, &entry_points)?,
         panics: panic_paths::find(&elf, &graph, &entry_points),
         critical_sections: scan_interrupt::critical_sections(&graph, &entry_points)?,
+        code_beyond_zero_wait: zero_wait::code_beyond(&graph, &entry_points, layout.zero_wait),
     })
 }
 

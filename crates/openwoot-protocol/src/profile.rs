@@ -9,6 +9,7 @@ use crate::{
 };
 
 pub const NAME_LEN: usize = 32;
+pub const MAX_LINKED: u8 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Schema)]
 pub struct Slot(u8);
@@ -17,6 +18,21 @@ pub struct Slot(u8);
 pub struct Summary {
     pub count: u8,
     pub active: Slot,
+    pub linked: u8,
+    pub selected: Option<Slot>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+pub enum Namespace {
+    #[default]
+    Onboard,
+    Linked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+pub struct Selection {
+    pub profile: Option<Slot>,
+    pub activate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
@@ -57,25 +73,77 @@ pub struct Move {
     pub to: Slot,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+pub struct State {
+    pub active: Slot,
+    pub host_control: bool,
+    pub idle_off: bool,
+}
+
 impl Slot {
+    const LINKED: u8 = 0x80;
+
     #[must_use]
     pub const fn new(index: u8) -> Self {
         Self(index)
     }
 
     #[must_use]
+    pub const fn linked(index: u8) -> Self {
+        Self(Self::LINKED | index)
+    }
+
+    #[must_use]
     pub const fn get(self) -> u8 {
         self.0
+    }
+
+    #[must_use]
+    pub const fn is_linked(self) -> bool {
+        self.0 & Self::LINKED != 0
+    }
+
+    #[must_use]
+    pub const fn index(self) -> u8 {
+        self.0 & !Self::LINKED
+    }
+
+    pub fn check_onboard(self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        if self.is_linked() {
+            Err(Invalid::ProfileLinked(self.0))
+        } else {
+            self.validate(capabilities)
+        }
+    }
+
+    pub fn check_linked(self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        if self.is_linked() {
+            self.validate(capabilities)
+        } else {
+            Err(Invalid::ProfileNotLinked(self.0))
+        }
     }
 }
 
 impl Validate for Slot {
     fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
-        if self.0 < capabilities.profiles {
+        let slots = if self.is_linked() {
+            capabilities.linked_profiles
+        } else {
+            capabilities.profiles
+        };
+        if self.index() < slots {
             Ok(())
         } else {
             Err(Invalid::ProfileOutsideRange(self.0))
         }
+    }
+}
+
+impl Validate for Selection {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        self.profile
+            .map_or(Ok(()), |profile| profile.check_linked(capabilities))
     }
 }
 
@@ -93,15 +161,15 @@ impl Validate for Info {
 
 impl Validate for Swap {
     fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
-        self.first.validate(capabilities)?;
-        self.second.validate(capabilities)
+        self.first.check_onboard(capabilities)?;
+        self.second.check_onboard(capabilities)
     }
 }
 
 impl Validate for Move {
     fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
-        self.from.validate(capabilities)?;
-        self.to.validate(capabilities)
+        self.from.check_onboard(capabilities)?;
+        self.to.check_onboard(capabilities)
     }
 }
 

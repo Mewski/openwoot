@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::Capabilities;
 use crate::{
+    apps::MAX_LINKS,
     device::Layout,
     lightbar::{MAX_HOLD_MS, MAX_HOST_SIGNALS},
     switches::MAX_TUNED,
@@ -30,6 +31,16 @@ pub enum Invalid {
     ConsumerUsageOutsideRange(u16),
     #[error("profile {0} lies outside the profiles of the keyboard")]
     ProfileOutsideRange(u8),
+    #[error("the first profile cannot be linked to itself")]
+    FirstProfileLinked,
+    #[error("slot {0:#04x} holds a linked profile, which keeps its slot")]
+    ProfileLinked(u8),
+    #[error("slot {0:#04x} holds no linked profile")]
+    ProfileNotLinked(u8),
+    #[error("app link {0} lies outside the {MAX_LINKS} app links of a profile")]
+    AppLinkOutsideRange(u8),
+    #[error("the app has no filter to recognise it by")]
+    AppWithoutFilter,
     #[error("the base layer cannot be a momentary layer")]
     MomentaryBaseLayer,
     #[error("the distance is zero")]

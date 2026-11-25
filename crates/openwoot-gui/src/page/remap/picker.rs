@@ -7,9 +7,7 @@ use gpui_kit::{
     Styled as _, Subscription, Window,
     assets::IconName as Catalog,
     component::{
-        ActiveTheme as _, Disableable as _, Icon, Sizable as _, WindowExt as _,
-        button::Button,
-        h_flex,
+        ActiveTheme as _, Icon, Sizable as _, WindowExt as _, h_flex,
         input::{Input, InputEvent, InputState},
         notification::Notification,
         tooltip::Tooltip,
@@ -29,11 +27,22 @@ use super::{
     keycap::{self, Look},
     quick_bind,
 };
-use crate::{keyboard::Dragged, store::Keyboard, theme, usage};
+use crate::{keyboard::Dragged, panel, store::Keyboard, theme, usage};
 
 const HEADER_HEIGHT: f32 = 40.0;
-const BADGE_SIZE: f32 = 26.0;
+const BADGE_WIDTH: f32 = 26.0;
+const BADGE_HEIGHT: f32 = 22.0;
+const BADGE_RADIUS: f32 = 4.0;
+const BADGE_ICON: f32 = 13.0;
+const CHEVRON: f32 = 24.0;
+const SEARCH_HEIGHT: f32 = 48.0;
+const SEARCH_RADIUS: f32 = 8.0;
+const SEARCH_ICON: f32 = 16.0;
 const CODE_WIDTH: f32 = 112.0;
+const SEARCH_GAP: f32 = 16.0;
+const HEADER_RADIUS: f32 = 4.0;
+const GRID_GAP: f32 = 8.0;
+const GRID_INSET: f32 = 16.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PickerEvent {
@@ -65,6 +74,7 @@ pub(crate) struct ActionPicker {
     listening: Option<Listening>,
     focus: FocusHandle,
     code_problem: Option<SharedString>,
+    flush: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -106,8 +116,14 @@ impl ActionPicker {
             listening: None,
             focus: cx.focus_handle(),
             code_problem: None,
+            flush: false,
             _subscriptions: subscriptions,
         }
+    }
+
+    pub(crate) const fn flush(mut self) -> Self {
+        self.flush = true;
+        self
     }
 
     pub(crate) fn set_keyboard(&mut self, keyboard: &Keyboard, cx: &mut Context<Self>) {
@@ -202,7 +218,7 @@ impl ActionPicker {
             self.pick(Action::Keyboard(code), window, cx);
         } else {
             window.push_notification(
-                Notification::warning(format!("{key} can't be bound by typing; pick it below")),
+                Notification::warning(format!("Pick {key} from the list")),
                 cx,
             );
         }
@@ -306,7 +322,11 @@ impl ActionPicker {
 
     fn header(&self, section: Section, open: bool, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = cx.theme();
-        let (badge, muted, radius) = (theme.secondary, theme.muted_foreground, theme.radius);
+        let (badge, chevron, hover) = (
+            theme.secondary,
+            theme.group_box_foreground,
+            theme.tab_active,
+        );
         let (title, mark) = match section {
             Section::Category(category) => (category.title(), mark(category)),
             Section::Code => ("HID usage", Mark::Icon(Catalog::SquareTerminal)),
@@ -316,40 +336,38 @@ impl ActionPicker {
             .id(SharedString::from(format!("section-{title}")))
             .w_full()
             .h(px(HEADER_HEIGHT))
+            .px_4()
             .gap_3()
             .items_center()
+            .rounded(px(HEADER_RADIUS))
             .child(
                 h_flex()
                     .flex_none()
-                    .size(px(BADGE_SIZE))
+                    .w(px(BADGE_WIDTH))
+                    .h(px(BADGE_HEIGHT))
                     .items_center()
                     .justify_center()
-                    .rounded(radius)
+                    .rounded(px(BADGE_RADIUS))
                     .bg(badge)
                     .text_xs()
                     .font_weight(FontWeight::BOLD)
                     .child(match mark {
                         Mark::Letter(letter) => div().child(letter).into_any_element(),
-                        Mark::Icon(icon) => Icon::new(icon).small().into_any_element(),
+                        Mark::Icon(icon) => Icon::new(icon).size(px(BADGE_ICON)).into_any_element(),
                     }),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .text_base()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(title),
-            )
+            .child(div().flex_1().text_base().child(title))
             .when(!searching, |this| {
                 this.cursor_pointer()
+                    .hover(move |style| style.bg(hover))
                     .child(
-                        div().text_color(muted).child(
+                        div().text_color(chevron).child(
                             Icon::new(if open {
                                 Catalog::ChevronUp
                             } else {
                                 Catalog::ChevronDown
                             })
-                            .small(),
+                            .size(px(CHEVRON)),
                         ),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle(section, cx)))
@@ -361,7 +379,14 @@ impl ActionPicker {
             .iter()
             .map(|entry| self.tile(entry.action, cx))
             .collect();
-        h_flex().flex_wrap().gap_2().pt_1().pb_4().children(tiles)
+        h_flex()
+            .flex_wrap()
+            .gap(px(GRID_GAP))
+            .pl(px(GRID_INSET))
+            .pr(px(GRID_INSET + GRID_GAP))
+            .pt(px(GRID_GAP))
+            .pb(px(GRID_INSET + GRID_GAP))
+            .children(tiles)
     }
 
     fn tile(&self, action: Action, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -420,18 +445,14 @@ impl ActionPicker {
                     .child(Input::new(&self.code).small()),
             )
             .child(
-                Button::new("bind-keyboard-code")
-                    .small()
-                    .label("Keyboard")
+                panel::ActionButton::new("bind-keyboard-code", "Keyboard")
                     .disabled(idle)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.bind_code(false, window, cx);
                     })),
             )
             .child(
-                Button::new("bind-consumer-code")
-                    .small()
-                    .label("Consumer")
+                panel::ActionButton::new("bind-consumer-code", "Consumer")
                     .disabled(idle)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.bind_code(true, window, cx);
@@ -455,12 +476,21 @@ impl Render for ActionPicker {
             .on_key_down(cx.listener(Self::captured_key))
             .on_modifiers_changed(cx.listener(Self::captured_modifiers))
             .w_full()
-            .gap_3()
+            .gap(px(if self.flush { 0.0 } else { SEARCH_GAP }))
             .child(
                 Input::new(&self.search)
                     .large()
                     .cleanable(true)
-                    .prefix(Icon::new(Catalog::Search).small()),
+                    .prefix(
+                        Icon::new(Catalog::Search)
+                            .size(px(SEARCH_ICON))
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .h(px(SEARCH_HEIGHT))
+                    .text_sm()
+                    .rounded(px(SEARCH_RADIUS))
+                    .bg(cx.theme().sidebar)
+                    .border_color(cx.theme().border),
             )
             .child(if self.is_searching() {
                 self.results(cx)
@@ -526,10 +556,12 @@ fn no_results(cx: &Context<ActionPicker>) -> Div {
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child("Special characters can't be remapped"),
                         )
-                        .child(div().text_sm().text_color(theme.muted_foreground).child(
-                            "The keyboard sends key positions; the computer's language \
-                                 turns them into characters.",
-                        )),
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(theme.muted_foreground)
+                                .child("Your computer's language decides these characters"),
+                        ),
                 ),
         )
 }

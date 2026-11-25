@@ -1,14 +1,15 @@
 use gpui_kit::{
     App, AppContext as _, Context, Div, Entity, FontWeight, IntoElement, ParentElement as _,
     Render, SharedString, Styled as _, Subscription, Window,
-    assets::IconName,
-    component::{ActiveTheme as _, Icon, h_flex, v_flex},
+    component::{ActiveTheme as _, h_flex, v_flex},
     div,
     prelude::FluentBuilder as _,
+    px,
 };
 
 use super::{
-    distance::{Committed, DistanceField, Shown},
+    cards::{card_row, tuning_card},
+    distance::{Committed, DistanceField, Shown, distance_block},
     ranges::{RELEASE_DEFAULT_MM, Span, press_default},
     selecting, tint,
     tuning::{Current, Side, Toggle, Tuning, millimetres_text, report},
@@ -22,9 +23,11 @@ use crate::{
     usage,
 };
 
-const PROMPT: &str = "To adjust Rapid Trigger, select one or more keys first";
-pub(crate) const RAPID_TRIGGER_HELP: &str = "Rapid Trigger moves the actuation and reset points with your finger: a key activates the moment you start pressing it and resets the moment you start releasing it.\n\nIt speeds up competitive play, since you never have to release a key fully before pressing it again.";
-const SPLIT_HELP: &str = "If Rapid Trigger releases a key too eagerly in intense play, set separate distances to activate and to release, so you can let go of a key quickly without pressing it again by accident.";
+const PROMPT: &str = "To adjust rapid trigger, please select one or more keys first";
+pub(crate) const RAPID_TRIGGER_HELP: &str =
+    "Rapid Trigger dynamically adjusts the actuation and deactivation point.";
+const SPLIT_HELP: &str = "Set separate activation and deactivation distances.";
+const SENSITIVITY_GAP: f32 = 20.0;
 
 pub(crate) struct RapidTriggerPage {
     store: Entity<Store>,
@@ -116,28 +119,34 @@ impl RapidTriggerPage {
                     report(changed, window, cx);
                 }
             });
-        panel::section_with(
-            "Enable Rapid Trigger",
-            Some("Actuates and resets keys by the direction they move, starting after the actuation point.".into()),
-            switch,
-            cx,
+        tuning_card(
+            panel::section_with(
+                "Enable Rapid Trigger",
+                Some(
+                    "Actuates and resets your key based on your intention to press or release it."
+                        .into(),
+                ),
+                switch,
+                cx,
+            )
+            .child(enabled_count(enabled, cx)),
+            selected,
         )
-        .child(enabled_count(enabled, cx))
-        .when(!selected, |this| this.opacity(0.5))
     }
 
     fn sensitivity_card(&self, current: &Current, cx: &Context<Self>) -> Div {
         let enabled = current.rapid_trigger.is_on() && !self.tuning.read(cx).selection().is_empty();
-        panel::section("Rapid Trigger sensitivity", None, cx)
-            .children(sensitivity_parts(
+        tuning_card(
+            panel::section("Rapid Trigger Sensitivity", None, cx).child(sensitivity_group(
                 &self.tuning,
                 &self.press,
                 &self.release,
                 current,
                 enabled,
                 cx,
-            ))
-            .when(!enabled, |this| this.opacity(0.5))
+            )),
+            enabled,
+        )
     }
 
     fn continuous_card(&self, current: &Current, cx: &Context<Self>) -> Div {
@@ -154,42 +163,25 @@ impl RapidTriggerPage {
                     report(changed, window, cx);
                 }
             });
-        let theme = cx.theme();
-        panel::section_with(
-            "Continuous Rapid Trigger",
-            Some("When on, Rapid Trigger ends only when the key is fully released; when off, it ends at the actuation point.".into()),
-            switch,
-            cx,
+        tuning_card(
+            panel::section_with(
+                "Continuous Rapid Trigger",
+                Some("When enabled, Rapid Trigger ends when the entire key is released.".into()),
+                switch,
+                cx,
+            )
+            .child(div().flex_1())
+            .child(panel::info(
+                "Spam a key continuously without worrying about the actuation point.",
+                cx,
+            )),
+            enabled,
         )
-        .child(div().flex_1())
-        .child(
-            h_flex()
-                .gap_3()
-                .items_start()
-                .p_3()
-                .rounded(theme.radius)
-                .bg(theme.secondary)
-                .child(
-                    div()
-                        .flex_none()
-                        .text_color(theme.info)
-                        .child(Icon::new(IconName::Info)),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child("Turn it on to spam a key without minding the actuation point."),
-                ),
-        )
-        .when(!enabled, |this| this.opacity(0.5))
     }
 }
 
 impl Render for RapidTriggerPage {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let page = panel::page();
         let Some(keyboard) = self.store.read(cx).keyboard() else {
             return page;
@@ -205,30 +197,18 @@ impl Render for RapidTriggerPage {
             keyboard,
             &self.tuning,
             |key| self.face(keyboard, key, cx),
-            window,
             cx,
         );
         panel::page_with_stage(
             "rapid-trigger-page",
-            selecting::stage(view, selected, PROMPT, cx),
-            v_flex()
-                .w_full()
-                .gap_5()
-                .child(panel::heading(
-                    Page::RapidTrigger.title(),
-                    Some(RAPID_TRIGGER_HELP.into()),
-                    selecting::tuning_actions(&self.tuning, keyboard, cx),
-                    cx,
-                ))
-                .child(
-                    h_flex()
-                        .w_full()
-                        .items_stretch()
-                        .gap_4()
-                        .child(self.enable_card(keyboard, &current, cx).flex_1().min_w_0())
-                        .child(self.sensitivity_card(&current, cx).flex_1().min_w_0())
-                        .child(self.continuous_card(&current, cx).flex_1().min_w_0()),
-                ),
+            selecting::stage(view, selected, PROMPT),
+            panel::heading(Page::RapidTrigger.title())
+                .help(RAPID_TRIGGER_HELP)
+                .trailing(selecting::tuning_actions(&self.tuning, keyboard, cx)),
+            card_row()
+                .child(self.enable_card(keyboard, &current, cx).flex_1().min_w_0())
+                .child(self.sensitivity_card(&current, cx).flex_1().min_w_0())
+                .child(self.continuous_card(&current, cx).flex_1().min_w_0()),
         )
     }
 }
@@ -292,18 +272,20 @@ pub(crate) fn show_sensitivity(
     });
 }
 
-pub(crate) fn sensitivity_parts(
+pub(crate) fn sensitivity_group(
     tuning: &Entity<Tuning>,
     press: &Entity<DistanceField>,
     release: &Entity<DistanceField>,
     current: &Current,
     enabled: bool,
     cx: &App,
-) -> Vec<Div> {
+) -> Div {
     let split = current.split;
     let toggling = tuning.downgrade();
-    let mut parts = vec![
-        panel::toggle(
+    v_flex()
+        .w_full()
+        .gap(px(SENSITIVITY_GAP))
+        .child(panel::toggle(
             "Split sensitivity",
             Some(SPLIT_HELP.into()),
             Switch::new("split-sensitivity")
@@ -318,31 +300,19 @@ pub(crate) fn sensitivity_parts(
                     }
                 }),
             cx,
-        ),
-        field_label(
+        ))
+        .child(distance_block(
             if split.is_on() {
                 "Key press - activate"
             } else {
                 "Sensitivity"
             },
+            press,
             cx,
-        )
-        .child(press.clone()),
-    ];
-    if split.is_on() {
-        parts.push(field_label("Key release - deactivate", cx).child(release.clone()));
-    }
-    parts
-}
-
-fn field_label(text: &'static str, cx: &App) -> Div {
-    v_flex().w_full().gap_1().child(
-        div()
-            .text_sm()
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(cx.theme().foreground)
-            .child(SharedString::from(text.to_uppercase())),
-    )
+        ))
+        .when(split.is_on(), |this| {
+            this.child(distance_block("Key release - deactivate", release, cx))
+        })
 }
 
 fn enabled_count(count: usize, cx: &App) -> Div {
@@ -350,8 +320,8 @@ fn enabled_count(count: usize, cx: &App) -> Div {
     h_flex()
         .gap_1()
         .text_sm()
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(theme.foreground)
+        .font_weight(FontWeight::BOLD)
+        .text_color(theme.group_box_foreground)
         .child("ENABLED ON")
         .child(div().text_color(theme.primary).child(count.to_string()))
         .child(if count == 1 { "KEY" } else { "KEYS" })

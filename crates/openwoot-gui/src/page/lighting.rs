@@ -40,8 +40,8 @@ use openwoot_protocol::{
 
 pub(crate) use self::{
     controls::{
-        Choice, add_button, banner, choices, dial_row, kebab, param_label, pill, stepper, sunken,
-        tile, wide_slider,
+        Choice, ICON_SIZE, LABEL_TEXT, PARAM_TEXT, add_button, choices, dial_row, kebab,
+        param_label, pill, remove_button, stepper, sunken, tile, tiles_box, wide_slider,
     },
     effect::{level_of, percent_of},
 };
@@ -55,7 +55,8 @@ use crate::{
 
 const SEND_DELAY: Duration = Duration::from_millis(120);
 const STALE_AFTER: Duration = Duration::from_secs(2);
-const COLOURS_WIDTH: f32 = 300.0;
+const COLOURS_WIDTH: f32 = 301.0;
+const CARD_PADDING: f32 = 16.0;
 const WHITE: Rgb = Rgb {
     red: u8::MAX,
     green: u8::MAX,
@@ -73,7 +74,6 @@ pub(crate) struct LightingPage {
     locks: LockKeys,
     tachyon: bool,
     layer: Layer,
-    picking: bool,
     focus: Focus,
     copied: Option<KeyColors>,
     problem: Option<SharedString>,
@@ -111,11 +111,7 @@ struct Pending {
 impl LightingPage {
     pub(crate) fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let brightness = cx.new(|_| SliderState::new().min(0.0).max(100.0).step(1.0));
-        let brush = cx.new(|cx| {
-            let mut picker = ColorPicker::new(WHITE, window, cx).allow_no_color();
-            picker.set_pipette(Some(false), cx);
-            picker
-        });
+        let brush = cx.new(|cx| ColorPicker::new(WHITE, window, cx).allow_no_color());
         let first_color = cx.new(|cx| ColorPicker::new(WHITE, window, cx));
         let second_color = cx.new(|cx| ColorPicker::new(WHITE, window, cx));
         let subscriptions = vec![
@@ -137,17 +133,9 @@ impl LightingPage {
                     this.edit_settings(|settings| settings.brightness = level, window, cx);
                 },
             ),
-            cx.subscribe_in(
-                &brush,
-                window,
-                |this, _, event: &ColorPickerEvent, _, cx| match event {
-                    ColorPickerEvent::Pipette => {
-                        let picking = !this.picking;
-                        this.set_picking(picking, cx);
-                    }
-                    ColorPickerEvent::Change(_) => cx.notify(),
-                },
-            ),
+            cx.subscribe_in(&brush, window, |_, _, _: &ColorPickerEvent, _, cx| {
+                cx.notify();
+            }),
             cx.subscribe_in(
                 &first_color,
                 window,
@@ -186,7 +174,6 @@ impl LightingPage {
             locks: LockKeys::default(),
             tachyon: false,
             layer: Layer::Base,
-            picking: false,
             focus: Focus::Base,
             copied: None,
             problem: None,
@@ -314,7 +301,6 @@ impl LightingPage {
         self.locks = LockKeys::default();
         self.tachyon = false;
         self.focus = Focus::Base;
-        self.picking = false;
         self.problem = None;
         cx.notify();
     }
@@ -326,16 +312,13 @@ impl LightingPage {
             .map(|keyboard| keyboard.capabilities.clone())
     }
 
-    fn set_picking(&mut self, picking: bool, cx: &mut Context<Self>) {
-        self.picking = picking;
-        self.brush
-            .update(cx, |brush, cx| brush.set_pipette(Some(picking), cx));
-        cx.notify();
-    }
-
     fn colors_card(&self, cx: &Context<Self>) -> Option<gpui_kit::Div> {
         self.maps.as_ref()?;
-        Some(panel::section("Colours", None, cx).child(self.brush.clone()))
+        Some(
+            panel::section("Colours", None, cx)
+                .p(px(CARD_PADDING))
+                .child(self.brush.clone()),
+        )
     }
 
     fn prepare_dials(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -632,31 +615,23 @@ impl Render for LightingPage {
             self.refresh_key_state(cx);
         }
         self.seen = Instant::now();
-        let stage = v_flex()
-            .gap_4()
-            .child(panel::stage_with_side(
-                self.layers_column(cx),
-                self.key_map(window, cx),
-            ))
-            .children(self.caption(cx));
+        let stage = self
+            .key_map(cx)
+            .map_or_else(|| panel::Stage::element(div()), panel::Stage::new)
+            .side(self.layers_column(cx));
+        let stage = match self.caption() {
+            Some(caption) => stage.caption(caption, false),
+            None => stage,
+        };
         let body = v_flex()
             .w_full()
-            .gap_5()
-            .child(panel::heading(
-                Page::Lighting.title(),
-                Some(
-                    "Click or drag across keys to paint them; right-click a key to pick its colour"
-                        .into(),
-                ),
-                div(),
-                cx,
-            ))
+            .gap_4()
             .when_some(self.problem.clone(), |this, problem| {
                 this.child(div().text_xs().text_color(cx.theme().danger).child(problem))
             })
             .when(self.tachyon, |this| {
-                this.child(banner(
-                    "Tachyon mode is on: effects are paused and brightness is capped at 70 %",
+                this.child(panel::warning(
+                    "RGB effects are disabled while Tachyon Mode is enabled.",
                     cx,
                 ))
             })
@@ -678,6 +653,11 @@ impl Render for LightingPage {
                             .children(self.effects_card(window, cx)),
                     ),
             );
-        panel::page_with_stage("lighting-body", stage, body)
+        panel::page_with_stage(
+            "lighting-body",
+            stage,
+            panel::heading(Page::Lighting.title()),
+            body,
+        )
     }
 }

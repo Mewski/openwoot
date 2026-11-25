@@ -40,6 +40,25 @@ impl History {
         E: Endpoint<Response = Result<(), Rejection>>,
         E::Request: Clone + Serialize + Send + 'static,
     {
+        self.record_replays(
+            E::PATH,
+            scope,
+            before,
+            after,
+            sender::<E>(before.clone(), scope),
+            sender::<E>(after.clone(), scope),
+        );
+    }
+
+    pub(crate) fn record_replays<T: Serialize>(
+        &mut self,
+        path: &'static str,
+        scope: Scope,
+        before: &T,
+        after: &T,
+        restore: Replay,
+        reapply: Replay,
+    ) {
         let (Ok(before_bytes), Ok(after_bytes)) =
             (serde_json::to_vec(before), serde_json::to_vec(after))
         else {
@@ -49,12 +68,12 @@ impl History {
             return;
         }
         self.push(Step {
-            path: E::PATH,
+            path,
             scope,
             before: before_bytes,
             after: after_bytes,
-            restore: sender::<E>(before.clone(), scope),
-            reapply: sender::<E>(after.clone(), scope),
+            restore,
+            reapply,
             at: Instant::now(),
         });
     }

@@ -1,20 +1,63 @@
+use std::{
+    future::ready,
+    pin::pin,
+    task::{Context, Poll, Waker},
+};
+
+use embassy_futures::block_on;
 use openwoot::{
     keys::Key,
     lighting::{
-        FramePage, Gains, Geometry, Led, LedMap, LedPosition, Lighting, Variant, from_rgb565, rgb,
+        Bar, FramePage, Gains, Geometry, HostControl, Led, LedMap, LedPosition, Lightbar, Lighting,
+        Signals, Variant, from_rgb565, rgb,
     },
+    protocol::{Configuration, Handler},
 };
-use openwoot_protocol::lighting::{
-    AnalogLevel, AnalogRgbFill, Breathing, Color, Effect, Effects, HueCycle, HueRange, Indicators,
-    KeyColors, KeyRipple, KeyTest, LevelMeter, PolarGradient, RainbowWave, ReactiveColoring,
-    ReactiveFade, Rgb, Scanner, ScannerDirection, Settings, SimplexNoise,
+use openwoot_protocol::{
+    Endpoint, FirmwareVersion, PROTOCOL_VERSION, Version,
+    configuration::{Capabilities, Rejection},
+    decode_response, encode_request,
+    heapless::Vec as Bounded,
+    lightbar::{self, Entries, Entry, Range, Solid, Target, Title},
+    lighting::{
+        AnalogLevel, AnalogRgbFill, Breathing, Color, Effect, Effects, HueCycle, HueRange,
+        Indicators, KeyColors, KeyRipple, KeyTest, LevelMeter, PolarGradient, RainbowWave,
+        ReactiveColoring, ReactiveFade, Rgb, Scanner, ScannerDirection, Settings, SimplexNoise,
+    },
+    profile::{Slot, Summary},
+    report,
 };
+use serde::{Serialize, de::DeserializeOwned};
+
+use crate::support::stock_identity;
 
 pub(crate) const ROWS: usize = 6;
 pub(crate) const COLUMNS: usize = 17;
 pub(crate) const PAGES: usize = 9;
 pub(crate) const LENGTH: usize = 36;
 pub(crate) const START_MS: u32 = 1000;
+pub(crate) const VERSION: Version = Version {
+    protocol: PROTOCOL_VERSION,
+    firmware: FirmwareVersion {
+        major: 0,
+        minor: 1,
+        patch: 0,
+    },
+};
+pub(crate) const ACTIVE: Slot = Slot::new(1);
+pub(crate) const RED: Rgb = rgb(255, 0, 0);
+pub(crate) const BAR_LEDS: [Led; 10] = [
+    Led(10),
+    Led(31),
+    Led(48),
+    Led(64),
+    Led(65),
+    Led(67),
+    Led(68),
+    Led(70),
+    Led(81),
+    Led(82),
+];
 const LEDS_PER_PAGE: usize = LENGTH / 3;
 const LED_COUNT: usize = ROWS * COLUMNS + 1;
 const HOLES: [(usize, usize); 14] = [
@@ -54,6 +97,37 @@ pub(crate) const GEOMETRY: Geometry = Geometry {
 static POSITIONS: [Option<LedPosition>; LED_COUNT] = positions();
 
 pub(crate) type TestLighting = Lighting<(), ROWS, COLUMNS, PAGES, LENGTH>;
+pub(crate) type BarLighting = Lighting<Bar, ROWS, COLUMNS, PAGES, LENGTH>;
+
+#[derive(Debug)]
+pub(crate) struct Keyboard {
+    lightbar_leds: u8,
+}
+
+impl Configuration for Keyboard {
+    fn capabilities(&self) -> Result<Capabilities, Rejection> {
+        Ok(Capabilities {
+            key_rows: u8::try_from(ROWS).unwrap_or(u8::MAX),
+            key_columns: u8::try_from(COLUMNS).unwrap_or(u8::MAX),
+            profiles: 2,
+            linked_profiles: 0,
+            layouts: Bounded::new(),
+            lightbar_leds: self.lightbar_leds,
+            host_signals: false,
+            switch_models: 1,
+            edition: None,
+        })
+    }
+
+    fn profiles(&mut self) -> impl Future<Output = Result<Summary, Rejection>> {
+        ready(Ok(Summary {
+            count: 2,
+            active: ACTIVE,
+            linked: 0,
+            selected: None,
+        }))
+    }
+}
 
 #[derive(PartialEq, Eq)]
 pub(crate) struct Chip {
@@ -112,6 +186,93 @@ pub(crate) fn lighting(brightness: u8, effects: Effects) -> TestLighting {
         Some(&key_colors(|row, column| base_color(column, row + 3))),
     );
     lighting
+}
+
+pub(crate) fn lit_lighting(lightbar: &lightbar::Settings) -> BarLighting {
+    let mut lighting = Lighting::new(
+        &MAP,
+        &VARIANT,
+        GEOMETRY,
+        Bar::new(&BAR_LEDS, &MAP, COLUMNS),
+        START_MS,
+    );
+    lighting.apply_settings(&settings(255, Effects::new()), START_MS);
+    lighting.set_base_colors(&key_colors(base_color));
+    lighting
+        .hooks_mut()
+        .configure(lightbar, &Entries::new(), 255);
+    lighting
+}
+
+pub(crate) fn red_bar(enabled: bool) -> lightbar::Settings {
+    lightbar::Settings {
+        enabled,
+        entries: [Entry {
+            title: Title::new(),
+            condition: None,
+            effect: lightbar::Effect::Solid(Solid {
+                color: Color {
+                    red: RED.red,
+                    green: RED.green,
+                    blue: RED.blue,
+                    alpha: 255,
+                },
+                target: Target::Lightbar(Range { first: 0, last: 9 }),
+            }),
+        }]
+        .into_iter()
+        .collect(),
+        use_global: false,
+        brightness: None,
+    }
+}
+
+pub(crate) fn connect(lightbar_leds: u8, host_control: &'static HostControl) -> Handler<Keyboard> {
+    Handler::with_configuration(VERSION, stock_identity(None), Keyboard { lightbar_leds })
+        .with_host_control(host_control)
+}
+
+pub(crate) fn ask<E, C>(handler: &mut Handler<C>, request: &E::Request) -> E::Response
+where
+    E: Endpoint,
+    E::Request: Serialize,
+    E::Response: DeserializeOwned,
+    C: Configuration,
+{
+    let mut encoded = [0; report::MAX_LEN];
+    let encoded = encode_request::<E>(7, request, &mut encoded).unwrap();
+    let mut response = [0; report::MAX_LEN];
+    let answer = block_on(handler.respond(encoded, &mut response));
+    decode_response::<E>(7, answer.reply.unwrap())
+        .unwrap()
+        .unwrap()
+}
+
+pub(crate) fn read<E, C, H>(
+    handler: &mut Handler<C>,
+    host_control: &HostControl,
+    lighting: &mut Lighting<H, ROWS, COLUMNS, PAGES, LENGTH>,
+    now_ms: u32,
+) -> E::Response
+where
+    E: Endpoint<Request = ()>,
+    E::Response: DeserializeOwned,
+    C: Configuration,
+    H: Lightbar + Signals,
+{
+    let mut encoded = [0; report::MAX_LEN];
+    let encoded = encode_request::<E>(7, &(), &mut encoded).unwrap();
+    let mut response = [0; report::MAX_LEN];
+    let mut context = Context::from_waker(Waker::noop());
+    let mut answer = pin!(handler.respond(encoded, &mut response));
+    assert!(answer.as_mut().poll(&mut context).is_pending());
+    host_control.apply(lighting, now_ms);
+    let Poll::Ready(answer) = answer.as_mut().poll(&mut context) else {
+        panic!("the handler did not answer once the lighting task had published");
+    };
+    decode_response::<E>(7, answer.reply.unwrap())
+        .unwrap()
+        .unwrap()
 }
 
 pub(crate) fn settle(lighting: &mut TestLighting, chip: &mut Chip, from_ms: u32, to_ms: u32) {

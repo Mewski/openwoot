@@ -12,13 +12,16 @@ use async_io::block_on;
 use clap::{Args, Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use openwoot_host::{
-    escape,
+    Connection, escape,
     flash::{self, Event, Plan},
     hid::{self, Hid},
     keyboard,
 };
 use openwoot_image::Hex;
-use openwoot_protocol::PROTOCOL_VERSION;
+use openwoot_protocol::{
+    PROTOCOL_VERSION,
+    endpoints::{GetDiagnostics, GetStorageUsage},
+};
 use status::Status;
 
 const PROGRAM: &str = "openwoot";
@@ -95,12 +98,21 @@ async fn version() -> Result<()> {
 }
 
 async fn status() -> Result<()> {
-    let (device, report) = keyboard::diagnostics(&Hid::default())
+    let mut connection = Connection::open(&Hid::default())
         .await
         .context("could not read the diagnostics")?;
+    let report = connection
+        .request::<GetDiagnostics>(&())
+        .await
+        .context("could not read the diagnostics")?;
+    let storage_usage = connection
+        .request::<GetStorageUsage>(&())
+        .await
+        .context("could not read the storage usage")?;
     let status = Status {
-        device: hid::describe(&device),
+        device: hid::describe(connection.info()),
         report,
+        storage_usage,
     };
     write!(io::stdout().lock(), "{status}").context("could not write to stdout")
 }

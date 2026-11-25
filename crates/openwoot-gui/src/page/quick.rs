@@ -6,11 +6,10 @@ use gpui_kit::{
     App, AppContext as _, Axis, Context, Div, Entity, FontWeight, Hsla, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
     Styled as _, Subscription, Window,
-    assets::IconName,
-    component::{ActiveTheme as _, Icon, Sizable as _, h_flex, tooltip::Tooltip, v_flex},
+    component::{ActiveTheme as _, h_flex, v_flex},
     div,
     prelude::FluentBuilder as _,
-    rgb,
+    px, relative, rgb,
 };
 use openwoot_protocol::{
     endpoints::{GetDiagnostics, GetKeyColors},
@@ -24,9 +23,9 @@ use super::{
     Page,
     performance::{
         ACTUATION_HELP, Committed, DistanceField, Pressed, RAPID_TRIGGER_HELP, Shown, Side,
-        TravelFeed, Tuning, Visibility, meter, millimetres_text, pressed_key, report,
-        sensitivity_parts, sensitivity_subscription, show_sensitivity, stage, switch,
-        tuning_actions, tuning_keyboard,
+        TravelFeed, Tuning, Visibility, art_slot, card_row, meter, millimetres_text, pressed_key,
+        report, sensitivity_group, sensitivity_subscription, show_sensitivity, stage, switch,
+        tuning_actions, tuning_card, tuning_keyboard,
     },
 };
 use crate::{
@@ -38,8 +37,14 @@ use crate::{
 };
 
 const SCAN_INTERVAL: Duration = Duration::from_secs(1);
-const PROMPT: &str = "To adjust actuation point and Rapid Trigger, select one or more keys first";
-const SCAN_RATE_HELP: &str = "How many times per second the keyboard reads every key, measured live. A higher scan rate makes the keyboard more responsive.";
+const PROMPT: &str =
+    "To adjust actuation point and rapid trigger, please select one or more keys first";
+const SCAN_RATE: &str = "Scan Rate";
+const SCAN_RATE_HELP: &str =
+    "The scan rate shows how often your keyboard checks for key presses each second.";
+const SCAN_LABEL_LINE_HEIGHT: f32 = 1.5;
+const DESCRIBED_GROUP_GAP: f32 = 16.0;
+const SCAN_VALUE_LINE_HEIGHT: f32 = 1.2;
 
 pub(crate) struct QuickPage {
     store: Entity<Store>,
@@ -275,28 +280,31 @@ impl QuickPage {
         let feed = self.feed.read(cx);
         let pressed =
             (!feed.is_unsupported()).then(|| pressed_key(feed, self.tuning.read(cx), keyboard));
-        panel::section_with_help(
-            "Actuation point",
-            ACTUATION_HELP,
-            Some("Set the point to activate a keypress for all selected keys.".into()),
-            None,
-            cx,
-        )
-        .child(
-            h_flex()
-                .gap_6()
-                .items_center()
-                .child(switch(depth, cx.theme().success, cx))
-                .child(self.actuation.clone())
-                .when(!selected, |this| this.opacity(0.5)),
-        )
-        .when_some(pressed, |this, pressed| {
-            this.child(panel::field(
-                "Visual feedback",
-                feedback_row(pressed.as_ref(), cx),
+        tuning_card(
+            panel::section_with_help(
+                "Actuation Point",
+                ACTUATION_HELP,
+                Some("Set the point to activate a keypress for all selected keys.".into()),
+                None,
                 cx,
-            ))
-        })
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .items_center()
+                    .child(art_slot(switch(depth, cx.theme().success, cx)))
+                    .child(self.actuation.clone()),
+            )
+            .when_some(pressed, |this, pressed| {
+                this.child(panel::field(
+                    "Visual feedback",
+                    feedback_row(pressed.as_ref(), cx),
+                    cx,
+                ))
+            }),
+            selected,
+        )
     }
 
     fn rapid_trigger_card(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
@@ -306,86 +314,98 @@ impl QuickPage {
         };
         let tuning = self.tuning.downgrade();
         let enabled = selected && current.rapid_trigger.is_on();
-        panel::section_with_help(
-            "Rapid Trigger",
-            RAPID_TRIGGER_HELP,
-            Some("When on, a key activates and resets by the direction it moves.".into()),
-            Some(
-                Switch::new("quick-rapid-trigger")
-                    .checked(current.rapid_trigger.is_on())
-                    .mixed(current.rapid_trigger.is_mixed())
-                    .disabled(!selected)
-                    .on_change(move |enabled: &bool, window, cx| {
-                        if let Ok(changed) =
-                            tuning.update(cx, |tuning, cx| tuning.set_rapid_trigger(*enabled, cx))
-                        {
-                            report(changed, window, cx);
-                        }
-                    })
-                    .into_any_element(),
+        tuning_card(
+            panel::section_with_help(
+                "Rapid Trigger",
+                RAPID_TRIGGER_HELP,
+                None,
+                Some(
+                    Switch::new("quick-rapid-trigger")
+                        .checked(current.rapid_trigger.is_on())
+                        .mixed(current.rapid_trigger.is_mixed())
+                        .disabled(!selected)
+                        .on_change(move |enabled: &bool, window, cx| {
+                            if let Ok(changed) = tuning
+                                .update(cx, |tuning, cx| tuning.set_rapid_trigger(*enabled, cx))
+                            {
+                                report(changed, window, cx);
+                            }
+                        })
+                        .into_any_element(),
+                ),
+                cx,
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .gap(px(DESCRIBED_GROUP_GAP))
+                    .child(panel::description(
+                        "When enabled, a key rapidly activates and resets based on intended press or release.",
+                        cx,
+                    ))
+                    .child(sensitivity_group(
+                        &self.tuning,
+                        &self.press,
+                        &self.release,
+                        &current,
+                        enabled,
+                        cx,
+                    )),
             ),
-            cx,
+            selected,
         )
-        .children(sensitivity_parts(
-            &self.tuning,
-            &self.press,
-            &self.release,
-            &current,
-            enabled,
-            cx,
-        ))
-        .when(!selected, |this| this.opacity(0.5))
     }
 
     fn tachyon_card(&self, cx: &Context<Self>) -> Div {
         let tachyon = self.tuning.read(cx).tachyon().unwrap_or(false);
         let tuning = self.tuning.downgrade();
         let theme = cx.theme();
-        panel::section_with(
-            "Tachyon mode",
-            Some("Scans keys fastest; caps brightness at 70 % and pauses RGB effects.".into()),
-            Switch::new("tachyon")
-                .checked(tachyon)
-                .on_change(move |tachyon: &bool, window, cx| {
-                    if let Ok(changed) =
-                        tuning.update(cx, |tuning, cx| tuning.set_tachyon(*tachyon, cx))
-                    {
-                        report(changed, window, cx);
-                    }
-                }),
-            cx,
-        )
-        .when_some(self.scan_rate.hertz(), |this, hertz| {
-            this.child(
-                v_flex()
-                    .gap_1()
-                    .child(
-                        h_flex()
-                            .id("scan-rate")
-                            .gap_1()
-                            .items_center()
-                            .child(panel::label("Scan rate", cx))
-                            .child(
-                                div()
-                                    .text_color(theme.muted_foreground)
-                                    .child(Icon::new(IconName::CircleQuestionMark).small()),
-                            )
-                            .tooltip(|window, cx| Tooltip::new(SCAN_RATE_HELP).build(window, cx)),
-                    )
-                    .child(
-                        div()
-                            .text_lg()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.primary)
-                            .child(format!("{hertz} Hz")),
-                    ),
+        tuning_card(
+            panel::section_with(
+                "Tachyon Mode",
+                Some("Fastest key response, with lower brightness and no RGB effects.".into()),
+                Switch::new("tachyon").checked(tachyon).on_change(
+                    move |tachyon: &bool, window, cx| {
+                        if let Ok(changed) =
+                            tuning.update(cx, |tuning, cx| tuning.set_tachyon(*tachyon, cx))
+                        {
+                            report(changed, window, cx);
+                        }
+                    },
+                ),
+                cx,
             )
-        })
+            .when_some(self.scan_rate.hertz(), |this, hertz| {
+                this.child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .items_center()
+                                .child(
+                                    panel::label(SCAN_RATE, cx)
+                                        .line_height(relative(SCAN_LABEL_LINE_HEIGHT)),
+                                )
+                                .child(panel::help(&SCAN_RATE.into(), SCAN_RATE_HELP.into(), cx)),
+                        )
+                        .child(
+                            div()
+                                .text_base()
+                                .line_height(relative(SCAN_VALUE_LINE_HEIGHT))
+                                .font_weight(FontWeight::BLACK)
+                                .text_color(theme.primary)
+                                .child(format!("{hertz} Hz")),
+                        ),
+                )
+            }),
+            true,
+        )
     }
 }
 
 impl Render for QuickPage {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.keep_polling(cx);
         self.feed.update(cx, TravelFeed::keep_alive);
         let page = panel::page();
@@ -403,46 +423,39 @@ impl Render for QuickPage {
             keyboard,
             &self.tuning,
             |key| self.face(keyboard, key, cx),
-            window,
             cx,
         );
+        let hovered = cx.theme().tab_active;
         panel::page_with_stage(
             "quick-page",
-            stage(view, selected, PROMPT, cx),
-            v_flex()
-                .w_full()
-                .gap_5()
-                .child(panel::heading(
-                    Page::Quick.title(),
-                    None,
-                    tuning_actions(&self.tuning, keyboard, cx),
-                    cx,
-                ))
+            stage(view, selected, PROMPT),
+            panel::heading(Page::Quick.title()).trailing(tuning_actions(
+                &self.tuning,
+                keyboard,
+                cx,
+            )),
+            card_row()
                 .child(
-                    h_flex()
-                        .w_full()
-                        .items_stretch()
-                        .gap_4()
-                        .child(
-                            self.actuation_card(keyboard, cx)
-                                .id("quick-actuation")
-                                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                                    this.hover(Card::Actuation, *hovered, cx);
-                                }))
-                                .flex_1()
-                                .min_w_0(),
-                        )
-                        .child(
-                            self.rapid_trigger_card(keyboard, cx)
-                                .id("quick-rapid-trigger")
-                                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                                    this.hover(Card::RapidTrigger, *hovered, cx);
-                                }))
-                                .flex_1()
-                                .min_w_0(),
-                        )
-                        .child(self.tachyon_card(cx).flex_1().min_w_0()),
-                ),
+                    self.actuation_card(keyboard, cx)
+                        .id("quick-actuation")
+                        .hover(move |style| style.bg(hovered))
+                        .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                            this.hover(Card::Actuation, *hovered, cx);
+                        }))
+                        .flex_1()
+                        .min_w_0(),
+                )
+                .child(
+                    self.rapid_trigger_card(keyboard, cx)
+                        .id("quick-rapid-trigger")
+                        .hover(move |style| style.bg(hovered))
+                        .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                            this.hover(Card::RapidTrigger, *hovered, cx);
+                        }))
+                        .flex_1()
+                        .min_w_0(),
+                )
+                .child(self.tachyon_card(cx).flex_1().min_w_0()),
         )
     }
 }

@@ -3,6 +3,7 @@ mod factory;
 mod keycap;
 mod layers;
 mod letter_layout;
+mod link;
 mod picker;
 mod quick_bind;
 
@@ -13,10 +14,7 @@ use gpui_kit::{
     InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, ParentElement as _, Render,
     SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Subscription, Window,
     assets::IconName as Catalog,
-    component::{
-        ActiveTheme as _, Icon, Sizable as _, WindowExt as _, h_flex, notification::Notification,
-        v_flex,
-    },
+    component::{ActiveTheme as _, WindowExt as _, h_flex, notification::Notification, v_flex},
     div,
     prelude::FluentBuilder as _,
     px,
@@ -24,17 +22,20 @@ use gpui_kit::{
 use openwoot_protocol::{
     advanced::{self, Behaviour},
     configuration::Validate as _,
-    endpoints::{GetAdvancedKeys, GetDefaultKeymap, GetKeymap, SetKeymap},
+    endpoints::{
+        GetAdvancedKeys, GetDefaultKeymap, GetKeymap, GetKeymapLink, SetKeymap, SetKeymapLink,
+    },
     keys::{Action, Function, Keymap, LAYERS, Layer},
-    profile::{LayerChange, LayerRef},
+    profile::{Change, LayerChange, LayerRef},
 };
 
 use self::{
     factory::{Defaults, Factory},
     letter_layout::LetterLayout,
+    link::LinkState,
 };
 pub(super) use self::{
-    keycap::{blank_chip, chip, face as keycap_face, glyph},
+    keycap::{binding, chip, face as keycap_face, glyph, preset_chip, text_chip},
     layers::{column as layers_column, layer_label, pill as layer_pill},
     picker::{ActionPicker, PickerEvent, Target},
     quick_bind::usage_of_key,
@@ -45,21 +46,28 @@ use crate::{
     keyboard::{Dragged, KeyFace, KeyboardView, Selection},
     panel,
     store::{Keyboard, Scope, Store, StoreEvent},
+    switch::Switch,
     theme, usage,
 };
 
 const STALE_AFTER: Duration = Duration::from_secs(2);
-const SIDE_CARD_WIDTH: f32 = 340.0;
+const SIDE_CARD_WIDTH: f32 = 370.0;
+const LINKED_BOTTOM: f32 = 24.0;
 const LAYOUT_TILE_SIZE: f32 = 68.0;
-const MENU_WIDTH: f32 = 240.0;
+const TILE_ART_TOP: f32 = 5.0;
+const TILE_ART_HEIGHT: f32 = 41.0;
+const TILE_LABEL_GAP: f32 = 3.0;
+const MENU_ICON: f32 = 20.0;
+const USAGE_C: u8 = 0x06;
+const USAGE_D: u8 = 0x07;
+const USAGE_V: u8 = 0x19;
 const BIND_PROMPT: &str = "Press any key to bind";
-const MANAGED: &str =
-    "This key has an advanced key configured. To remap it, remove the advanced key first.";
+const MANAGED: &str = "Remove the advanced key to remap this key";
 const LOCKED: &str = "This layer switch key is configured from the main layer";
 const UNBOUND: &str = "This key won't register any input";
 const UNREACHABLE: &str = "No key opens this layer";
-const REMAP_HELP: &str =
-    "Change what each key sends, on the main layer and on Fn layers reached by holding a Fn key";
+const REMAP_HELP: &str = "Change what each key sends";
+const DRAG_HINT: &str = "Drag keys from the right onto the keyboard, or pick a preset";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Moved(usize);
@@ -77,6 +85,7 @@ pub(crate) struct RemapPage {
     store: Entity<Store>,
     layer: Layer,
     keymaps: [Option<Keymap>; LAYERS],
+    link: Option<LinkState>,
     advanced: Option<advanced::Keys>,
     defaults: Option<Defaults>,
     selected: Option<usize>,
@@ -108,11 +117,11 @@ impl LayerCommand {
         }
     }
 
-    const fn shortcut(self) -> Option<&'static str> {
+    const fn shortcut(self) -> Option<u8> {
         match self {
-            Self::Copy => Some("C"),
-            Self::PasteReplace => Some("V"),
-            Self::Duplicate => Some("D"),
+            Self::Copy => Some(USAGE_C),
+            Self::PasteReplace => Some(USAGE_V),
+            Self::Duplicate => Some(USAGE_D),
             Self::PasteMerge | Self::Delete => None,
         }
     }
@@ -128,6 +137,7 @@ impl RemapPage {
                 }
                 StoreEvent::Disconnected => {
                     this.keymaps = [const { None }; LAYERS];
+                    this.link = None;
                     this.advanced = None;
                     this.deselect(cx);
                     cx.notify();
@@ -147,6 +157,7 @@ impl RemapPage {
             store,
             layer: Layer::Base,
             keymaps: [const { None }; LAYERS],
+            link: None,
             advanced: None,
             defaults: None,
             selected: None,
@@ -182,6 +193,10 @@ impl RemapPage {
                 store.fetch::<GetDefaultKeymap, _>(layer, cx)
             })
         });
+        let link = (profile != link::FIRST).then(|| {
+            self.store
+                .update(cx, |store, cx| store.fetch::<GetKeymapLink, _>(profile, cx))
+        });
         let revision = self.revision;
         cx.spawn_in(window, async move |this, cx| {
             let mut loaded = [const { None }; LAYERS];
@@ -194,12 +209,20 @@ impl RemapPage {
                 (Ok(main), Ok(function)) => Some(Defaults { main, function }),
                 _ => None,
             };
+            let link = match link {
+                Some(linked) => linked
+                    .await
+                    .ok()
+                    .map(|linked| LinkState::of(profile, linked)),
+                None => Some(LinkState::First),
+            };
             this.update_in(cx, |page, window, cx| {
                 if page.revision != revision {
                     page.load(window, cx);
                     return;
                 }
                 page.keymaps = loaded;
+                page.link = link;
                 page.advanced = advanced;
                 page.defaults = defaults;
                 if !page.shown(page.layer) {
@@ -248,12 +271,10 @@ impl RemapPage {
         cx.spawn_in(window, async move |this, cx| {
             let keymap = keymap.await.ok();
             this.update(cx, |page, cx| {
-                if layer == Layer::Base
-                    && let Some(keymap) = &keymap
-                {
-                    let legends = keymap.clone();
+                if let Some(keymap) = &keymap {
+                    let keymap = keymap.clone();
                     page.store
-                        .update(cx, |store, cx| store.set_legends(legends, cx));
+                        .update(cx, |store, cx| store.set_keymap(layer, keymap, cx));
                 }
                 if let Some(slot) = page.keymaps.get_mut(usize::from(layer.number())) {
                     *slot = keymap;
@@ -289,8 +310,13 @@ impl RemapPage {
         layer != Layer::Base && self.action(Layer::Base, key) == Some(Action::Layer(layer))
     }
 
+    fn linked(&self) -> bool {
+        self.link == Some(LinkState::Linked)
+    }
+
     fn editable(&self, key: usize) -> bool {
-        self.keymap(self.layer).is_some()
+        !self.linked()
+            && self.keymap(self.layer).is_some()
             && self.managed(key, self.layer).is_none()
             && !self.locked(key, self.layer)
     }
@@ -430,7 +456,7 @@ impl RemapPage {
         let Some(before) = self.keymap(layer).cloned() else {
             return;
         };
-        if before == keymap {
+        if before == keymap || self.linked() {
             return;
         }
         if let Err(invalid) = keymap.validate(&keyboard.capabilities) {
@@ -461,12 +487,9 @@ impl RemapPage {
         cx.spawn_in(window, async move |this, cx| {
             let answer = applied.await;
             this.update_in(cx, |page, window, cx| match answer {
-                Ok(()) => {
-                    if layer == Layer::Base {
-                        page.store
-                            .update(cx, |store, cx| store.set_legends(written, cx));
-                    }
-                }
+                Ok(()) => page
+                    .store
+                    .update(cx, |store, cx| store.set_keymap(layer, written, cx)),
                 Err(_) => page.reload_layer(layer, window, cx),
             })
             .ok();
@@ -507,9 +530,13 @@ impl RemapPage {
         loaded
             && match command {
                 LayerCommand::Copy => true,
-                LayerCommand::PasteReplace | LayerCommand::PasteMerge => self.copied.is_some(),
-                LayerCommand::Duplicate => layer != Layer::Base && self.next_free().is_some(),
-                LayerCommand::Delete => layer != Layer::Base,
+                LayerCommand::PasteReplace | LayerCommand::PasteMerge => {
+                    !self.linked() && self.copied.is_some()
+                }
+                LayerCommand::Duplicate => {
+                    !self.linked() && layer != Layer::Base && self.next_free().is_some()
+                }
+                LayerCommand::Delete => !self.linked() && layer != Layer::Base,
             }
     }
 
@@ -632,14 +659,12 @@ impl RemapPage {
     }
 
     fn factory_tile(&self, factory: Factory, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
-        let keymap = self.factory_keymap(factory)?;
-        let selected = self.keymap(self.layer) == Some(&keymap);
+        self.defaults.as_ref()?;
         Some(
             preset_tile(
                 SharedString::from(format!("factory-{}", factory.name())),
                 factory.sample(),
                 factory.name(),
-                selected,
                 cx,
             )
             .on_click(
@@ -722,12 +747,7 @@ impl RemapPage {
         }
     }
 
-    fn keyboard_view(
-        &self,
-        keyboard: &Keyboard,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> KeyboardView {
+    fn keyboard_view(&self, keyboard: &Keyboard, cx: &mut Context<Self>) -> KeyboardView {
         let mut selection = Selection::default();
         selection.set(self.selected);
         let caps = theme::keycaps();
@@ -753,7 +773,6 @@ impl RemapPage {
             self.face(keyboard, key, cx)
         })
         .selection(&selection)
-        .fit_width(panel::content_width_beside_side(window))
         .on_key_click(move |key, _, window, cx| {
             clicked
                 .update(cx, |page, cx| page.click_key(key, window, cx))
@@ -815,6 +834,9 @@ impl RemapPage {
                 .into_any_element()
             })
             .collect();
+        if self.linked() {
+            return layers_column(pills, None, cx);
+        }
         let full = self.next_free().is_none();
         let add = layers::add_button("remap-add-layer", full, cx)
             .when(!full, |this| {
@@ -826,25 +848,23 @@ impl RemapPage {
 
     fn layer_menu(&self, layer: Layer, cx: &mut Context<Self>) -> AnyElement {
         let page = cx.entity().downgrade();
-        let shortcut = if cfg!(target_os = "macos") {
-            "⌘"
-        } else {
-            "Ctrl+"
-        };
         let items: Vec<Item> = LayerCommand::ALL
             .into_iter()
             .map(|command| {
                 let item = Item::new(command.label())
                     .disabled(!self.available(command, layer))
                     .danger(command == LayerCommand::Delete);
-                match command.shortcut() {
-                    Some(key) => item.detail(format!("{shortcut}{key}")),
+                let item = match command.shortcut() {
+                    Some(key) => item.shortcut(key),
                     None => item,
+                };
+                if command == LayerCommand::Delete {
+                    item.divider_before()
+                } else {
+                    item
                 }
             })
             .collect();
-        let muted = cx.theme().muted_foreground;
-        let hover = cx.theme().secondary_hover;
         div()
             .id(SharedString::from(format!(
                 "remap-layer-menu-{}",
@@ -857,19 +877,15 @@ impl RemapPage {
                     "remap-layer-dropdown-{}",
                     layer.number()
                 )))
-                .menu_width(px(MENU_WIDTH))
                 .trigger(move |open, _| {
-                    div()
-                        .size_6()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_md()
-                        .text_color(muted)
-                        .when(open, |this| this.bg(hover))
-                        .hover(move |style| style.bg(hover))
-                        .child(Icon::new(Catalog::EllipsisVertical).small())
-                        .into_any_element()
+                    panel::ActionButton::icon_only(
+                        SharedString::from(format!("remap-layer-trigger-{}", layer.number())),
+                        Catalog::EllipsisVertical,
+                    )
+                    .plain()
+                    .selected(open)
+                    .icon_size(px(MENU_ICON))
+                    .into_any_element()
                 })
                 .items(items)
                 .on_select(move |index, window, cx| {
@@ -883,16 +899,127 @@ impl RemapPage {
             .into_any_element()
     }
 
-    fn presets_card(&self, keyboard: &Keyboard, cx: &mut Context<Self>) -> Div {
-        let card = panel::section(
-            "Remap keys",
-            Some("Drag keys from the right onto the keyboard, or pick a preset".into()),
+    fn toggle_link(&mut self, linked: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if linked {
+            self.relink(window, cx);
+        } else {
+            self.set_link(false, window, cx);
+        }
+    }
+
+    fn relink(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(profile) = self.store.read(cx).active() else {
+            return;
+        };
+        let first = Layer::ALL.map(|layer| {
+            self.store.update(cx, |store, cx| {
+                store.fetch::<GetKeymap, _>(
+                    LayerRef {
+                        profile: link::FIRST,
+                        layer,
+                    },
+                    cx,
+                )
+            })
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let mut theirs = [const { None }; LAYERS];
+            for (slot, keymap) in theirs.iter_mut().zip(first) {
+                *slot = keymap.await.ok();
+            }
+            this.update_in(cx, |page, window, cx| {
+                if page.store.read(cx).active() != Some(profile) {
+                    return;
+                }
+                if link::customised(&page.keymaps, &theirs) {
+                    Self::confirm_relink(window, cx);
+                } else {
+                    page.set_link(true, window, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn confirm_relink(window: &mut Window, cx: &mut Context<Self>) {
+        let page = cx.entity().downgrade();
+        panel::confirm(
+            panel::Confirmation::new(link::RELINK_TITLE, link::RELINK_TEXT, link::RELINK_ACTION)
+                .compact()
+                .neutral(),
+            move |window, cx| {
+                page.update(cx, |page, cx| page.set_link(true, window, cx))
+                    .ok();
+            },
+            window,
             cx,
         );
-        let Some(keymap) = self.keymap(self.layer) else {
-            return card;
+    }
+
+    fn set_link(&mut self, linked: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(profile) = self.store.read(cx).active() else {
+            return;
         };
-        let detected = letter_layout::detect(keymap, |key| place(keyboard, key));
+        if profile == link::FIRST {
+            return;
+        }
+        self.link = Some(LinkState::of(profile, linked));
+        self.revision += 1;
+        self.deselect(cx);
+        let applied = self.store.update(cx, |store, cx| {
+            store.change::<SetKeymapLink>(
+                &Change {
+                    profile,
+                    value: !linked,
+                },
+                Change {
+                    profile,
+                    value: linked,
+                },
+                Scope::Profile(profile),
+                cx,
+            )
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            applied.await.ok();
+            let Ok(reload) = this.update(cx, |page, cx| {
+                page.store.update(cx, |store, cx| store.reload(cx))
+            }) else {
+                return;
+            };
+            reload.await;
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn link_switch(on: bool, cx: &mut Context<Self>) -> Switch {
+        let page = cx.entity().downgrade();
+        Switch::new("remap-link")
+            .unmarked()
+            .checked(on)
+            .on_change(move |linked, window, cx| {
+                page.update(cx, |page, cx| page.toggle_link(*linked, window, cx))
+                    .ok();
+            })
+    }
+
+    fn remap_card(&self, cx: &mut Context<Self>) -> Div {
+        let state = self.link.unwrap_or(LinkState::First);
+        let card = match state.switch() {
+            Some(on) => panel::section_with(state.title(), None, Self::link_switch(on, cx), cx),
+            None => panel::section(state.title(), None, cx),
+        }
+        .when_some(self.link, |card, state| {
+            card.child(
+                panel::description(state.description(), cx)
+                    .when(!state.editable(), |text| text.pb(px(LINKED_BOTTOM))),
+            )
+        });
+        if !state.editable() || self.keymap(self.layer).is_none() {
+            return card;
+        }
         let mut tiles: Vec<Stateful<Div>> = Vec::new();
         tiles.extend(self.factory_tile(Factory::Default, cx));
         tiles.extend(self.factory_tile(Factory::Function, cx));
@@ -908,7 +1035,6 @@ impl RemapPage {
                     SharedString::from(format!("letter-layout-{}", layout.name())),
                     layout.sample(),
                     layout.name(),
-                    detected == Some(layout),
                     cx,
                 )
                 .on_click(
@@ -916,16 +1042,17 @@ impl RemapPage {
                 ),
             );
         }
-        card.child(panel::field(
-            "Select a preset",
-            h_flex().gap_2().flex_wrap().children(tiles),
-            cx,
-        ))
+        card.child(panel::description(DRAG_HINT, cx))
+            .child(panel::field(
+                "Select a preset",
+                h_flex().gap_2().flex_wrap().children(tiles),
+                cx,
+            ))
     }
 }
 
 impl Render for RemapPage {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(keyboard) = self.store.read(cx).keyboard().cloned() else {
             return panel::page();
         };
@@ -933,7 +1060,7 @@ impl Render for RemapPage {
             self.refresh_advanced(cx);
         }
         self.seen = Instant::now();
-        let view = self.keyboard_view(&keyboard, window, cx);
+        let view = self.keyboard_view(&keyboard, cx);
         let cards = h_flex()
             .w_full()
             .items_start()
@@ -942,32 +1069,25 @@ impl Render for RemapPage {
                 div()
                     .flex_none()
                     .w(px(SIDE_CARD_WIDTH))
-                    .child(self.presets_card(&keyboard, cx)),
+                    .child(self.remap_card(cx)),
             )
-            .child(
-                div().flex_1().min_w_0().child(
-                    v_flex()
-                        .w_full()
-                        .p_6()
-                        .rounded(cx.theme().radius_lg)
-                        .bg(cx.theme().group_box)
-                        .child(self.picker.clone()),
-                ),
-            );
-        let body = v_flex()
-            .w_full()
-            .gap_5()
-            .child(panel::heading(
-                Page::Remap.title(),
-                Some(REMAP_HELP.into()),
-                div(),
-                cx,
-            ))
-            .child(cards);
+            .when(!self.linked(), |cards| {
+                cards.child(
+                    div().flex_1().min_w_0().child(
+                        v_flex()
+                            .w_full()
+                            .p_6()
+                            .rounded(cx.theme().radius_lg)
+                            .bg(cx.theme().group_box)
+                            .child(self.picker.clone()),
+                    ),
+                )
+            });
         panel::page_with_stage(
             "remap-body",
-            panel::stage_with_side(self.layers(cx), view),
-            body,
+            panel::Stage::new(view).side(self.layers(cx)),
+            panel::heading(Page::Remap.title()).help(REMAP_HELP),
+            cards,
         )
         .track_focus(&self.focus)
         .on_key_down(cx.listener(Self::shortcut))
@@ -978,7 +1098,6 @@ fn preset_tile(
     id: SharedString,
     sample: &'static str,
     name: &'static str,
-    selected: bool,
     cx: &App,
 ) -> Stateful<Div> {
     let theme = cx.theme();
@@ -987,23 +1106,27 @@ fn preset_tile(
         .id(id)
         .size(px(LAYOUT_TILE_SIZE))
         .items_center()
-        .justify_center()
-        .gap_1()
+        .pt(px(TILE_ART_TOP))
         .rounded(theme.radius)
         .border_1()
-        .border_color(if selected {
-            theme.primary
-        } else {
-            theme.border
-        })
+        .border_color(theme.border)
         .bg(theme.secondary)
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
-        .child(div().text_sm().font_weight(FontWeight::BOLD).child(sample))
         .child(
             div()
+                .h(px(TILE_ART_HEIGHT))
+                .flex()
+                .items_center()
+                .text_sm()
+                .font_weight(FontWeight::BOLD)
+                .child(sample),
+        )
+        .child(
+            div()
+                .mt(px(TILE_LABEL_GAP))
                 .text_xs()
-                .text_color(theme.muted_foreground)
+                .font_weight(FontWeight::SEMIBOLD)
                 .child(name),
         )
 }

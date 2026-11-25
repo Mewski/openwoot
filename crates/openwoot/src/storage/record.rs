@@ -6,6 +6,7 @@ pub(super) const VERSION_LEN: usize = 1;
 pub(super) const MAX_VALUE_LEN: usize = 2048;
 
 const GLOBAL_SLOT: u8 = 0xFF;
+const LINKED_SLOTS: u8 = 0x80;
 
 pub trait Record: Serialize + DeserializeOwned {
     const ITEM: u8;
@@ -16,6 +17,7 @@ pub trait Record: Serialize + DeserializeOwned {
 pub enum Scope {
     Global,
     Profile(u8),
+    Linked(u8),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -40,6 +42,7 @@ impl RecordKey {
         let slot = match scope {
             Scope::Global => GLOBAL_SLOT,
             Scope::Profile(index) => index,
+            Scope::Linked(index) => LINKED_SLOTS | index,
         };
         Self(u16::from_be_bytes([slot, item]))
     }
@@ -53,6 +56,7 @@ impl RecordKey {
     pub const fn scope(self) -> Scope {
         match self.0.to_be_bytes() {
             [GLOBAL_SLOT, _] => Scope::Global,
+            [slot, _] if slot & LINKED_SLOTS != 0 => Scope::Linked(slot & !LINKED_SLOTS),
             [index, _] => Scope::Profile(index),
         }
     }

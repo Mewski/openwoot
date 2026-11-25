@@ -9,11 +9,11 @@ use openwoot_protocol::{
     lightbar::{
         self, Background, Blink, Builtin, Comparator, Comparison, Condition, Custom, Entry, Group,
         KeyRect, Logic, Meter, Operand, ProfileIndicator, Range, Signal, Solid, Target, Term,
-        Waveform,
+        Title, Waveform,
     },
     lighting::{Color, Effect, HueCycle, HueRange, Scanner, ScannerDirection},
     profile::{LayerChange, Slot},
-    switches::{self, MAX_TUNED, Switch},
+    switches::{self, Switch},
 };
 
 use crate::support::{
@@ -137,7 +137,12 @@ fn gamepad_curves_must_rise_and_effects_keep_their_rate_limits() {
     curve.curve[2].travel = 70;
     assert_eq!(curve.validate(&capabilities), Err(Invalid::CurveNotRising));
     let mut bias = gamepad_settings();
-    bias.left_stick_up_bias = Some(101);
+    bias.left_stick_up_bias.percent = 101;
+    assert_eq!(
+        bias.validate(&capabilities),
+        Err(Invalid::PercentageAboveHundred(101))
+    );
+    bias.left_stick_up_bias.enabled = false;
     assert_eq!(
         bias.validate(&capabilities),
         Err(Invalid::PercentageAboveHundred(101))
@@ -176,6 +181,7 @@ fn gamepad_curves_must_rise_and_effects_keep_their_rate_limits() {
 fn light_bar_entries_stay_on_the_light_bar_and_the_key_matrix() {
     let capabilities = capabilities();
     let blink = |target| Entry {
+        title: Title::new(),
         condition: None,
         effect: lightbar::Effect::Blink(Blink {
             from: Color::TRANSPARENT,
@@ -215,6 +221,7 @@ fn light_bar_entries_stay_on_the_light_bar_and_the_key_matrix() {
 fn host_signals_and_light_bars_need_a_keyboard_that_has_them() {
     let mut capabilities = capabilities();
     let host_condition = Entry {
+        title: Title::new(),
         condition: Some(Condition {
             logic: Logic::Single,
             groups: [Group {
@@ -341,10 +348,10 @@ fn a_travel_offset_must_stay_below_the_travel_of_its_model() {
 }
 
 #[test]
-fn at_most_the_limit_of_distinct_switches_carry_a_travel_offset() {
+fn thirty_distinct_switches_may_carry_a_travel_offset_but_not_thirty_one() {
     let models = models();
     let mut settings = set_on_key(0, 0);
-    let limit = u8::try_from(MAX_TUNED).unwrap();
+    let limit = 30;
     for (offset, key) in (1..=limit).zip(settings.keys.iter_mut()) {
         *key = Some(Switch {
             model: 0,
@@ -405,7 +412,7 @@ fn rejections_read_as_one_lowercase_sentence() {
     );
     assert_eq!(
         Invalid::TunedSwitchesExceedLimit.to_string(),
-        "more than 16 distinct switches have a travel offset"
+        "more than 30 distinct switches have a travel offset"
     );
     assert_eq!(
         Rejection::from(Invalid::KeyboardUsageOutsideReport(0xE8)).to_string(),
@@ -562,6 +569,7 @@ fn key_rectangles_run_from_their_first_key_to_their_last() {
     let capabilities = capabilities();
     let lit = |first, last| {
         entries(Entry {
+            title: Title::new(),
             condition: None,
             effect: lightbar::Effect::Solid(Solid {
                 color: opaque(1, 2, 3),
@@ -624,6 +632,7 @@ fn light_bar_entries_keep_to_the_host_signals_the_keyboard_can_list() {
             terms: [term(), term()].into_iter().collect(),
         };
         Entry {
+            title: Title::new(),
             condition: Some(Condition {
                 logic: Logic::All,
                 groups: [group(), group()].into_iter().collect(),
@@ -653,6 +662,7 @@ fn light_bar_effects_need_a_period_segments_and_colours_that_fit() {
     let capabilities = capabilities();
     let drawn = |effect| {
         entries(Entry {
+            title: Title::new(),
             condition: None,
             effect,
         })
@@ -697,6 +707,7 @@ fn entries(entry: Entry) -> lightbar::Entries {
 
 fn shown_when(condition: Condition) -> Entry {
     Entry {
+        title: Title::new(),
         condition: Some(condition),
         effect: lightbar::Effect::Solid(Solid {
             color: opaque(9, 9, 9),
@@ -795,7 +806,15 @@ fn both_profiles_of_a_swap_or_a_move_must_be_slots_of_the_keyboard() {
     );
     assert_eq!(
         swap(0, u8::MAX).validate(&capabilities),
-        Err(Invalid::ProfileOutsideRange(u8::MAX))
+        Err(Invalid::ProfileLinked(u8::MAX))
+    );
+    assert_eq!(
+        Swap {
+            first: Slot::new(0),
+            second: Slot::linked(0),
+        }
+        .validate(&capabilities),
+        Err(Invalid::ProfileLinked(0x80))
     );
     assert_eq!(
         shift(5, 1).validate(&capabilities),
@@ -805,4 +824,22 @@ fn both_profiles_of_a_swap_or_a_move_must_be_slots_of_the_keyboard() {
         shift(1, 4).validate(&capabilities),
         Err(Invalid::ProfileOutsideRange(4))
     );
+}
+
+#[test]
+fn host_light_bar_colours_must_fit_the_light_bar() {
+    let mut capabilities = capabilities();
+    let fitting: lightbar::Colors = filled(white(), 10);
+    assert_eq!(fitting.validate(&capabilities), Ok(()));
+    assert_eq!(lightbar::Colors::new().validate(&capabilities), Ok(()));
+    let longer: lightbar::Colors = filled(white(), 11);
+    assert_eq!(
+        longer.validate(&capabilities),
+        Err(Invalid::LightbarColorsExceedLeds {
+            count: 11,
+            leds: 10
+        })
+    );
+    capabilities.lightbar_leds = 0;
+    assert_eq!(fitting.validate(&capabilities), Err(Invalid::NoLightbar));
 }

@@ -1,6 +1,11 @@
-use openwoot_protocol::lightbar::{self, HostSignal, HostSignalIds};
+use openwoot_protocol::{
+    lightbar::{self, HostSignal, HostSignalIds},
+    lighting::Rgb,
+};
 
-use super::{canvas::Canvas, indicators::LockState, input::KeyEvent, signals::ProfileState};
+use super::{
+    canvas::Canvas, indicators::LockState, input::KeyEvent, leds::Led, signals::ProfileState,
+};
 use crate::keys::Key;
 
 pub trait Lightbar {
@@ -50,6 +55,20 @@ pub trait Lightbar {
 
     fn set_host_control(&mut self, host_control: bool) {
         let _ = host_control;
+    }
+
+    fn set_host_colors(&mut self, colors: &[Rgb]) {
+        let _ = colors;
+    }
+
+    fn reset_host_colors(&mut self) {}
+
+    fn host_driven(&self) -> bool {
+        false
+    }
+
+    fn leds(&self) -> &[Led] {
+        &[]
     }
 
     fn take_brightness_change(&mut self) -> bool {

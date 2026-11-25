@@ -1,6 +1,6 @@
 use gpui_kit::{
     Context, Div, IntoElement, ParentElement as _, SharedString, Styled as _, Window,
-    component::{ActiveTheme as _, h_flex, v_flex},
+    component::{ActiveTheme as _, Icon, IconName, h_flex, v_flex},
     div,
     prelude::FluentBuilder as _,
     px,
@@ -17,17 +17,17 @@ use super::{
 };
 use crate::{
     dropdown::{Dropdown, Item},
-    page::lighting::{Choice, add_button, choices, param_label},
+    page::lighting::{Choice, choices, param_label},
     panel,
 };
 
 const COMPARATOR_WIDTH: f32 = 72.0;
 const TYPES: [(Logic, &str); 3] = [
-    (Logic::Single, "Single condition"),
-    (Logic::All, "All conditions required"),
-    (Logic::Any, "Any condition required"),
+    (Logic::Single, "Single Condition"),
+    (Logic::All, "All Conditions Required"),
+    (Logic::Any, "Any Condition Required"),
 ];
-const ORDINALS: [&str; 2] = ["First condition", "Second condition"];
+const ORDINALS: [&str; 2] = ["First Condition", "Second Condition"];
 
 impl LightbarPage {
     pub(super) fn conditions(&self, entry: &Entry, cx: &Context<Self>) -> Div {
@@ -44,7 +44,7 @@ impl LightbarPage {
                 .map_or(Logic::Single, |group| group.logic)
         };
         let mut body = v_flex().w_full().gap_5().child(panel::field(
-            "Condition type",
+            "Condition Type",
             Self::type_menu("condition-type", logic, None, nested, cx),
             cx,
         ));
@@ -61,30 +61,36 @@ impl LightbarPage {
                 .w_full()
                 .gap_2()
                 .when_some(roomy, |this, roomy| {
-                    this.child(div().flex_1().child(
-                        add_button("add-term", "Add condition", cx).on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                this.edit_condition(
-                                    |condition| {
-                                        if let Some(group) = condition.groups.get_mut(roomy) {
-                                            entry::add_term(group);
-                                        }
-                                    },
-                                    window,
-                                    cx,
-                                );
-                            },
-                        )),
-                    ))
+                    this.child(
+                        div().flex_1().child(
+                            panel::ActionButton::new("add-term", "Add Condition")
+                                .icon(Icon::new(IconName::Plus))
+                                .w_full()
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.edit_condition(
+                                        |condition| {
+                                            if let Some(group) = condition.groups.get_mut(roomy) {
+                                                entry::add_term(group);
+                                            }
+                                        },
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        ),
+                    )
                 })
                 .when(entry::can_add_group(condition), |this| {
-                    this.child(div().flex_1().child(
-                        add_button("add-group", "Add group", cx).on_click(cx.listener(
-                            |this, _, window, cx| {
-                                this.edit_condition(entry::add_group, window, cx);
-                            },
-                        )),
-                    ))
+                    this.child(
+                        div().flex_1().child(
+                            panel::ActionButton::new("add-group", "Add Group")
+                                .icon(Icon::new(IconName::Plus))
+                                .w_full()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.edit_condition(entry::add_group, window, cx);
+                                })),
+                        ),
+                    )
                 }),
         )
     }
@@ -99,6 +105,7 @@ impl LightbarPage {
         let page = cx.entity().downgrade();
         let scope = group.map_or_else(|| id.to_owned(), |index| format!("{id}-{index}"));
         Dropdown::new(SharedString::from(scope))
+            .small()
             .items(TYPES.iter().map(|(logic, label)| {
                 Item::new(*label).disabled(*logic == Logic::Single && nested && group.is_none())
             }))
@@ -198,7 +205,7 @@ impl LightbarPage {
                 ))
             });
         let trigger = panel::field(
-            "Condition trigger",
+            "Condition Trigger",
             choices(
                 SharedString::from(format!("timing-{}-{}", spot.group, spot.term)),
                 TIMINGS.map(Timing::label),
@@ -297,6 +304,7 @@ impl LightbarPage {
             "comparator-{}-{}",
             spot.group, spot.term
         )))
+        .small()
         .items(COMPARATORS.iter().map(|comparator| {
             Item::new(entry::comparator_symbol(*comparator)).detail(comparator_name(*comparator))
         }))

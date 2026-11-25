@@ -1,22 +1,27 @@
-use core::future::{Future, ready};
+use core::future::{Future, pending, ready};
 
-use embassy_futures::select::{Either, select};
+use embassy_futures::select::{Either3, select3};
 use embassy_sync::{blocking_mutex::raw::RawMutex, mutex::Mutex};
+use embassy_time::{Duration, Timer};
+use embassy_usb::driver;
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use openwoot_protocol::{
-    advanced,
+    advanced, apps,
     configuration::{Capabilities, Invalid, Rejection},
-    device::{self, LayoutState},
+    device::{self, LayoutState, SettingsState},
+    diagnostics::StorageUsage,
     gamepad, geometry, global,
     keys::{self, Keymap, Layer, Overrides},
     lightbar,
     lighting::{self, KeyColors},
-    profile::{Info, Slot, Summary},
+    profile::{Info, Namespace, Selection, Slot, Summary},
     switches,
 };
 
 use super::Model;
-use crate::{keys::switch_models, protocol::Configuration};
+use crate::{keys::switch_models, protocol::Configuration, usb::Speed};
+
+const ACTIVE_PROFILE_SETTLE: Duration = Duration::from_secs(2);
 
 pub struct Configurator<'a, M, F, const ROWS: usize, const COLUMNS: usize>
 where
@@ -26,6 +31,7 @@ where
     model: &'a Mutex<M, Model<'a, M, F, ROWS, COLUMNS>>,
     capabilities: Capabilities,
     geometry: &'a [[[Option<geometry::Key>; COLUMNS]; ROWS]],
+    negotiated_speed: Option<fn() -> Option<driver::Speed>>,
 }
 
 impl<'a, M, F, const ROWS: usize, const COLUMNS: usize> Configurator<'a, M, F, ROWS, COLUMNS>
@@ -42,6 +48,7 @@ where
             model,
             capabilities,
             geometry: &[],
+            negotiated_speed: None,
         }
     }
 
@@ -54,21 +61,44 @@ where
         self
     }
 
+    #[must_use]
+    pub const fn with_negotiated_speed(
+        mut self,
+        negotiated_speed: fn() -> Option<driver::Speed>,
+    ) -> Self {
+        self.negotiated_speed = Some(negotiated_speed);
+        self
+    }
+
     pub async fn serve(&self) -> ! {
         let (keys, shared) = {
             let model = self.model.lock().await;
             (model.keys(), model.shared())
         };
+        let mut settling = false;
         loop {
-            match select(keys.profile_request(), shared.brightness_saved()).await {
-                Either::First(profile) => {
-                    let _ = self.model.lock().await.activate(Slot::new(profile)).await;
+            let settle = settling;
+            let settled = async move {
+                if settle {
+                    Timer::after(ACTIVE_PROFILE_SETTLE).await;
+                } else {
+                    pending::<()>().await;
                 }
-                Either::Second(_) => {
+            };
+            match select3(keys.profile_request(), shared.brightness_saved(), settled).await {
+                Either3::First(profile) => {
+                    let _ = self.model.lock().await.switch(Slot::new(profile)).await;
+                    settling = true;
+                }
+                Either3::Second(_) => {
                     let mut model = self.model.lock().await;
                     if shared.take_brightness_save() {
                         let _ = model.save_brightness().await;
                     }
+                }
+                Either3::Third(()) => {
+                    let _ = self.model.lock().await.store_active().await;
+                    settling = false;
                 }
             }
         }
@@ -110,13 +140,32 @@ where
         Ok(self.capabilities.clone())
     }
 
-    async fn device_settings(&mut self) -> Result<device::Settings, Rejection> {
-        Ok(self.model.lock().await.device_settings())
+    async fn device_settings(&mut self) -> Result<SettingsState, Rejection> {
+        let (active, chosen) = {
+            let model = self.model.lock().await;
+            (model.booted_device_settings(), model.device_settings())
+        };
+        Ok(SettingsState {
+            active,
+            chosen,
+            negotiated: self
+                .negotiated_speed
+                .and_then(|negotiated| negotiated())
+                .map(|negotiated| device::Speed::from(Speed::from(negotiated))),
+        })
     }
 
     async fn set_device_settings(&mut self, settings: device::Settings) -> Result<(), Rejection> {
         self.model.lock().await.set_device_settings(settings);
         Ok(())
+    }
+
+    async fn device_name(&mut self) -> Result<device::Name, Rejection> {
+        Ok(self.model.lock().await.device_name().await)
+    }
+
+    async fn set_device_name(&mut self, name: device::Name) -> Result<(), Rejection> {
+        self.model.lock().await.set_device_name(name).await
     }
 
     async fn layout(&mut self) -> Result<LayoutState, Rejection> {
@@ -172,8 +221,46 @@ where
         Ok(self.model.lock().await.summary())
     }
 
-    async fn create_profile(&mut self) -> Result<Slot, Rejection> {
-        self.model.lock().await.create().await
+    async fn create_profile(&mut self, namespace: Namespace) -> Result<Slot, Rejection> {
+        self.model.lock().await.create(namespace).await
+    }
+
+    async fn select_linked_profile(&mut self, selection: Selection) -> Result<(), Rejection> {
+        self.model.lock().await.select_linked(selection).await
+    }
+
+    async fn app_link_count(&mut self, profile: Slot) -> Result<u8, Rejection> {
+        self.model.lock().await.app_link_count(profile).await
+    }
+
+    async fn app_link(
+        &mut self,
+        profile: Slot,
+        index: u8,
+        link: &mut apps::Link,
+    ) -> Result<(), Rejection> {
+        self.model.lock().await.app_link(profile, index, link).await
+    }
+
+    async fn set_app_link(
+        &mut self,
+        profile: Slot,
+        index: u8,
+        link: &apps::Link,
+    ) -> Result<(), Rejection> {
+        self.model
+            .lock()
+            .await
+            .set_app_link(profile, index, link)
+            .await
+    }
+
+    async fn delete_app_link(&mut self, profile: Slot, index: u8) -> Result<(), Rejection> {
+        self.model
+            .lock()
+            .await
+            .delete_app_link(profile, index)
+            .await
     }
 
     async fn delete_profile(&mut self, profile: Slot) -> Result<(), Rejection> {
@@ -239,6 +326,18 @@ where
             .lock()
             .await
             .set_keymap(profile, layer, keymap)
+            .await
+    }
+
+    async fn keymap_link(&mut self, profile: Slot) -> Result<bool, Rejection> {
+        self.model.lock().await.keymap_link(profile).await
+    }
+
+    async fn set_keymap_link(&mut self, profile: Slot, linked: bool) -> Result<(), Rejection> {
+        self.model
+            .lock()
+            .await
+            .set_keymap_link(profile, linked)
             .await
     }
 
@@ -432,6 +531,10 @@ where
 
     async fn factory_reset(&mut self) -> Result<(), Rejection> {
         self.model.lock().await.factory_reset().await
+    }
+
+    async fn storage_usage(&mut self) -> Result<StorageUsage, Rejection> {
+        self.model.lock().await.storage_usage().await
     }
 }
 

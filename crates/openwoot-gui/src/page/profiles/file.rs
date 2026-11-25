@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use openwoot_protocol::{PROTOCOL_VERSION, profile};
+use openwoot_protocol::{PROTOCOL_VERSION, apps::Link, profile};
 use serde::{Deserialize, Serialize};
 
 use crate::profile_parts::Parts;
@@ -18,6 +18,8 @@ pub(super) struct ProfileFile {
     pub(super) keyboard: String,
     pub(super) info: profile::Info,
     pub(super) parts: Parts,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) links: Vec<Link>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -43,7 +45,7 @@ pub(super) enum FileError {
     #[error("could not encode the profile")]
     Encode(#[source] serde_json::Error),
     #[error(
-        "`{}` holds profile format {found}; this version of openwoot reads format {FORMAT}",
+        "`{}` uses profile format {found}, this version reads format {FORMAT}",
         path.display()
     )]
     UnknownFormat { path: PathBuf, found: u16 },
@@ -86,6 +88,7 @@ impl ProfileFile {
             keyboard,
             info,
             parts,
+            links: Vec::new(),
         }
     }
 
@@ -145,6 +148,7 @@ mod tests {
             key_rows: 1,
             key_columns: keys,
             profiles: 4,
+            linked_profiles: 0,
             layouts: heapless::Vec::new(),
             lightbar_leds: 0,
             host_signals: false,
@@ -204,7 +208,7 @@ mod tests {
                 ],
                 normalization: Normalization::Circular,
                 single_direction_axes: false,
-                left_stick_up_bias: None,
+                left_stick_up_bias: gamepad::StickBias::DISABLED,
             },
             lighting: lighting::Settings {
                 brightness: 200,

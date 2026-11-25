@@ -22,6 +22,7 @@ flash it.
 | --- | --- |
 | factory bootloader, never written | `0x0800_0000`-`0x0800_6fff` |
 | image (`FLASH` in `memory.x`): vector table, descriptor, code | `0x0800_7000`-`0x080f_cfff` |
+| zero-wait flash (`ZERO_WAIT` in `memory.x`): the interrupt vectors' and key task's code is linked here first | `0x0800_0000`-`0x0803_ffff` |
 | serial number page, never linked | `0x080f_d000`-`0x080f_dfff` |
 | unused page and factory device information, never linked | `0x080f_e000`-`0x080f_ffff` |
 | RAM, stack from the top | `0x2000_0000`-`0x2001_7fff` |

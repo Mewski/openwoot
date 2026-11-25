@@ -15,6 +15,8 @@ pub enum Rejection {
     ProfileLimitReached,
     #[error("profile {0} cannot be deleted")]
     ProfileProtected(u8),
+    #[error("app link {0} does not exist")]
+    AppLinkMissing(u8),
     #[error("the keyboard is locked")]
     Locked,
     #[error("could not access the settings storage")]

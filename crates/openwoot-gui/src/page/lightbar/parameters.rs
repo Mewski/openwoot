@@ -1,9 +1,9 @@
 use std::ops::RangeInclusive;
 
 use gpui_kit::{
-    Context, Div, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _,
-    SharedString, Styled as _, Window,
-    component::{ActiveTheme as _, Sizable as _, h_flex, input::Input, slider::Slider, v_flex},
+    Context, Div, FontWeight, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    component::{ActiveTheme as _, Sizable as _, h_flex, input::Input, v_flex},
     div,
     prelude::FluentBuilder as _,
     px,
@@ -28,11 +28,19 @@ use super::{
 use crate::{
     color_picker::{self, Swatch as ColorSwatch, hsla_of},
     dropdown::{Dropdown, Item},
-    page::lighting::{Choice, choices, stepper},
+    page::lighting::{Choice, PARAM_TEXT, choices, stepper},
     panel,
+    slider::Slider,
 };
 
-const INPUT_WIDTH: f32 = 84.0;
+const INPUT_WIDTH: f32 = 48.0;
+const PLACEHOLDER_TEXT: f32 = 16.0;
+const PLACEHOLDER_LINE: f32 = 24.0;
+const BOX_RADIUS: f32 = 6.0;
+const UNIT_LINE: f32 = 19.2;
+const CONTROL_HEIGHT: f32 = 32.0;
+const TAB_HEIGHT: f32 = 40.0;
+const TYPE_WIDTH: f32 = 280.0;
 const SWATCH_SIZE: f32 = 32.0;
 const LED_SWATCH: f32 = 24.0;
 const FIVE_SECTIONS: u8 = 5;
@@ -53,40 +61,82 @@ pub(super) enum Socket {
 impl LightbarPage {
     pub(super) fn parameters_card(&self, cx: &Context<Self>) -> Option<Div> {
         self.settings.as_ref()?;
-        let card = panel::section("Effect parameters", None, cx);
+        let card = panel::section("Effect Parameters", None, cx).p_6();
         let Some(entry) = self.chosen_entry() else {
-            return Some(card.child(panel::note("Select an effect to change its parameters", cx)));
+            return Some(
+                card.child(
+                    div()
+                        .text_size(px(PLACEHOLDER_TEXT))
+                        .line_height(px(PLACEHOLDER_LINE))
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Select an effect to change its parameters."),
+                ),
+            );
         };
         if self.tab == Tab::Presets {
-            return Some(card.child(self.kind_parameters(entry, cx)));
+            return Some(card.child(parameter_box(cx).children(self.kind_rows(entry, cx))));
         }
         let temporary = entry.condition.is_some();
         let define = self.define || !temporary;
-        let tabs = choices(
-            "parameter-tabs",
-            if temporary {
-                vec!["Define effect", "Conditions"]
-            } else {
-                vec!["Define effect"]
-            },
-            Some(usize::from(!define)),
-            Choice::Outlined,
-            cx.listener(|this, index: &usize, _, cx| {
-                this.define = *index == 0;
-                cx.notify();
-            }),
-            cx,
-        );
         let body = if define {
             self.define_effect(entry, cx)
         } else {
             self.conditions(entry, cx)
         };
-        Some(card.child(tabs).child(body))
+        Some(
+            card.child(
+                v_flex()
+                    .w_full()
+                    .child(Self::creator_tabs(temporary, define, cx))
+                    .child(div().w_full().p_4().child(body)),
+            ),
+        )
+    }
+
+    fn creator_tabs(temporary: bool, define: bool, cx: &Context<Self>) -> Div {
+        let theme = cx.theme();
+        let tabs: &[(&str, bool)] = if temporary {
+            &[("Define Effect", true), ("Conditions", false)]
+        } else {
+            &[("Define Effect", true)]
+        };
+        h_flex()
+            .w_full()
+            .gap_2()
+            .border_b_1()
+            .border_color(theme.border)
+            .children(tabs.iter().map(|(label, defines)| {
+                let selected = *defines == define;
+                let defines = *defines;
+                div()
+                    .id(SharedString::from(format!("creator-tab-{label}")))
+                    .h(px(TAB_HEIGHT))
+                    .px_4()
+                    .flex()
+                    .items_center()
+                    .rounded_t(px(BOX_RADIUS))
+                    .text_size(px(PLACEHOLDER_TEXT))
+                    .line_height(px(PLACEHOLDER_LINE))
+                    .cursor_pointer()
+                    .map(|this| {
+                        if selected {
+                            this.bg(theme.secondary).text_color(theme.foreground)
+                        } else {
+                            this.text_color(theme.group_box_foreground)
+                                .hover(|style| style.bg(theme.accent))
+                        }
+                    })
+                    .child(*label)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.define = defines;
+                        cx.notify();
+                    }))
+            }))
     }
 
     pub(super) fn number(&self, field: Field, cx: &Context<Self>) -> Div {
         h_flex()
+            .h(px(CONTROL_HEIGHT))
             .gap_2()
             .items_center()
             .child(
@@ -99,8 +149,10 @@ impl LightbarPage {
             .when(!field.unit().is_empty(), |this| {
                 this.child(
                     div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
+                        .text_size(px(PARAM_TEXT))
+                        .line_height(px(UNIT_LINE))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(cx.theme().foreground)
                         .child(field.unit()),
                 )
             })
@@ -153,6 +205,7 @@ impl LightbarPage {
             })
             .collect();
         Dropdown::new(SharedString::from(id))
+            .small()
             .items(items)
             .selected(selected)
             .on_select(move |index, window, cx| {
@@ -168,9 +221,8 @@ impl LightbarPage {
         let temporary = entry.condition.is_some();
         let family = Kind::of(&entry.effect).family();
         let page = cx.entity().downgrade();
-        v_flex()
-            .w_full()
-            .gap_5()
+        let rows = self.kind_rows(entry, cx);
+        let settings = parameter_box(cx)
             .child(panel::field(
                 "Display",
                 choices(
@@ -196,31 +248,41 @@ impl LightbarPage {
                 cx,
             ))
             .child(panel::field(
-                "Effect type",
-                Dropdown::new("entry-type")
-                    .items(TYPES.iter().map(|kind| Item::new(kind.name())))
-                    .selected(TYPES.iter().position(|kind| *kind == family))
-                    .on_select(move |index, window, cx| {
-                        let Some(kind) = TYPES.get(index).copied() else {
-                            return;
-                        };
-                        page.update(cx, |page, cx| page.change_kind(kind, window, cx))
-                            .ok();
-                    }),
+                "Effect Type",
+                div().w(px(TYPE_WIDTH)).child(
+                    Dropdown::new("entry-type")
+                        .small()
+                        .items(TYPES.iter().map(|kind| Item::new(kind.name())))
+                        .selected(TYPES.iter().position(|kind| *kind == family))
+                        .on_select(move |index, window, cx| {
+                            let Some(kind) = TYPES.get(index).copied() else {
+                                return;
+                            };
+                            page.update(cx, |page, cx| page.change_kind(kind, window, cx))
+                                .ok();
+                        }),
+                ),
                 cx,
             ))
-            .child(self.kind_parameters(entry, cx))
+            .children(rows);
+        v_flex()
+            .w_full()
+            .gap_4()
+            .child(panel::description(
+                "Choose whether the effect is constant or temporary and how it looks.",
+                cx,
+            ))
+            .child(settings)
     }
 
-    fn kind_parameters(&self, entry: &Entry, cx: &Context<Self>) -> Div {
-        let rows = match &entry.effect {
+    fn kind_rows(&self, entry: &Entry, cx: &Context<Self>) -> Vec<Div> {
+        match &entry.effect {
             Effect::Solid(_) | Effect::Custom(_) => self.solid_rows(&entry.effect, cx),
             Effect::Blink(blink) => self.pulse_rows(*blink, cx),
             Effect::Meter(meter) => self.meter_rows(meter, cx),
             Effect::Mirror(mirror) => self.sync_rows(*mirror, cx),
             Effect::ProfileIndicator(indicator) => self.indicator_rows(*indicator, cx),
-        };
-        v_flex().w_full().gap_5().children(rows)
+        }
     }
 
     fn solid_rows(&self, effect: &Effect, cx: &Context<Self>) -> Vec<Div> {
@@ -242,7 +304,7 @@ impl LightbarPage {
         };
         let mut rows = vec![panel::field(
             "Colour",
-            v_flex().gap_3().child(colour).child(swatches),
+            v_flex().gap_2().child(colour).child(swatches),
             cx,
         )];
         match effect {
@@ -255,18 +317,12 @@ impl LightbarPage {
 
     fn pulse_rows(&self, blink: Blink, cx: &Context<Self>) -> Vec<Div> {
         let mut rows = vec![
-            h_flex()
-                .gap_8()
-                .child(panel::field(
-                    "Main colour",
-                    self.swatch("pulse-main", Swatch::Main),
-                    cx,
-                ))
-                .child(panel::field(
-                    "Secondary colour",
-                    self.swatch("pulse-secondary", Swatch::Second),
-                    cx,
-                )),
+            panel::field("Main Colour", self.swatch("pulse-main", Swatch::Main), cx),
+            panel::field(
+                "Secondary Colour",
+                self.swatch("pulse-secondary", Swatch::Second),
+                cx,
+            ),
             panel::field(
                 "Transition",
                 choices(
@@ -298,7 +354,7 @@ impl LightbarPage {
                 "Speed",
                 h_flex()
                     .w_full()
-                    .gap_3()
+                    .gap_2()
                     .items_center()
                     .child(div().flex_1().min_w_0().child(Slider::new(&self.period)))
                     .child(self.number(Field::Period, cx)),
@@ -313,7 +369,7 @@ impl LightbarPage {
         let host = matches!(meter.signal, Signal::Host(_));
         vec![
             panel::field(
-                "Data point",
+                "Data Point",
                 h_flex()
                     .w_full()
                     .gap_2()
@@ -325,24 +381,24 @@ impl LightbarPage {
                     .when(host, |this| this.child(self.number(Field::MeterHost, cx))),
                 cx,
             ),
-            panel::field("Max value", self.number(Field::Maximum, cx), cx),
+            panel::field("Max Value", self.number(Field::Maximum, cx), cx),
             h_flex()
                 .w_full()
                 .flex_wrap()
                 .gap_x_8()
                 .gap_y_4()
                 .child(div().child(panel::field(
-                    "Main colour",
+                    "Main Colour",
                     self.swatch("meter-main", Swatch::Main),
                     cx,
                 )))
                 .child(div().child(panel::field(
-                    "Background colour",
+                    "Background Colour",
                     self.swatch("meter-background", Swatch::Second),
                     cx,
                 )))
                 .child(div().child(panel::field(
-                    "Blend colour",
+                    "Blend Colour",
                     self.swatch("meter-blend", Swatch::Third),
                     cx,
                 ))),
@@ -443,7 +499,7 @@ impl LightbarPage {
             });
             let fixed = matches!(indicator.background, Background::Fixed(_));
             rows.push(panel::field(
-                "Background colour",
+                "Background Colour",
                 h_flex()
                     .gap_3()
                     .items_center()
@@ -521,7 +577,7 @@ impl LightbarPage {
             "Show on",
             choices(
                 "effect-target",
-                ["Light indicator", "Keys"],
+                ["Light Indicator", "Keys"],
                 Some(usize::from(on_keys)),
                 Choice::Outlined,
                 cx.listener(move |this, index: &usize, window, cx| {
@@ -542,7 +598,12 @@ impl LightbarPage {
     }
 
     fn range_field(&self, range: Range, cx: &Context<Self>) -> Div {
-        panel::field("LED range", h_flex().child(self.led_range(range, cx)), cx)
+        panel::field_with_help(
+            "LED Range",
+            "Choose which part of the Light Indicator shows the effect.",
+            h_flex().child(self.led_range(range, cx)),
+            cx,
+        )
     }
 
     fn swatch(&self, id: &'static str, swatch: Swatch) -> Div {
@@ -851,6 +912,15 @@ const fn rect_of(effect: &mut Effect) -> Option<&mut KeyRect> {
         }) => Some(rect),
         _ => None,
     }
+}
+
+fn parameter_box(cx: &Context<LightbarPage>) -> Div {
+    v_flex()
+        .w_full()
+        .gap_6()
+        .p_4()
+        .rounded(px(BOX_RADIUS))
+        .bg(cx.theme().tab_active)
 }
 
 fn same_choice(choice: Option<Signal>, current: Option<Signal>) -> bool {

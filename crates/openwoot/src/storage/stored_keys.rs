@@ -1,52 +1,84 @@
-use heapless::Vec;
+use openwoot_protocol::profile::MAX_LINKED;
 
-use super::record::RecordKey;
+use super::record::{RecordKey, Scope};
 
-const CAPACITY: usize = 96;
+const PROFILE_SLOTS: u8 = 16;
+const ITEMS: u8 = 64;
+const GLOBAL_ROW: u8 = PROFILE_SLOTS + MAX_LINKED;
+const ROWS: usize = GLOBAL_ROW as usize + 1;
 
 #[derive(Debug)]
 pub(super) struct StoredKeys {
-    keys: Vec<RecordKey, CAPACITY>,
+    rows: [u64; ROWS],
     complete: bool,
 }
 
 impl StoredKeys {
     pub(super) const fn unknown() -> Self {
         Self {
-            keys: Vec::new(),
+            rows: [0; ROWS],
             complete: false,
         }
     }
 
-    pub(super) fn forget(&mut self) {
-        self.keys.clear();
+    pub(super) const fn forget(&mut self) {
+        self.rows = [0; ROWS];
         self.complete = false;
     }
 
-    pub(super) fn start(&mut self) {
-        self.keys.clear();
+    pub(super) const fn start(&mut self) {
+        self.rows = [0; ROWS];
         self.complete = true;
     }
 
     pub(super) fn insert(&mut self, key: RecordKey) {
-        if !self.keys.contains(&key) && self.keys.push(key).is_err() {
-            self.complete = false;
+        match place(key).and_then(|(row, bit)| Some((self.rows.get_mut(row)?, bit))) {
+            Some((row, bit)) => *row |= bit,
+            None => self.complete = false,
         }
     }
 
     pub(super) fn remove(&mut self, key: RecordKey) {
-        self.keys.retain(|stored| *stored != key);
+        if let Some((row, bit)) = place(key)
+            && let Some(row) = self.rows.get_mut(row)
+        {
+            *row &= !bit;
+        }
     }
 
     pub(super) fn lacks(&self, key: RecordKey) -> bool {
-        self.complete && !self.keys.contains(&key)
+        self.complete && !self.holds(key)
     }
+
+    pub(super) fn count(&self) -> u32 {
+        self.rows.iter().copied().map(u64::count_ones).sum()
+    }
+
+    fn holds(&self, key: RecordKey) -> bool {
+        place(key)
+            .and_then(|(row, bit)| self.rows.get(row).map(|bits| bits & bit != 0))
+            .unwrap_or(false)
+    }
+}
+
+fn place(key: RecordKey) -> Option<(usize, u64)> {
+    let item = key.item();
+    if item >= ITEMS {
+        return None;
+    }
+    let row = match key.scope() {
+        Scope::Profile(slot) if slot < PROFILE_SLOTS => slot,
+        Scope::Linked(slot) if slot < MAX_LINKED => PROFILE_SLOTS + slot,
+        Scope::Global => GLOBAL_ROW,
+        Scope::Profile(_) | Scope::Linked(_) => return None,
+    };
+    Some((usize::from(row), 1_u64 << item))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::Scope;
+    use crate::profile::Order;
 
     #[test]
     fn a_key_is_lacking_only_while_every_stored_key_is_known() {
@@ -69,14 +101,53 @@ mod tests {
     }
 
     #[test]
-    fn more_keys_than_fit_leave_no_key_lacking_until_the_next_start() {
+    fn a_key_outside_the_set_leaves_no_key_lacking_until_the_next_start() {
+        for outside in [
+            RecordKey::new(Scope::Profile(PROFILE_SLOTS), 0),
+            RecordKey::new(Scope::Linked(MAX_LINKED), 0),
+            RecordKey::new(Scope::Global, ITEMS),
+        ] {
+            let other = RecordKey::new(Scope::Profile(1), 0);
+            let mut keys = StoredKeys::unknown();
+            keys.start();
+            assert!(keys.lacks(outside));
+            keys.insert(outside);
+            assert!(!keys.lacks(other), "{outside:?}");
+            assert!(!keys.lacks(outside), "{outside:?}");
+            keys.start();
+            assert!(keys.lacks(other), "{outside:?}");
+        }
+    }
+
+    #[test]
+    fn every_scope_and_item_of_the_set_is_held_apart_and_counted_once() {
+        let last_item = ITEMS - 1;
+        let corners = [
+            RecordKey::new(Scope::Profile(0), 0),
+            RecordKey::new(Scope::Profile(PROFILE_SLOTS - 1), last_item),
+            RecordKey::new(Scope::Linked(0), 0),
+            RecordKey::new(Scope::Linked(MAX_LINKED - 1), last_item),
+            RecordKey::new(Scope::Global, 0),
+            RecordKey::new(Scope::Global, last_item),
+        ];
         let mut keys = StoredKeys::unknown();
         keys.start();
-        for item in 0..=u8::MAX {
-            keys.insert(RecordKey::new(Scope::Profile(0), item));
+        for (count, key) in (1..).zip(corners) {
+            keys.insert(key);
+            keys.insert(key);
+            assert_eq!(keys.count(), count);
         }
-        assert!(!keys.lacks(RecordKey::new(Scope::Profile(1), 0)));
-        keys.start();
-        assert!(keys.lacks(RecordKey::new(Scope::Profile(1), 0)));
+        for key in corners {
+            assert!(!keys.lacks(key), "{key:?}");
+        }
+        assert!(keys.lacks(RecordKey::new(Scope::Profile(1), last_item)));
+        keys.remove(RecordKey::new(Scope::Global, 0));
+        assert_eq!(keys.count(), 5);
+        assert!(keys.lacks(RecordKey::new(Scope::Global, 0)));
+    }
+
+    #[test]
+    fn the_set_covers_every_profile_slot_the_order_keeps() {
+        assert_eq!(PROFILE_SLOTS, Order::SLOTS);
     }
 }

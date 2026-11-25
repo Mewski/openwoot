@@ -7,8 +7,14 @@ use crate::storage::Record;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Count(pub u8);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkedCount(pub u8);
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Revision(pub u32);
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceName(pub device::Name);
 
 impl Record for lighting::Settings {
     const ITEM: u8 = 0x20;
@@ -47,16 +53,26 @@ impl Record for Count {
 
 impl Record for lightbar::Settings {
     const ITEM: u8 = 0x24;
-    const VERSION: u8 = 1;
+    const VERSION: u8 = 2;
 }
 
 impl Record for lightbar::Entries {
     const ITEM: u8 = 0x14;
-    const VERSION: u8 = 1;
+    const VERSION: u8 = 2;
 }
 
 impl Record for switches::Settings {
     const ITEM: u8 = 0x15;
+    const VERSION: u8 = 1;
+}
+
+impl Record for DeviceName {
+    const ITEM: u8 = 0x18;
+    const VERSION: u8 = 1;
+}
+
+impl Record for LinkedCount {
+    const ITEM: u8 = 0x19;
     const VERSION: u8 = 1;
 }
 
@@ -104,6 +120,8 @@ mod tests {
             <switches::Settings as Record>::ITEM,
             <LayoutOverride as Record>::ITEM,
             <Order as Record>::ITEM,
+            <DeviceName as Record>::ITEM,
+            <LinkedCount as Record>::ITEM,
         ]);
     }
 }

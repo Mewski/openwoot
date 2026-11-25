@@ -5,10 +5,9 @@ use std::collections::HashMap;
 use anyhow::{Result, bail};
 use components::Components;
 
-use crate::check::{call_graph::CallGraph, entry_points::EntryPoints};
+use crate::{call_graph::CallGraph, entry_points::EntryPoints};
 
 const EXCEPTION_FRAME: u32 = 108;
-const THREAD_EXECUTOR: &str = "<embassy_executor::platform::thread::Executor>::run";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::check) struct StackBound {
@@ -43,9 +42,10 @@ pub(super) fn bound(graph: &CallGraph<'_>, entry_points: &EntryPoints) -> Result
     let thread_tasks = depths.deepest(&entry_points.thread_tasks)?;
     let key_tasks = depths.deepest(&entry_points.key_tasks)?;
     let start_up = depths.depth(entry_points.reset)?;
-    let executor = graph
-        .nodes_named(|name| name.starts_with(THREAD_EXECUTOR))
-        .into_iter()
+    let executor = entry_points
+        .thread_executors
+        .iter()
+        .copied()
         .try_fold(None, |deepest: Option<u32>, executor| {
             let reach = depths.reach(entry_points.reset, executor)?;
             Ok::<_, anyhow::Error>(match (deepest, reach) {

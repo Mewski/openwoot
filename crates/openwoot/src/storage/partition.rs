@@ -2,13 +2,17 @@ use embedded_storage_async::nor_flash::{
     ErrorType, MultiwriteNorFlash, NorFlash, NorFlashError, NorFlashErrorKind, ReadNorFlash,
 };
 
-use super::nor_layout::SettingsRegion;
+use super::{
+    nor_layout::SettingsRegion,
+    read_ahead::{Plan, ReadAhead},
+};
 
 #[derive(Debug)]
 pub struct Partition<F> {
     flash: F,
     start: u32,
     len: u32,
+    read_ahead: ReadAhead,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -27,6 +31,7 @@ impl<F: NorFlash> Partition<F> {
             flash,
             start: region.start,
             len: region.end - region.start,
+            read_ahead: ReadAhead::new(),
         }
     }
 
@@ -71,6 +76,23 @@ impl<F: NorFlash> ReadNorFlash for Partition<F> {
 
     async fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), Self::Error> {
         let address = self.absolute(offset, bytes.len())?;
+        match self
+            .read_ahead
+            .plan(offset, bytes, self.len, Self::READ_SIZE)
+        {
+            Plan::Served => return Ok(()),
+            Plan::Refill(span) => {
+                let window = self.absolute(span.offset, span.len as usize)?;
+                self.flash
+                    .read(window, self.read_ahead.window(span))
+                    .await
+                    .map_err(PartitionError::Flash)?;
+                if self.read_ahead.complete(span, offset, bytes) {
+                    return Ok(());
+                }
+            }
+            Plan::Direct => {}
+        }
         self.flash
             .read(address, bytes)
             .await
@@ -89,6 +111,7 @@ impl<F: NorFlash> NorFlash for Partition<F> {
     async fn erase(&mut self, from: u32, to: u32) -> Result<(), Self::Error> {
         let len = to.checked_sub(from).ok_or(PartitionError::OutOfBounds)?;
         let start = self.absolute(from, usize::try_from(len).unwrap_or(usize::MAX))?;
+        self.read_ahead.forget();
         self.flash
             .erase(start, start + len)
             .await
@@ -97,6 +120,7 @@ impl<F: NorFlash> NorFlash for Partition<F> {
 
     async fn write(&mut self, offset: u32, bytes: &[u8]) -> Result<(), Self::Error> {
         let address = self.absolute(offset, bytes.len())?;
+        self.read_ahead.forget();
         self.flash
             .write(address, bytes)
             .await

@@ -1,7 +1,7 @@
 use openwoot_protocol::{
     gamepad::{self, Control},
     keys::{self, Action, Distance, Override},
-    lighting::{self, Effect, HueRange, RainbowWave, Rgb},
+    lighting::{self, Effect, HueRange, RainbowWave},
 };
 
 const USAGE_W: u8 = 0x1A;
@@ -47,53 +47,23 @@ impl Preset {
         Self::Custom,
     ];
 
-    pub(super) const fn name(self) -> &'static str {
+    pub(super) const fn title(self) -> &'static str {
         match self {
-            Self::Fps => "FPS game",
-            Self::AnalogMovement => "Analog movement",
-            Self::Racing => "Racing",
-            Self::Typing => "Typing",
-            Self::Custom => "Custom",
+            Self::Fps => "FPS Game Profile",
+            Self::AnalogMovement => "Analog Movement Profile",
+            Self::Racing => "Racing Profile",
+            Self::Typing => "Typing Profile",
+            Self::Custom => "Custom Profile",
         }
     }
 
     pub(super) const fn description(self) -> &'static str {
         match self {
-            Self::Fps => "1 mm actuation, Rapid Trigger and quick WASD for shooters.",
-            Self::AnalogMovement => "WASD drives the left stick for smooth movement.",
-            Self::Racing => "W and S are throttle and brake, A and D steer.",
-            Self::Typing => "1.5 mm actuation without Rapid Trigger under a calm blue wave.",
-            Self::Custom => "A blank profile to set up from scratch.",
-        }
-    }
-
-    pub(super) const fn color(self) -> Rgb {
-        match self {
-            Self::Fps => Rgb {
-                red: 255,
-                green: 64,
-                blue: 64,
-            },
-            Self::AnalogMovement => Rgb {
-                red: 64,
-                green: 160,
-                blue: 255,
-            },
-            Self::Racing => Rgb {
-                red: 255,
-                green: 168,
-                blue: 32,
-            },
-            Self::Typing => Rgb {
-                red: 40,
-                green: 90,
-                blue: 255,
-            },
-            Self::Custom => Rgb {
-                red: 160,
-                green: 120,
-                blue: 255,
-            },
+            Self::Fps => "Quick response times and precise control for shooters.",
+            Self::AnalogMovement => "Smooth, analog-like movement for nuanced character control.",
+            Self::Racing => "Enhanced steering and acceleration control for racing games.",
+            Self::Typing => "Comfort and accuracy for typing and everyday use.",
+            Self::Custom => "A blank slate for customization.",
         }
     }
 

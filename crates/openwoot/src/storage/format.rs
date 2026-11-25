@@ -42,11 +42,8 @@ impl<F: MultiwriteNorFlash> Settings<F> {
             self.format().await?;
             return Ok(Opened::Formatted(FormatReason::Requested));
         }
-        match self.load::<Format>(Scope::Global).await {
-            Ok(Some(format)) if format == CURRENT_FORMAT => {
-                self.index().await;
-                Ok(Opened::Kept)
-            }
+        match self.stored_format().await {
+            Ok(Some(format)) if format == CURRENT_FORMAT => Ok(Opened::Kept),
             Ok(_)
             | Err(Error::Corrupted | Error::TooBig | Error::Unencodable | Error::Internal) => {
                 self.format().await?;
@@ -54,6 +51,26 @@ impl<F: MultiwriteNorFlash> Settings<F> {
             }
             Err(error) => Err(error),
         }
+    }
+
+    async fn stored_format(&mut self) -> Result<Option<Format>, Error> {
+        let key = RecordKey::of::<Format>(Scope::Global);
+        let mut found = None;
+        let indexed = self
+            .index(|stored_key, stored| {
+                if stored_key == key {
+                    found = stored.decode::<Format>();
+                }
+            })
+            .await;
+        match indexed {
+            Ok(()) => return Ok(found),
+            Err(Error::Flash(kind)) => return Err(Error::Flash(kind)),
+            Err(_) => {}
+        }
+        let repaired = self.load::<Format>(Scope::Global).await?;
+        let _ = self.index(|_, _| {}).await;
+        Ok(repaired)
     }
 
     pub async fn factory_reset(&mut self) -> Result<(), Error> {

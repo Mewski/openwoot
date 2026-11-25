@@ -1,29 +1,33 @@
 use anyhow::{Context, Result, bail, ensure};
 
-use super::call_graph::CallGraph;
-use crate::elf::Elf;
+use crate::{call_graph::CallGraph, elf::Elf};
 
 const KEY_TASK: &str = "scanning";
 const TASK_POLL_PREFIX: &str = "<embassy_executor::raw::TaskStorage<";
 const TASK_POLL_SUFFIX: &str = ">>::poll";
+const THREAD_EXECUTOR: &str = "<embassy_executor::platform::thread::Executor>::run";
 const RESET_VECTOR: usize = 1;
+const FIRST_DEVICE_VECTOR: usize = 16;
 const SCAN_VECTORS: [&str; 2] = ["ADC", "ADC0_1"];
 
-pub(super) struct EntryPoints {
-    pub(super) reset: usize,
-    pub(super) handlers: Vec<usize>,
-    pub(super) scan: usize,
-    pub(super) key_tasks: Vec<usize>,
-    pub(super) thread_tasks: Vec<usize>,
+pub(crate) struct EntryPoints {
+    pub(crate) reset: usize,
+    pub(crate) handlers: Vec<usize>,
+    pub(crate) interrupts: Vec<usize>,
+    pub(crate) scan: usize,
+    pub(crate) key_tasks: Vec<usize>,
+    pub(crate) thread_executors: Vec<usize>,
+    pub(crate) thread_tasks: Vec<usize>,
 }
 
 impl EntryPoints {
-    pub(super) fn find(elf: &Elf<'_>, graph: &CallGraph<'_>) -> Result<Self> {
+    pub(crate) fn find(elf: &Elf<'_>, graph: &CallGraph<'_>) -> Result<Self> {
         let vectors = elf
             .section(".vector_table")
             .context("the ELF file has no `.vector_table` section")?;
         let mut reset = None;
         let mut handlers = Vec::new();
+        let mut interrupts = Vec::new();
         let (vectors, _) = vectors.bytes.as_chunks::<4>();
         for (index, vector) in vectors.iter().enumerate().skip(RESET_VECTOR) {
             let address = u32::from_le_bytes(*vector);
@@ -36,8 +40,13 @@ impl EntryPoints {
                 .with_context(|| format!("vector {index} points outside the code"))?;
             if index == RESET_VECTOR {
                 reset = Some(node);
-            } else if !handlers.contains(&node) {
+                continue;
+            }
+            if !handlers.contains(&node) {
                 handlers.push(node);
+            }
+            if index >= FIRST_DEVICE_VECTOR && !interrupts.contains(&node) {
+                interrupts.push(node);
             }
         }
         let reset = reset.context("the vector table has no reset vector")?;
@@ -50,7 +59,7 @@ impl EntryPoints {
              `--emit-relocs`",
             graph.name(reset)
         );
-        let scan = handlers
+        let scan = interrupts
             .iter()
             .copied()
             .find(|&node| SCAN_VECTORS.contains(&graph.name(node)))
@@ -73,8 +82,10 @@ impl EntryPoints {
         Ok(Self {
             reset,
             handlers,
+            interrupts,
             scan,
             key_tasks,
+            thread_executors: graph.nodes_named(|name| name.starts_with(THREAD_EXECUTOR)),
             thread_tasks,
         })
     }

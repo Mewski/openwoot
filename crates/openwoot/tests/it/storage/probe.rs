@@ -13,7 +13,8 @@ pub(crate) struct Probe {
 #[derive(Debug, Default)]
 pub(crate) struct Watch {
     reads: Cell<u32>,
-    failing: Cell<bool>,
+    failing_writes: Cell<bool>,
+    failing_reads: Cell<bool>,
 }
 
 impl Probe {
@@ -29,7 +30,15 @@ impl Probe {
     }
 
     fn writable(&self) -> Result<(), ModelError> {
-        if self.watch.failing.get() {
+        if self.watch.failing_writes.get() {
+            Err(ModelError::PowerCut)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn readable(&self) -> Result<(), ModelError> {
+        if self.watch.failing_reads.get() {
             Err(ModelError::PowerCut)
         } else {
             Ok(())
@@ -43,7 +52,11 @@ impl Watch {
     }
 
     pub(crate) fn fail_writes(&self, failing: bool) {
-        self.failing.set(failing);
+        self.failing_writes.set(failing);
+    }
+
+    pub(crate) fn fail_reads(&self, failing: bool) {
+        self.failing_reads.set(failing);
     }
 }
 
@@ -56,6 +69,7 @@ impl ReadNorFlash for Probe {
 
     async fn read(&mut self, offset: u32, bytes: &mut [u8]) -> Result<(), ModelError> {
         self.watch.reads.set(self.watch.reads.get() + 1);
+        self.readable()?;
         self.nor.read(offset, bytes).await
     }
 

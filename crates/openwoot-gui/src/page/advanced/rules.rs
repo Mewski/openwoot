@@ -92,6 +92,7 @@ mod tests {
             key_rows: 6,
             key_columns: 17,
             profiles: 4,
+            linked_profiles: 0,
             layouts: heapless::Vec::new(),
             lightbar_leds: 0,
             host_signals: false,

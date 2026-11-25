@@ -1,21 +1,21 @@
-use crate::gpio::{OutputType, Pin, Speed};
+use crate::gpio::{Line, Pin};
 
 pub trait ClockPin {
-    fn into_i2c(self);
+    fn into_line(self) -> Line;
 }
 
 pub trait DataPin {
-    fn into_i2c(self);
+    fn into_line(self) -> Line;
 }
 
 impl<Mode> ClockPin for Pin<'B', 6, Mode> {
-    fn into_i2c(self) {
-        let _ = self.into_alternate(OutputType::OpenDrain, Speed::High);
+    fn into_line(self) -> Line {
+        Line::new('B', 6)
     }
 }
 
 impl<Mode> DataPin for Pin<'B', 7, Mode> {
-    fn into_i2c(self) {
-        let _ = self.into_alternate(OutputType::OpenDrain, Speed::High);
+    fn into_line(self) -> Line {
+        Line::new('B', 7)
     }
 }

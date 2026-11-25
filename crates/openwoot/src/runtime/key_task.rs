@@ -132,7 +132,9 @@ impl<M: RawMutex> KeyTask<'_, M> {
                 }
                 if parts.contains(Parts::ACTIVATED) || parts.contains(Parts::PROFILES) {
                     let (count, active) = self.shared.profiles();
+                    let (selected, returning) = self.shared.links();
                     keys.set_profiles(count, active);
+                    keys.link_profiles(selected, returning);
                     if parts.contains(Parts::ACTIVATED) {
                         self.diagnostics.profile_applied(active);
                     }

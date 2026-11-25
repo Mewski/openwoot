@@ -15,6 +15,12 @@ const INSET: f32 = 1.5;
 const WIDTH_UNITS: f32 = 4.5;
 const ROWS: f32 = 4.0;
 const GLYPH_SIZE: f32 = 10.0;
+const CARD_GAP: f32 = 8.0;
+const CARD_INNER_GAP: f32 = 12.0;
+const CARD_TOP: f32 = 12.0;
+const CARD_SIDE: f32 = 4.0;
+const LABEL_SIZE: f32 = 16.0;
+const LABEL_LINE: f32 = 19.2;
 
 pub(in crate::page) const fn name(layout: Layout) -> &'static str {
     match layout {
@@ -34,20 +40,23 @@ pub(super) fn cards(
     let on_choose = Rc::new(on_choose);
     h_flex()
         .w_full()
-        .gap_3()
+        .items_stretch()
+        .gap(px(CARD_GAP))
         .children(layouts.iter().enumerate().map(|(index, layout)| {
             let layout = *layout;
             let chosen = selected == Some(layout);
             let on_choose = on_choose.clone();
-            let hover = theme.tab_active;
+            let hover_background = theme.secondary;
+            let hover_border = theme.secondary_hover;
             v_flex()
                 .id(("layout", index))
                 .flex_1()
                 .items_center()
-                .gap_3()
-                .pt_4()
-                .pb_3()
-                .rounded(theme.radius_lg)
+                .gap(px(CARD_INNER_GAP))
+                .pt(px(CARD_TOP))
+                .px(px(CARD_SIDE))
+                .pb(px(CARD_SIDE))
+                .rounded(theme.radius)
                 .border_1()
                 .border_color(if chosen {
                     theme.primary
@@ -55,18 +64,20 @@ pub(super) fn cards(
                     theme.transparent
                 })
                 .bg(if chosen {
-                    theme.tab_active
+                    theme.secondary
                 } else {
-                    theme.group_box
+                    theme.accent
                 })
                 .when(!chosen, |this| {
-                    this.cursor_pointer().hover(move |style| style.bg(hover))
+                    this.cursor_pointer()
+                        .hover(move |style| style.bg(hover_background).border_color(hover_border))
                 })
                 .child(drawing(layout, cx))
                 .child(
                     div()
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
+                        .text_size(px(LABEL_SIZE))
+                        .line_height(px(LABEL_LINE))
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.foreground)
                         .child(name(layout)),
                 )

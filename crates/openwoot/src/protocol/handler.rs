@@ -5,27 +5,29 @@ use core::{
 
 use embedded_hal_async::delay::DelayNs;
 use openwoot_protocol::{
-    ERROR_KEY, Endpoint, Key, Message, VarKey, Version, WireError,
+    ERROR_KEY, Endpoint, Key, Message, VarKey, Version, WireError, apps,
     configuration::{Rejection, Validate},
     decode_message, encode_message,
     endpoints::{
-        ActivateProfile, CreateProfile, DeleteProfile, EnterUpdateMode, FactoryReset,
-        GetAdvancedKeys, GetCapabilities, GetDefaultKeymap, GetDeviceSettings, GetDiagnostics,
-        GetGamepadMapping, GetGamepadSettings, GetGamepadState, GetGlobalLightbar,
-        GetGlobalSettings, GetHostSignals, GetKeyColors, GetKeyGeometry, GetKeyOverrides,
-        GetKeySettings, GetKeymap, GetLayout, GetLightbar, GetLighting, GetProfileInfo,
-        GetProfileRevision, GetProfiles, GetSensorValues, GetSwitchModels, GetSwitches, GetVersion,
-        LeaveHostControl, MoveProfile, ResetHostColors, ResetHostKeyColor, Restart, Revert, Save,
-        SetAdvancedKeys, SetDeviceSettings, SetGamepadDetection, SetGamepadMapping,
-        SetGamepadSettings, SetGlobalLightbar, SetGlobalSettings, SetHostColors, SetHostKeyColor,
-        SetHostSignals, SetKeyColors, SetKeyOverrides, SetKeyReports, SetKeySettings, SetKeymap,
-        SetLayout, SetLightbar, SetLighting, SetProfileInfo, SetRawScanning, SetSwitches,
-        SwapProfiles,
+        ActivateProfile, CreateProfile, DeleteAppLink, DeleteProfile, EnterUpdateMode,
+        FactoryReset, GetAdvancedKeys, GetAppLink, GetAppLinkCount, GetCapabilities,
+        GetDefaultKeymap, GetDeviceName, GetDeviceSettings, GetDiagnostics, GetGamepadMapping,
+        GetGamepadSettings, GetGamepadState, GetGlobalLightbar, GetGlobalSettings, GetHostSignals,
+        GetKeyColors, GetKeyGeometry, GetKeyOverrides, GetKeySettings, GetKeymap, GetKeymapLink,
+        GetLayout, GetLedFrame, GetLightbar, GetLightbarColors, GetLighting, GetProfileInfo,
+        GetProfileRevision, GetProfileState, GetProfiles, GetSensorValues, GetStorageUsage,
+        GetSwitchModels, GetSwitches, GetVersion, LeaveHostControl, MoveProfile, ResetHostColors,
+        ResetHostKeyColor, ResetHostLightbar, Restart, Revert, Save, SelectLinkedProfile,
+        SetAdvancedKeys, SetAppLink, SetDeviceName, SetDeviceSettings, SetGamepadDetection,
+        SetGamepadMapping, SetGamepadSettings, SetGlobalLightbar, SetGlobalSettings, SetHostColors,
+        SetHostKeyColor, SetHostLightbar, SetHostSignals, SetKeyColors, SetKeyOverrides,
+        SetKeyReports, SetKeySettings, SetKeymap, SetKeymapLink, SetLayout, SetLightbar,
+        SetLighting, SetProfileInfo, SetRawScanning, SetSwitches, SwapProfiles,
     },
-    gamepad,
+    gamepad, host_lighting,
     keys::{self, Layer},
     lightbar,
-    profile::{LayerRef, Slot},
+    profile::{self, Change, LayerRef, Slot},
     stock::Status,
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -289,6 +291,10 @@ async fn keyboard_endpoints<C: Configuration>(
         checked SetDeviceSettings => async |configuration, settings| {
             configuration.set_device_settings(settings).await
         },
+        plain GetDeviceName => async |configuration, ()| configuration.device_name().await,
+        plain SetDeviceName => async |configuration, name| {
+            configuration.set_device_name(name).await
+        },
         plain GetLayout => async |configuration, ()| configuration.layout().await,
         checked SetLayout => async |configuration, layout| configuration.set_layout(layout).await,
         filled GetKeyGeometry => async |configuration, (), keys| {
@@ -302,7 +308,26 @@ async fn keyboard_endpoints<C: Configuration>(
             configuration.set_global_settings(settings).await
         },
         plain GetProfiles => async |configuration, ()| configuration.profiles().await,
-        plain CreateProfile => async |configuration, ()| configuration.create_profile().await,
+        plain CreateProfile => async |configuration, namespace| {
+            configuration.create_profile(namespace).await
+        },
+        checked SelectLinkedProfile => async |configuration, selection| {
+            configuration.select_linked_profile(selection).await
+        },
+        plain GetAppLinkCount => async |configuration, profile: Slot| {
+            profile.check_linked(&configuration.capabilities()?)?;
+            configuration.app_link_count(profile).await
+        },
+        filled GetAppLink => async |configuration, link: apps::LinkRef, value| {
+            check(configuration, &link)?;
+            configuration.app_link(link.profile, link.index, value).await
+        },
+        checked SetAppLink => async |configuration, change| {
+            configuration.set_app_link(change.profile, change.index, &change.link).await
+        },
+        checked DeleteAppLink => async |configuration, link| {
+            configuration.delete_app_link(link.profile, link.index).await
+        },
         checked DeleteProfile => async |configuration, profile| {
             configuration.delete_profile(profile).await
         },
@@ -333,6 +358,7 @@ async fn keyboard_endpoints<C: Configuration>(
         plain Save => async |configuration, ()| configuration.save().await,
         plain Revert => async |configuration, ()| configuration.revert().await,
         plain FactoryReset => async |configuration, ()| configuration.factory_reset().await,
+        plain GetStorageUsage => async |configuration, ()| configuration.storage_usage().await,
     )
 }
 
@@ -364,6 +390,13 @@ async fn profile_endpoints<C: Configuration>(
         },
         checked SetKeymap => async |configuration, change| {
             configuration.set_keymap(change.profile, change.layer, &change.value).await
+        },
+        checked GetKeymapLink => async |configuration, profile| {
+            configuration.keymap_link(profile).await
+        },
+        plain SetKeymapLink => async |configuration, change: Change<bool>| {
+            check(configuration, &change.profile)?;
+            configuration.set_keymap_link(change.profile, change.value).await
         },
         filled GetKeyOverrides => async |configuration, profile: Slot, overrides| {
             check(configuration, &profile)?;
@@ -464,9 +497,37 @@ async fn host_control_endpoints<C: Configuration>(
             host_control?.reset_colors().await;
             Ok(())
         },
+        checked SetHostLightbar => async |_, colors| {
+            host_control?.set_lightbar(&colors).await;
+            Ok(())
+        },
+        plain ResetHostLightbar => async |configuration, ()| {
+            require_lightbar(configuration)?;
+            host_control?.reset_lightbar().await;
+            Ok(())
+        },
         plain LeaveHostControl => async |_, ()| {
             host_control?.leave().await;
             Ok(())
+        },
+        filled GetLedFrame => async |_, (), frame| {
+            host_control?.read_frame(frame).await;
+            Ok(())
+        },
+        filled GetLightbarColors => async |configuration, (), colors| {
+            require_lightbar(configuration)?;
+            host_control?.read_lightbar(colors).await;
+            Ok(())
+        },
+        plain GetProfileState => async |configuration, ()| {
+            let lighting = host_control?;
+            let active = configuration.profiles().await?.active;
+            let leds = lighting.led_state().await;
+            Ok(profile::State {
+                active,
+                host_control: leds.host_control,
+                idle_off: leds.idle_off,
+            })
         },
     )
 }
@@ -582,6 +643,14 @@ fn check<C: Configuration>(configuration: &C, request: &impl Validate) -> Result
     Ok(request.validate(&configuration.capabilities()?)?)
 }
 
+fn require_lightbar<C: Configuration>(configuration: &C) -> Result<(), Rejection> {
+    if configuration.capabilities()?.lightbar_leds == 0 {
+        Err(Rejection::Unsupported)
+    } else {
+        Ok(())
+    }
+}
+
 trait Empty {
     fn empty() -> Self;
 }
@@ -614,6 +683,24 @@ impl Empty for lightbar::Settings {
             entries: heapless::Vec::new(),
             use_global: false,
             brightness: None,
+        }
+    }
+}
+
+impl Empty for apps::Link {
+    fn empty() -> Self {
+        Self {
+            name: apps::Text::new(),
+            app: apps::App::Steam(0),
+        }
+    }
+}
+
+impl Empty for host_lighting::Frame {
+    fn empty() -> Self {
+        Self {
+            keys: heapless::Vec::new(),
+            lightbar: heapless::Vec::new(),
         }
     }
 }

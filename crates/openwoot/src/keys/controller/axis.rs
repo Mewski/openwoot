@@ -133,7 +133,7 @@ const fn bottomed_out(travel: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use openwoot_protocol::gamepad::{CurvePoint, Normalization};
+    use openwoot_protocol::gamepad::{CurvePoint, Normalization, StickBias};
 
     use super::*;
 
@@ -158,7 +158,7 @@ mod tests {
         ],
         normalization: Normalization::Circular,
         single_direction_axes: true,
-        left_stick_up_bias: None,
+        left_stick_up_bias: StickBias::DISABLED,
     };
 
     fn combine(positive: u16, negative: u16, before: AxisPriority) -> (f32, AxisPriority) {

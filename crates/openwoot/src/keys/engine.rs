@@ -168,6 +168,10 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         self.profiles.set(count, active);
     }
 
+    pub const fn link_profiles(&mut self, selected: Option<u8>, returning: u8) {
+        self.profiles.link(selected, returning);
+    }
+
     pub const fn set_tuning(&mut self, tuning: Tuning) {
         self.tuning = tuning;
     }

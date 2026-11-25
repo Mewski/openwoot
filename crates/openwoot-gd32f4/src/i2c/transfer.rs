@@ -103,7 +103,7 @@ impl<'t> Transfer<'t> {
         .await
     }
 
-    pub(super) async fn stop(&mut self) {
+    pub(super) async fn stop(&mut self) -> Result<(), Error> {
         let i2c = self.i2c;
         set_bits(i2c.ctl0(), CTL0_STOP);
         self.release_dma();
@@ -111,6 +111,7 @@ impl<'t> Transfer<'t> {
         while read_bits(i2c.ctl0()) & CTL0_STOP != 0 {
             yield_now().await;
         }
+        Ok(())
     }
 
     fn release_dma(&self) {

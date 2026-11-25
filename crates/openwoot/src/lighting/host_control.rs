@@ -7,19 +7,30 @@ use embassy_sync::{
     blocking_mutex::{Mutex, raw::CriticalSectionRawMutex},
     channel::Channel,
 };
-use openwoot_protocol::lighting::{KeyColors, Rgb};
+use heapless::Vec;
+use openwoot_protocol::{
+    configuration::MAX_KEYS,
+    host_lighting::Frame,
+    lightbar::{self, MAX_LEDS},
+    lighting::{KeyColors, Rgb},
+};
 
 use super::{
     Lighting,
     hooks::{Lightbar, Signals},
+    readback::{LedState, Readback, Subject},
 };
 use crate::keys::Key;
 
 const REQUEST_CAPACITY: usize = 16;
 
+type Mailbox<const N: usize> = Mutex<CriticalSectionRawMutex, RefCell<Vec<Rgb, N>>>;
+
 pub struct HostControl {
     requests: Channel<CriticalSectionRawMutex, Request, REQUEST_CAPACITY>,
-    colors: Mutex<CriticalSectionRawMutex, RefCell<KeyColors>>,
+    keys: Mailbox<MAX_KEYS>,
+    lightbar: Mailbox<MAX_LEDS>,
+    readback: Readback,
     session_ended: AtomicBool,
 }
 
@@ -30,6 +41,8 @@ enum Request {
     SetColors,
     ResetKeyColor(Key),
     ResetColors,
+    SetLightbar,
+    ResetLightbar,
     Leave,
 }
 
@@ -38,7 +51,9 @@ impl HostControl {
     pub const fn new() -> Self {
         Self {
             requests: Channel::new(),
-            colors: Mutex::new(RefCell::new(KeyColors::new())),
+            keys: Mutex::new(RefCell::new(KeyColors::new())),
+            lightbar: Mutex::new(RefCell::new(lightbar::Colors::new())),
+            readback: Readback::new(),
             session_ended: AtomicBool::new(false),
         }
     }
@@ -67,14 +82,22 @@ impl HostControl {
                     lighting.set_host_key_color(key, color, now_ms);
                 }
                 Request::SetColors => {
-                    let colors = self.colors.lock(|colors| colors.borrow().clone());
+                    let mut colors = KeyColors::new();
+                    load(&self.keys, &mut colors);
                     lighting.set_host_colors(&colors, now_ms);
                 }
                 Request::ResetKeyColor(key) => lighting.reset_host_key_color(key),
                 Request::ResetColors => lighting.reset_host_colors(),
+                Request::SetLightbar => {
+                    let mut colors = lightbar::Colors::new();
+                    load(&self.lightbar, &mut colors);
+                    lighting.set_host_lightbar(&colors);
+                }
+                Request::ResetLightbar => lighting.reset_host_lightbar(),
                 Request::Leave => lighting.leave_host_control(now_ms),
             }
         }
+        self.answer_readback(lighting);
     }
 
     pub(crate) async fn enter(&self) {
@@ -91,11 +114,7 @@ impl HostControl {
         {
             let mut filled = KeyColors::new();
             fill(&mut filled);
-            self.colors.lock(|colors| {
-                let mut colors = colors.borrow_mut();
-                colors.clear();
-                let _ = colors.extend_from_slice(&filled);
-            });
+            store(&self.keys, &filled);
         }
         self.requests.send(Request::SetColors).await;
     }
@@ -108,8 +127,32 @@ impl HostControl {
         self.requests.send(Request::ResetColors).await;
     }
 
+    pub(crate) async fn set_lightbar(&self, colors: &[Rgb]) {
+        store(&self.lightbar, colors);
+        self.requests.send(Request::SetLightbar).await;
+    }
+
+    pub(crate) async fn reset_lightbar(&self) {
+        self.requests.send(Request::ResetLightbar).await;
+    }
+
     pub(crate) async fn leave(&self) {
         self.requests.send(Request::Leave).await;
+    }
+
+    pub(crate) async fn read_frame(&self, frame: &mut Frame) {
+        self.readback.read(Subject::Frame).await;
+        load(&self.keys, &mut frame.keys);
+        load(&self.lightbar, &mut frame.lightbar);
+    }
+
+    pub(crate) async fn read_lightbar(&self, colors: &mut lightbar::Colors) {
+        self.readback.read(Subject::Lightbar).await;
+        load(&self.lightbar, colors);
+    }
+
+    pub(crate) async fn led_state(&self) -> LedState {
+        self.readback.read(Subject::State).await
     }
 
     pub(crate) fn end_session(&self) {
@@ -119,6 +162,44 @@ impl HostControl {
     #[must_use]
     pub(crate) fn take_session_end(&self) -> bool {
         self.session_ended.swap(false, Ordering::AcqRel)
+    }
+
+    fn answer_readback<
+        H,
+        const ROWS: usize,
+        const COLUMNS: usize,
+        const PAGES: usize,
+        const LENGTH: usize,
+    >(
+        &self,
+        lighting: &Lighting<H, ROWS, COLUMNS, PAGES, LENGTH>,
+    ) where
+        H: Lightbar + Signals,
+    {
+        let Some(subject) = self.readback.requested() else {
+            return;
+        };
+        if subject == Subject::Frame {
+            self.keys.lock(|cell| {
+                if let Ok(mut keys) = cell.try_borrow_mut() {
+                    lighting.shown_keys(&mut keys);
+                }
+            });
+        }
+        if subject != Subject::State {
+            self.lightbar.lock(|cell| {
+                if let Ok(mut colors) = cell.try_borrow_mut() {
+                    lighting.shown_lightbar(&mut colors);
+                }
+            });
+        }
+        self.readback.publish(
+            subject,
+            LedState {
+                host_control: lighting.host_control() || lighting.host_lightbar(),
+                idle_off: lighting.is_idle_off(),
+            },
+        );
     }
 }
 
@@ -135,4 +216,22 @@ impl core::fmt::Debug for HostControl {
             .field("pending", &self.requests.len())
             .finish_non_exhaustive()
     }
+}
+
+fn store<const N: usize>(mailbox: &Mailbox<N>, colors: &[Rgb]) {
+    mailbox.lock(|cell| {
+        if let Ok(mut shared) = cell.try_borrow_mut() {
+            shared.clear();
+            let _ = shared.extend_from_slice(colors);
+        }
+    });
+}
+
+fn load<const N: usize>(mailbox: &Mailbox<N>, colors: &mut Vec<Rgb, N>) {
+    mailbox.lock(|cell| {
+        if let Ok(shared) = cell.try_borrow() {
+            colors.clear();
+            let _ = colors.extend_from_slice(&shared);
+        }
+    });
 }

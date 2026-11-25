@@ -1,12 +1,16 @@
+use std::{cell::Cell, rc::Rc};
+
 use gpui_kit::{
-    AnyElement, AnyView, App, AppContext as _, Context, Div, ElementId, FontWeight,
-    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Render, SharedString,
-    Stateful, StatefulInteractiveElement as _, Styled as _, Window,
+    AnyElement, App, AppContext as _, Context, Div, ElementId, FontWeight, Hsla,
+    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Pixels, Render,
+    RenderOnce, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, WeakEntity,
+    Window,
     assets::IconName as Catalog,
-    component::{ActiveTheme as _, Icon, Sizable as _, h_flex, tooltip::Tooltip, v_flex},
+    canvas,
+    component::{ActiveTheme as _, Icon, h_flex, v_flex},
     div,
     prelude::FluentBuilder as _,
-    px,
+    px, transparent_black,
 };
 use openwoot_protocol::{lighting::Rgb, profile::Slot};
 
@@ -14,21 +18,49 @@ use super::{ProfilesPage, icon::avatar};
 use crate::{
     color_picker::hsla_of,
     dropdown::{Dropdown, Item},
+    panel::{self, ActionButton, Tip},
+    theme,
 };
 
 const CARD_HEIGHT: f32 = 72.0;
-const CARD_AVATAR: f32 = 44.0;
-const PREVIEW_WIDTH: f32 = 300.0;
-const PREVIEW_HEIGHT: f32 = 60.0;
-const PREVIEW_AVATAR: f32 = 34.0;
-const MENU_WIDTH: f32 = 220.0;
-const MENU_BUTTON: f32 = 28.0;
+const CARD_PADDING_X: f32 = 20.0;
+const CARD_GAP: f32 = 8.0;
+const RADIUS: f32 = 8.0;
+const SMALL_RADIUS: f32 = 6.0;
+const ACTIVE_RING: f32 = 1.0;
+const DROP_RING: f32 = 2.0;
+const LIFTED_RING: f32 = 1.0;
+const CARD_AVATAR: f32 = 48.0;
+const AVATAR_GAP: f32 = 12.0;
+const NAME_GAP: f32 = 8.0;
+const NAME_TEXT: f32 = 16.0;
+const NAME_LINE: f32 = 19.2;
+const SLOT_BADGE: f32 = 20.0;
+const SLOT_INSET: f32 = 3.0;
+const SMALL_TEXT: f32 = 12.0;
+const BADGE_LINE: f32 = 18.0;
+const MENU_WIDTH: f32 = 224.0;
 const CHIP_HEIGHT: f32 = 20.0;
-const TOOLTIP_WIDTH: f32 = 360.0;
+const CHIP_PADDING_X: f32 = 10.0;
+const CHIP_GAP: f32 = 4.0;
+const CHIP_TEXT: f32 = 12.8;
+const COUNT_PADDING: f32 = 4.0;
+const COUNT_GAP: f32 = 4.0;
+const TAG_PADDING_X: f32 = 4.0;
+const SECTION_PADDING: f32 = 16.0;
+const SECTION_GAP: f32 = 20.0;
+const HEADER_GAP: f32 = 8.0;
+const TITLE_TEXT: f32 = 20.0;
+const TITLE_LINE: f32 = 24.0;
+const GRID_COLUMN_GAP: f32 = 16.0;
+const GRID_ROW_GAP: f32 = 12.0;
+const APPS_GAP: f32 = 4.0;
+const APPS_ICON: f32 = 16.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Origin {
     Onboard(Slot),
+    Linked(Slot),
     Inactive(usize),
 }
 
@@ -36,116 +68,167 @@ pub(super) enum Origin {
 pub(super) enum Place {
     Onboard(Slot),
     NewOnboard,
+    Linked,
+    NewLinked,
     Inactive,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(super) struct Moving {
-    pub(super) origin: Origin,
-    name: SharedString,
-    color: Rgb,
-    icon: u8,
-}
-
-pub(super) struct Card {
-    pub(super) origin: Origin,
+#[derive(Debug, Clone)]
+pub(super) struct Face {
     pub(super) name: SharedString,
     pub(super) color: Rgb,
     pub(super) icon: u8,
     pub(super) number: Option<u8>,
+    pub(super) shortcut: Vec<SharedString>,
+    pub(super) apps: Option<SharedString>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct Moving {
+    pub(super) origin: Origin,
+    face: Face,
+    width: Rc<Cell<Pixels>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Status {
+    Ready,
+    Lifted,
+    Busy,
+}
+
+pub(super) struct Card {
+    pub(super) origin: Origin,
+    pub(super) face: Face,
     pub(super) active: bool,
     pub(super) default: bool,
-    pub(super) shortcut: Vec<SharedString>,
     pub(super) menu: Vec<(Item, super::Command)>,
-    pub(super) busy: bool,
+    pub(super) status: Status,
+}
+
+#[derive(IntoElement)]
+pub(super) struct Tipped {
+    element: Stateful<Div>,
+    key: ElementId,
+    tip: Tip,
+    beside: bool,
+}
+
+impl Origin {
+    const fn place(self) -> Place {
+        match self {
+            Self::Onboard(slot) => Place::Onboard(slot),
+            Self::Linked(_) => Place::Linked,
+            Self::Inactive(_) => Place::Inactive,
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Self::Onboard(slot) | Self::Linked(slot) => usize::from(slot.index()),
+            Self::Inactive(index) => index,
+        }
+    }
+}
+
+impl Place {
+    pub(super) fn accepts(self, origin: Origin) -> bool {
+        match (origin, self) {
+            (Origin::Onboard(from), Self::Onboard(to)) => from != to,
+            (Origin::Onboard(_), Self::Inactive | Self::NewLinked)
+            | (Origin::Inactive(_), Self::Onboard(_) | Self::NewOnboard | Self::NewLinked)
+            | (Origin::Linked(_), Self::Inactive | Self::NewOnboard) => true,
+            _ => false,
+        }
+    }
 }
 
 impl Card {
     pub(super) fn render(self, cx: &Context<ProfilesPage>) -> Stateful<Div> {
         let theme = cx.theme();
         let origin = self.origin;
-        let id: ElementId = match origin {
-            Origin::Onboard(slot) => ("onboard-profile", usize::from(slot.get())).into(),
-            Origin::Inactive(index) => ("inactive-profile", index).into(),
-        };
-        let place = match origin {
-            Origin::Onboard(slot) => Place::Onboard(slot),
-            Origin::Inactive(_) => Place::Inactive,
-        };
+        let place = origin.place();
+        let width = Rc::new(Cell::new(px(0.0)));
+        let busy = self.status == Status::Busy;
         let moving = Moving {
             origin,
-            name: self.name.clone(),
-            color: self.color,
-            icon: self.icon,
+            face: self.face.clone(),
+            width: Rc::clone(&width),
         };
-        let border = if self.active {
-            theme.primary
-        } else {
-            theme.secondary
-        };
-        let hover = theme.secondary_hover;
+        let page = cx.entity().downgrade();
+        let hover = theme.secondary;
         let primary = theme.primary;
         h_flex()
-            .id(id)
+            .id(("profile-card", origin.index()))
             .relative()
             .w_full()
             .h(px(CARD_HEIGHT))
-            .pl_5()
-            .pr_2()
-            .gap_3()
-            .rounded(theme.radius_lg)
-            .bg(theme.secondary)
-            .border_1()
-            .border_color(border)
-            .when(!self.active, |this| {
-                this.hover(move |style| style.border_color(hover))
+            .px(px(CARD_PADDING_X))
+            .gap(px(CARD_GAP))
+            .rounded(px(RADIUS))
+            .bg(if self.active {
+                theme.secondary
+            } else {
+                theme.accent
             })
-            .when(!self.busy, |this| {
-                this.on_drag(moving, |moving, _, _, cx| cx.new(|_| moving.clone()))
-                    .drag_over::<Moving>(move |style, _, _, _| style.border_color(primary))
-                    .on_drop(cx.listener(move |page, moving: &Moving, window, cx| {
-                        page.drop_profile(moving, place, window, cx);
-                    }))
+            .when(self.status == Status::Lifted, gpui_kit::Styled::invisible)
+            .when(!self.active, |this| {
+                this.hover(move |style| style.bg(hover))
+            })
+            .child(
+                canvas(
+                    move |bounds, _, _| width.set(bounds.size.width),
+                    |_, (), _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .when(self.active, |this| this.child(ring(ACTIVE_RING, primary)))
+            .when(!busy, |this| {
+                this.on_drag(moving, move |moving, _, _, cx| {
+                    page.update(cx, |page, cx| page.lift(moving.origin, cx))
+                        .ok();
+                    cx.new(|_| moving.clone())
+                })
+                .drag_over::<Moving>(move |style, moving, _, _| {
+                    if place.accepts(moving.origin) {
+                        style.bg(hover)
+                    } else {
+                        style
+                    }
+                })
+                .on_drop(cx.listener(move |page, moving: &Moving, window, cx| {
+                    page.drop_profile(moving, place, window, cx);
+                }))
+                .child(
+                    ring(DROP_RING, transparent_black())
+                        .border_dashed()
+                        .drag_over::<Moving>(move |style, moving, _, _| {
+                            if place.accepts(moving.origin) {
+                                style.border_color(primary)
+                            } else {
+                                style
+                            }
+                        }),
+                )
             })
             .map(|this| match origin {
-                Origin::Onboard(slot) if !self.active && !self.busy => this
+                Origin::Onboard(slot) | Origin::Linked(slot) if !self.active && !busy => this
                     .cursor_pointer()
                     .on_click(cx.listener(move |page, _, _, cx| {
                         page.activate(slot, cx);
                     })),
-                _ if !self.busy => this.cursor_grab(),
                 _ => this,
             })
-            .children(self.number.map(|number| {
-                div()
-                    .absolute()
-                    .top(px(4.0))
-                    .left(px(4.0))
-                    .px_1()
-                    .rounded(px(3.0))
-                    .bg(theme.group_box)
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(SharedString::from((u16::from(number) + 1).to_string()))
-            }))
-            .child(avatar(hsla_of(self.color), self.icon, px(CARD_AVATAR), cx))
+            .children(self.face.number.map(|number| slot_badge(number, cx)))
+            .child(identity(&self.face, true, cx))
             .child(
                 h_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_2()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_base()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(self.name.clone()),
-                    )
-                    .children(shortcut(&self.shortcut, origin, cx)),
+                    .flex_none()
+                    .gap(px(CARD_GAP))
+                    .children(self.default.then(|| default_tag(cx)))
+                    .child(menu(origin, self.menu, busy, cx)),
             )
-            .children(self.default.then(|| default_tag(cx)))
-            .child(menu(origin, self.menu, self.busy, cx))
     }
 }
 
@@ -153,29 +236,16 @@ impl Render for Moving {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         h_flex()
-            .w(px(PREVIEW_WIDTH))
-            .h(px(PREVIEW_HEIGHT))
-            .px_4()
-            .gap_3()
-            .rounded(theme.radius_lg)
-            .bg(theme.secondary)
-            .border_1()
-            .border_color(theme.primary)
-            .shadow_lg()
-            .opacity(0.92)
-            .child(avatar(
-                hsla_of(self.color),
-                self.icon,
-                px(PREVIEW_AVATAR),
-                cx,
-            ))
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(self.name.clone()),
-            )
+            .relative()
+            .w(self.width.get())
+            .h(px(CARD_HEIGHT))
+            .px(px(CARD_PADDING_X))
+            .gap(px(CARD_GAP))
+            .rounded(px(RADIUS))
+            .bg(theme::palette().tooltip)
+            .child(ring(LIFTED_RING, theme.secondary_active))
+            .children(self.face.number.map(|number| slot_badge(number, cx)))
+            .child(identity(&self.face, false, cx))
     }
 }
 
@@ -186,152 +256,266 @@ pub(super) fn drop_zone(
 ) -> Stateful<Div> {
     let theme = cx.theme();
     let primary = theme.primary;
-    let highlight = theme.primary.opacity(0.08);
     h_flex()
         .id(id)
         .w_full()
         .h(px(CARD_HEIGHT))
+        .px(px(CARD_PADDING_X))
         .justify_center()
-        .rounded(theme.radius_lg)
+        .rounded(px(RADIUS))
         .border_2()
         .border_dashed()
         .border_color(theme.border)
-        .text_sm()
+        .text_size(px(NAME_TEXT))
+        .line_height(px(NAME_LINE))
+        .font_weight(FontWeight::SEMIBOLD)
         .text_color(theme.muted_foreground)
-        .child("Drag & drop a profile here")
-        .drag_over::<Moving>(move |style, _, _, _| style.border_color(primary).bg(highlight))
+        .child(if place == Place::NewLinked {
+            "Drag & drop a profile here to link it"
+        } else {
+            "Drag & drop a profile here"
+        })
+        .drag_over::<Moving>(move |style, moving, _, _| {
+            if place.accepts(moving.origin) {
+                style.border_color(primary).text_color(primary)
+            } else {
+                style
+            }
+        })
         .on_drop(cx.listener(move |page, moving: &Moving, window, cx| {
             page.drop_profile(moving, place, window, cx);
         }))
 }
 
 pub(super) fn section(cx: &App) -> Div {
-    let theme = cx.theme();
     v_flex()
         .w_full()
-        .gap_4()
-        .p_6()
-        .rounded(theme.radius_lg)
-        .bg(theme.group_box)
+        .gap(px(SECTION_GAP))
+        .p(px(SECTION_PADDING))
+        .rounded(px(RADIUS))
+        .bg(cx.theme().sidebar)
 }
 
 pub(super) fn section_header(
     title: &'static str,
     help: &'static str,
-    count: Option<(SharedString, SharedString)>,
+    count: Option<(usize, usize, SharedString)>,
     cx: &App,
 ) -> Div {
-    let theme = cx.theme();
+    let owner = SharedString::from(title);
     h_flex()
-        .gap_2()
+        .gap(px(HEADER_GAP))
         .child(
             div()
-                .text_lg()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.foreground)
+                .text_size(px(TITLE_TEXT))
+                .line_height(px(TITLE_LINE))
+                .font_weight(FontWeight::BOLD)
+                .text_color(cx.theme().group_box_foreground)
                 .child(title),
         )
-        .child(
-            div()
-                .id(SharedString::from(format!("help-{title}")))
-                .text_color(theme.muted_foreground)
-                .child(Icon::new(Catalog::CircleQuestionMark).small())
-                .tooltip(tip(help)),
-        )
-        .children(count.map(|(text, tooltip)| {
-            div()
-                .id(SharedString::from(format!("count-{title}")))
-                .px_1p5()
-                .h(px(CHIP_HEIGHT))
-                .flex()
-                .items_center()
-                .rounded(px(4.0))
-                .bg(theme.secondary)
-                .text_xs()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.muted_foreground)
-                .child(text)
-                .tooltip(move |window, cx| {
-                    Tooltip::new(tooltip.clone())
-                        .max_w(px(TOOLTIP_WIDTH))
-                        .build(window, cx)
-                })
+        .child(panel::help(&owner, SharedString::from(help), cx))
+        .children(count.map(|(used, capacity, tooltip)| {
+            tipped(
+                count_chip(used, capacity, cx).id("profile-count"),
+                "profile-count-tip",
+                Tip::Text(tooltip),
+            )
         }))
 }
 
-pub(super) fn grid(cells: Vec<AnyElement>) -> Div {
-    let mut rows = v_flex().w_full().gap_3();
+pub(super) fn count_chip(used: usize, capacity: usize, cx: &App) -> Div {
+    let theme = cx.theme();
+    h_flex()
+        .flex_none()
+        .h(px(CHIP_HEIGHT))
+        .p(px(COUNT_PADDING))
+        .gap(px(COUNT_GAP))
+        .rounded(px(SMALL_RADIUS))
+        .bg(theme.secondary)
+        .text_size(px(SMALL_TEXT))
+        .line_height(px(SMALL_TEXT))
+        .text_color(theme.sidebar_foreground)
+        .child(
+            div()
+                .font_weight(FontWeight::BOLD)
+                .text_color(theme.group_box_foreground)
+                .child(SharedString::from(used.to_string())),
+        )
+        .child("/")
+        .child(SharedString::from(capacity.to_string()))
+}
+
+pub(super) fn grid(
+    id: &'static str,
+    cells: Vec<AnyElement>,
+    mut trailing: Option<AnyElement>,
+) -> Stateful<Div> {
+    let mut rows = v_flex().id(id).w_full().gap(px(GRID_ROW_GAP));
     let mut cells = cells.into_iter();
     while let Some(first) = cells.next() {
-        let second = cells.next();
+        let second = cells.next().or_else(|| trailing.take());
         rows = rows.child(
             h_flex()
                 .w_full()
-                .gap_3()
+                .gap(px(GRID_COLUMN_GAP))
                 .child(div().flex_1().min_w_0().child(first))
                 .child(div().flex_1().min_w_0().children(second)),
         );
     }
-    rows
+    rows.children(trailing)
 }
 
-fn shortcut(chips: &[SharedString], origin: Origin, cx: &App) -> Option<Stateful<Div>> {
-    let Origin::Onboard(slot) = origin else {
-        return None;
-    };
-    if chips.is_empty() {
+fn ring(width: f32, color: Hsla) -> Div {
+    div()
+        .absolute()
+        .top(px(-width))
+        .left(px(-width))
+        .right(px(-width))
+        .bottom(px(-width))
+        .rounded(px(RADIUS + width))
+        .border(px(width))
+        .border_color(color)
+}
+
+fn slot_badge(number: u8, cx: &App) -> Div {
+    let theme = cx.theme();
+    div()
+        .absolute()
+        .top(px(SLOT_INSET))
+        .left(px(SLOT_INSET))
+        .size(px(SLOT_BADGE))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(RADIUS))
+        .bg(theme.secondary)
+        .text_size(px(SMALL_TEXT))
+        .line_height(px(BADGE_LINE))
+        .font_weight(FontWeight::BOLD)
+        .text_color(theme.group_box_foreground)
+        .child(SharedString::from((u16::from(number) + 1).to_string()))
+}
+
+fn identity(face: &Face, interactive: bool, cx: &App) -> Div {
+    let theme = cx.theme();
+    let name = h_flex()
+        .w_full()
+        .min_w_0()
+        .gap(px(NAME_GAP))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_size(px(NAME_TEXT))
+                .line_height(px(NAME_LINE))
+                .font_weight(FontWeight::BOLD)
+                .text_color(theme.foreground)
+                .child(face.name.clone()),
+        )
+        .children(shortcut(face, interactive, cx));
+    h_flex()
+        .flex_1()
+        .min_w_0()
+        .gap(px(AVATAR_GAP))
+        .child(avatar(hsla_of(face.color), face.icon, px(CARD_AVATAR), cx))
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .child(name)
+                .children(face.apps.clone().map(|apps| {
+                    h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .gap(px(APPS_GAP))
+                        .text_color(theme.muted_foreground)
+                        .child(Icon::new(Catalog::Link).flex_none().size(px(APPS_ICON)))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(NAME_TEXT))
+                                .line_height(px(NAME_LINE))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(apps),
+                        )
+                })),
+        )
+}
+
+fn shortcut(face: &Face, interactive: bool, cx: &App) -> Option<AnyElement> {
+    if face.shortcut.is_empty() {
         return None;
     }
     let theme = cx.theme();
-    Some(
-        h_flex()
-            .id(("profile-shortcut", usize::from(slot.get())))
+    let chips = h_flex()
+        .flex_none()
+        .gap(px(CHIP_GAP))
+        .children(face.shortcut.iter().map(|chip| {
+            div()
+                .flex_none()
+                .px(px(CHIP_PADDING_X))
+                .h(px(CHIP_HEIGHT))
+                .flex()
+                .items_center()
+                .rounded(px(RADIUS))
+                .bg(theme.secondary)
+                .font_family(theme.mono_font_family.clone())
+                .text_size(px(CHIP_TEXT))
+                .font_weight(FontWeight::BOLD)
+                .text_color(theme.foreground)
+                .whitespace_nowrap()
+                .child(chip.clone())
+        }));
+    Some(if interactive {
+        tipped(
+            chips.id("profile-shortcut"),
+            "profile-shortcut-tip",
+            Tip::Help {
+                title: "Onboard Profile Shortcuts".into(),
+                text: "Use this shortcut to quickly swap to this profile.".into(),
+            },
+        )
+        .into_any_element()
+    } else {
+        chips.into_any_element()
+    })
+}
+
+fn default_tag(cx: &App) -> Tipped {
+    let theme = cx.theme();
+    tipped(
+        div()
+            .id("default-profile")
             .flex_none()
-            .gap_1()
-            .children(chips.iter().map(|chip| {
-                div()
-                    .px_1p5()
-                    .h(px(CHIP_HEIGHT))
-                    .flex()
-                    .items_center()
-                    .rounded(px(4.0))
-                    .bg(theme.group_box)
-                    .text_xs()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.muted_foreground)
-                    .child(chip.clone())
-            }))
-            .tooltip(tip(
-                "Shortcut that switches to this profile. Change it on the Remap page.",
-            )),
+            .px(px(TAG_PADDING_X))
+            .h(px(CHIP_HEIGHT))
+            .flex()
+            .items_center()
+            .rounded(px(SMALL_RADIUS))
+            .bg(theme.primary)
+            .text_size(px(SMALL_TEXT))
+            .font_weight(FontWeight::BOLD)
+            .text_color(theme.primary_foreground)
+            .child("DEFAULT"),
+        "default-profile-tip",
+        Tip::Text("The Mode key returns to this profile".into()),
     )
 }
 
-fn default_tag(cx: &App) -> Stateful<Div> {
-    let theme = cx.theme();
-    div()
-        .id("default-profile")
-        .flex_none()
-        .px_1p5()
-        .h(px(CHIP_HEIGHT))
-        .flex()
-        .items_center()
-        .rounded(px(4.0))
-        .bg(theme.primary)
-        .text_xs()
-        .font_weight(FontWeight::BOLD)
-        .text_color(theme.primary_foreground)
-        .child("DEFAULT")
-        .tooltip(tip(
-            "The Mode key returns to this profile, and it cannot be deleted. Any profile moved to the first slot becomes the default.",
-        ))
+pub(super) fn tipped(element: Stateful<Div>, key: impl Into<ElementId>, tip: Tip) -> Tipped {
+    Tipped {
+        element,
+        key: key.into(),
+        tip,
+        beside: false,
+    }
 }
 
-fn tip(text: &'static str) -> impl Fn(&mut Window, &mut App) -> AnyView {
-    move |window, cx| {
-        Tooltip::new(text)
-            .max_w(px(TOOLTIP_WIDTH))
-            .build(window, cx)
+pub(super) fn tipped_beside(element: Stateful<Div>, key: impl Into<ElementId>, tip: Tip) -> Tipped {
+    Tipped {
+        beside: true,
+        ..tipped(element, key, tip)
     }
 }
 
@@ -341,47 +525,46 @@ fn menu(
     busy: bool,
     cx: &Context<ProfilesPage>,
 ) -> Div {
-    let page = cx.entity().downgrade();
-    let id: ElementId = match origin {
-        Origin::Onboard(slot) => ("onboard-menu", usize::from(slot.get())).into(),
-        Origin::Inactive(index) => ("inactive-menu", index).into(),
-    };
-    let (items, commands): (Vec<Item>, Vec<super::Command>) = entries.into_iter().unzip();
     div()
         .flex_none()
-        .w(px(MENU_BUTTON))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(
-            Dropdown::new(id)
-                .align_end()
-                .menu_width(px(MENU_WIDTH))
-                .disabled(busy)
-                .items(items)
-                .on_select(move |index, window, cx| {
-                    if let Some(command) = commands.get(index).copied() {
-                        page.update(cx, |page, cx| page.command(origin, command, window, cx))
-                            .ok();
-                    }
-                })
-                .trigger(kebab_face),
-        )
+        .child(options(origin, entries, busy, cx.entity().downgrade()))
 }
 
-fn kebab_face(open: bool, cx: &App) -> AnyElement {
-    let theme = cx.theme();
-    let hover = theme.secondary_hover;
-    div()
-        .size(px(MENU_BUTTON))
-        .rounded(theme.radius)
-        .flex()
-        .items_center()
-        .justify_center()
-        .when(open, |this| this.bg(hover))
-        .hover(move |style| style.bg(hover))
-        .child(
-            Icon::new(Catalog::EllipsisVertical)
-                .small()
-                .text_color(theme.muted_foreground),
-        )
+pub(super) fn options(
+    origin: Origin,
+    entries: Vec<(Item, super::Command)>,
+    busy: bool,
+    page: WeakEntity<ProfilesPage>,
+) -> Dropdown {
+    let (items, commands): (Vec<Item>, Vec<super::Command>) = entries.into_iter().unzip();
+    Dropdown::new(("profile-menu", origin.index()))
+        .menu_width(px(MENU_WIDTH))
+        .disabled(busy)
+        .items(items)
+        .on_select(move |index, window, cx| {
+            if let Some(command) = commands.get(index).copied() {
+                page.update(cx, |page, cx| page.command(origin, command, window, cx))
+                    .ok();
+            }
+        })
+        .trigger(kebab_face)
+}
+
+fn kebab_face(open: bool, _: &App) -> AnyElement {
+    ActionButton::icon_only("profile-options", Icon::new(Catalog::EllipsisVertical))
+        .plain()
+        .tooltip("Profile Options")
+        .selected(open)
         .into_any_element()
+}
+
+impl RenderOnce for Tipped {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        if self.beside {
+            panel::with_tip_right(self.element, self.key, self.tip, window, cx)
+        } else {
+            panel::with_tip(self.element, self.key, self.tip, window, cx)
+        }
+    }
 }

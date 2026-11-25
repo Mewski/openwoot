@@ -1,10 +1,6 @@
 use gpui_kit::{
     Context, Div, ParentElement as _, SharedString, Styled as _, Window,
-    component::{
-        IconName, Sizable as _,
-        button::{Button, ButtonVariants as _},
-        h_flex,
-    },
+    component::{Icon, IconName, h_flex},
     div,
     prelude::FluentBuilder as _,
 };
@@ -42,50 +38,45 @@ impl LightbarPage {
             .collect::<Vec<_>>()
             .join(", ");
         Some(
-            panel::section(
-                "Host signals",
-                Some("Values programs send by id; cleared on restart".into()),
-                cx,
-            )
-            .child(panel::toggle(
-                "Used by effects",
-                None,
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(div().text_sm().child(bound))
-                    .child(
-                        Button::new("host-refresh")
-                            .icon(IconName::RefreshCw)
-                            .ghost()
-                            .xsmall()
+            panel::section("Host Signals", Some("Values sent by programs".into()), cx)
+                .child(panel::toggle(
+                    "Used by effects",
+                    None,
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(div().text_sm().child(bound))
+                        .child(
+                            panel::ActionButton::icon_only(
+                                "host-refresh",
+                                Icon::new(IconName::RefreshCw),
+                            )
                             .tooltip("Refresh")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.refresh_host_ids(window, cx);
-                            })),
-                    ),
-                cx,
-            ))
-            .child(panel::field(
-                "Send a value",
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(self.number(Field::HostId, cx))
-                    .child(self.number(Field::HostValue, cx))
-                    .child(
-                        Button::new("host-send")
-                            .label("Send")
-                            .small()
-                            .on_click(cx.listener(|this, _, window, cx| {
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.refresh_host_ids(window, cx);
+                                },
+                            )),
+                        ),
+                    cx,
+                ))
+                .child(panel::field(
+                    "Send a value",
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(self.number(Field::HostId, cx))
+                        .child(self.number(Field::HostValue, cx))
+                        .child(panel::ActionButton::new("host-send", "Send").on_click(
+                            cx.listener(|this, _, window, cx| {
                                 this.send_host_value(window, cx);
-                            })),
-                    ),
-                cx,
-            ))
-            .when(!sent.is_empty(), |this| {
-                this.child(panel::note(SharedString::from(format!("Sent {sent}")), cx))
-            }),
+                            }),
+                        )),
+                    cx,
+                ))
+                .when(!sent.is_empty(), |this| {
+                    this.child(panel::note(SharedString::from(format!("Sent {sent}")), cx))
+                }),
         )
     }
 

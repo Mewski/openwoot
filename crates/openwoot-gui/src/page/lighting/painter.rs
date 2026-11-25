@@ -1,7 +1,4 @@
-use gpui_kit::{
-    Context, Div, Hsla, MouseButton, ParentElement as _, Styled as _, Window, component::h_flex,
-    div, hsla,
-};
+use gpui_kit::{Context, Hsla, MouseButton, Window, hsla};
 use openwoot_protocol::{
     keys::Layer,
     lighting::{Color, KeyColors, Rgb},
@@ -11,7 +8,6 @@ use super::{LightingPage, key_colors, palette::PRESETS};
 use crate::{
     color_picker::{ColorPicker, hsla_of},
     keyboard::{KeyFace, KeyboardView},
-    panel,
     store::Keyboard,
     usage,
 };
@@ -19,10 +15,8 @@ use crate::{
 const INHERITED_OPACITY: f32 = 0.45;
 
 impl LightingPage {
-    pub(super) fn key_map(&self, window: &Window, cx: &Context<Self>) -> Div {
-        let Some(keyboard) = self.store.read(cx).keyboard() else {
-            return div();
-        };
+    pub(super) fn key_map(&self, cx: &Context<Self>) -> Option<KeyboardView> {
+        let keyboard = self.store.read(cx).keyboard()?;
         let (colors, inherited) = self.shown_colors();
         let indicators = self.settings.as_ref().map(|settings| settings.indicators);
         let locks = self.locks;
@@ -53,10 +47,9 @@ impl LightingPage {
                 ..KeyFace::default()
             }
         })
-        .fit_width(panel::content_width_beside_side(window))
         .on_key_click(move |key, _, window, cx| {
             clicked
-                .update(cx, |page, cx| page.click_key(key, window, cx))
+                .update(cx, |page, cx| page.paint_key(key, window, cx))
                 .ok();
         })
         .on_key_sweep(move |key, window, cx| {
@@ -74,24 +67,13 @@ impl LightingPage {
                 .update(cx, |page, cx| page.press_marker(key, button, window, cx))
                 .ok();
         });
-        div().child(view)
+        Some(view)
     }
 
-    pub(super) fn caption(&self, cx: &Context<Self>) -> Option<Div> {
+    pub(super) fn caption(&self) -> Option<&'static str> {
         self.maps.as_ref()?;
-        let text = if self.picking {
-            "Click a key to pick its colour"
-        } else if self.layer != Layer::Base && self.map(self.layer).is_none() {
-            "Paint keys to give this layer its own colours"
-        } else {
-            return None;
-        };
-        Some(
-            h_flex()
-                .w_full()
-                .justify_center()
-                .child(panel::label(text, cx)),
-        )
+        (self.layer != Layer::Base && self.map(self.layer).is_none())
+            .then_some("Paint keys to give this layer its own colours")
     }
 
     pub(super) fn apply_preset(
@@ -165,16 +147,8 @@ impl LightingPage {
         self.map(layer).or_else(|| self.map(Layer::Base))
     }
 
-    fn click_key(&mut self, key: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.picking {
-            self.pick_key(key, window, cx);
-        } else {
-            self.paint_key(key, window, cx);
-        }
-    }
-
     fn paint_key(&mut self, key: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.maps.is_none() || self.picking {
+        if self.maps.is_none() {
             return;
         }
         let Some(keyboard) = self.store.read(cx).keyboard() else {
@@ -199,7 +173,6 @@ impl LightingPage {
             .and_then(|colors| colors.get(key))
             .copied()
             .unwrap_or(key_colors::BLACK);
-        self.set_picking(false, cx);
         self.brush
             .update(cx, |brush, cx| brush.set_value(color, window, cx));
         cx.notify();
@@ -225,7 +198,6 @@ impl LightingPage {
                     return;
                 };
                 let picked = (color.alpha != 0).then_some(color.rgb());
-                self.set_picking(false, cx);
                 self.brush
                     .update(cx, |brush, cx| brush.set_value(picked, window, cx));
                 cx.notify();

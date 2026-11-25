@@ -215,8 +215,36 @@ mod tests {
         );
         let many = switches::Settings {
             default: None,
-            keys: (1..=17).map(|offset| Some(chosen(0, offset))).collect(),
+            keys: (1..=31).map(|offset| Some(chosen(0, offset))).collect(),
         };
         assert_eq!(tune(&many), Err(Invalid::TunedSwitchesExceedLimit));
+    }
+
+    #[test]
+    fn thirty_distinct_tuned_switches_are_fitted_and_a_thirty_first_is_refused() {
+        let settings = switches::Settings {
+            default: Some(chosen(1, 30)),
+            keys: (1..=30).map(|offset| Some(chosen(0, offset))).collect(),
+        };
+        assert_eq!(
+            tune(&settings),
+            Err(Invalid::TunedSwitchesExceedLimit),
+            "the default adds a 31st pair"
+        );
+        let settings = switches::Settings {
+            default: Some(chosen(0, 30)),
+            ..settings
+        };
+        let tuned = tune(&settings).unwrap();
+        assert_eq!(tuned.len(), 30);
+        let mut fitted = FittedSwitches::new();
+        assert!(fitted.replace(&settings, tuned));
+        let first = SwitchModel::new(0).unwrap();
+        for (index, offset) in (1..=30).enumerate() {
+            assert_eq!(
+                fitted.switch(index, first),
+                Switch::new(first, Some(offset))
+            );
+        }
     }
 }

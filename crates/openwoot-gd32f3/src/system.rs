@@ -1,7 +1,7 @@
 use openwoot::protocol::{Restart, UpdateMode};
 
 use crate::{
-    pac, rcu,
+    i2c, pac, rcu,
     register::{clear_bits, read_bits, set_bits, write_bits},
 };
 
@@ -12,6 +12,7 @@ const BKP_TPCS_TER: u16 = 1 << 0;
 const APB1EN_BKPIEN: u32 = 1 << 27;
 
 pub fn reset() -> ! {
+    i2c::stop_for_reset();
     cortex_m::peripheral::SCB::sys_reset()
 }
 

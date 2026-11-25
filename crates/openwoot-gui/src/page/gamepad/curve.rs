@@ -6,6 +6,7 @@ pub(super) const POINT_SCALE: f32 = 255.0;
 pub(super) const FULL_TRAVEL: f32 = 4095.0;
 pub(super) const DEFAULT_UP_BIAS: u8 = 50;
 const MAX_PERCENT: u8 = 100;
+const DEGREES_PER_PERCENT: f32 = 0.9;
 
 pub(super) struct Preset {
     pub(super) name: &'static str,
@@ -98,14 +99,28 @@ pub(super) fn check(settings: &Settings) -> Result<(), Problem> {
     if !spans {
         return Err(Problem::CurveWithoutSpan);
     }
-    match settings.left_stick_up_bias {
-        Some(percent) if percent > MAX_PERCENT => Err(Problem::BiasAboveHundred(percent)),
-        _ => Ok(()),
+    let percent = settings.left_stick_up_bias.percent;
+    if percent > MAX_PERCENT {
+        Err(Problem::BiasAboveHundred(percent))
+    } else {
+        Ok(())
     }
 }
 
-pub(super) fn preset_of(curve: Curve) -> Option<usize> {
-    PRESETS.iter().position(|preset| preset.curve == curve)
+pub(super) fn degrees(bias: u8) -> String {
+    format!("{:.0}", f32::from(bias) * DEGREES_PER_PERCENT)
+}
+
+pub(super) fn bias_of_degrees(typed: &str) -> Option<u8> {
+    let degrees = typed
+        .trim()
+        .parse::<f32>()
+        .ok()
+        .filter(|value| value.is_finite())?;
+    let highest = f32::from(MAX_PERCENT) * DEGREES_PER_PERCENT;
+    Some(point_value(
+        degrees.clamp(0.0, highest) / DEGREES_PER_PERCENT,
+    ))
 }
 
 pub(super) fn move_point(curve: &mut Curve, index: usize, travel: u8, output: u8) {
@@ -202,7 +217,7 @@ fn scaled(point: CurvePoint) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use openwoot_protocol::gamepad::Normalization;
+    use openwoot_protocol::gamepad::{Normalization, StickBias};
 
     use super::*;
 
@@ -211,7 +226,12 @@ mod tests {
             curve,
             normalization: Normalization::Circular,
             single_direction_axes: true,
-            left_stick_up_bias,
+            left_stick_up_bias: left_stick_up_bias.map_or(StickBias::DISABLED, |percent| {
+                StickBias {
+                    enabled: true,
+                    percent,
+                }
+            }),
         }
     }
 
@@ -230,11 +250,15 @@ mod tests {
     }
 
     #[test]
-    fn presets_are_found_by_their_points() {
-        for (index, preset) in PRESETS.iter().enumerate() {
-            assert_eq!(preset_of(preset.curve), Some(index));
-        }
-        assert_eq!(preset_of(IDENTITY), None);
+    fn the_diagonal_angle_reads_and_types_in_degrees() {
+        assert_eq!(degrees(50), "45");
+        assert_eq!(degrees(33), "30");
+        assert_eq!(degrees(100), "90");
+        assert_eq!(bias_of_degrees(" 30 "), Some(33));
+        assert_eq!(bias_of_degrees("120"), Some(100));
+        assert_eq!(bias_of_degrees("-5"), Some(0));
+        assert_eq!(bias_of_degrees("4.5"), Some(5));
+        assert_eq!(bias_of_degrees("north"), None);
     }
 
     #[test]

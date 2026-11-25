@@ -1,11 +1,15 @@
 use std::fmt;
 
-use openwoot_protocol::diagnostics::{Bus, BusErrors, Report};
+use openwoot_protocol::{
+    configuration::Rejection,
+    diagnostics::{Bus, BusErrors, Report, StorageUsage},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Status {
     pub(crate) device: String,
     pub(crate) report: Report,
+    pub(crate) storage_usage: Result<StorageUsage, Rejection>,
 }
 
 type Line = (&'static str, String);
@@ -87,6 +91,7 @@ impl Status {
             ("storage loads", storage.loads.to_string()),
             ("storage stores", storage.stores.to_string()),
             ("storage failures", storage.failures.to_string()),
+            ("storage usage", storage_usage(self.storage_usage)),
         ]);
         lines.extend(bus(
             [
@@ -147,6 +152,28 @@ fn error_counts(errors: &BusErrors) -> String {
         })
         .collect();
     format!("{total} ({})", kinds.join(", "))
+}
+
+fn storage_usage(usage: Result<StorageUsage, Rejection>) -> String {
+    match usage {
+        Ok(usage) => format!(
+            "{} of {} bytes in {}, {}",
+            usage.used,
+            usage.capacity,
+            counted(usage.items, "item"),
+            counted(usage.records, "current record"),
+        ),
+        Err(Rejection::Unsupported) => "no settings store".to_owned(),
+        Err(rejection) => rejection.to_string(),
+    }
+}
+
+fn counted(count: u32, noun: &str) -> String {
+    if count == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{count} {noun}s")
+    }
 }
 
 #[cfg(test)]
@@ -218,6 +245,12 @@ mod tests {
         let status = Status {
             device: DEVICE.to_owned(),
             report: running(),
+            storage_usage: Ok(StorageUsage {
+                capacity: 524_288,
+                used: 30_516,
+                records: 8,
+                items: 2_447,
+            }),
         };
         assert_eq!(
             status.to_string(),
@@ -242,6 +275,7 @@ mod tests {
                 "storage loads:        30\n",
                 "storage stores:       4\n",
                 "storage failures:     0\n",
+                "storage usage:        30516 of 524288 bytes in 2447 items, 8 current records\n",
                 "flash bus transfers:  812\n",
                 "flash bus errors:     none\n",
                 "flash bus last error: none\n",
@@ -258,6 +292,7 @@ mod tests {
         let status = Status {
             device: DEVICE.to_owned(),
             report: Report::default(),
+            storage_usage: Err(Rejection::Unsupported),
         }
         .to_string();
         for line in [
@@ -265,8 +300,27 @@ mod tests {
             "active profile:       none applied\n",
             "usb state:            not configured\n",
             "usb speed:            unknown\n",
+            "storage usage:        no settings store\n",
         ] {
             assert!(status.contains(line), "{line:?} missing from\n{status}");
         }
+    }
+
+    #[test]
+    fn one_item_reads_in_the_singular_and_a_failed_read_names_its_rejection() {
+        let usage = StorageUsage {
+            capacity: 16_384,
+            used: 12,
+            records: 1,
+            items: 1,
+        };
+        assert_eq!(
+            storage_usage(Ok(usage)),
+            "12 of 16384 bytes in 1 item, 1 current record"
+        );
+        assert_eq!(
+            storage_usage(Err(Rejection::StorageInaccessible)),
+            "could not access the settings storage"
+        );
     }
 }

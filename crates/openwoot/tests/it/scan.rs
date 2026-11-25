@@ -1,6 +1,7 @@
 mod hand_off;
 mod lower_rest;
 mod parallel;
+mod readout;
 mod recalibration;
 mod reference;
 mod simulated;

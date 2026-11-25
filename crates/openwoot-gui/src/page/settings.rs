@@ -4,16 +4,11 @@ mod sheet;
 mod sleep;
 
 use gpui_kit::{
-    AppContext as _, Context, Div, Entity, IntoElement, ParentElement as _, Render, SharedString,
-    Subscription, Window,
-    component::{
-        Sizable as _, WindowExt as _,
-        button::{Button, ButtonVariant, ButtonVariants as _},
-        h_flex,
-        notification::Notification,
-        slider::{SliderEvent, SliderState},
-    },
+    Context, Div, Entity, IntoElement, ParentElement as _, Render, Styled as _, Subscription,
+    Window,
+    component::{WindowExt as _, h_flex, notification::Notification, v_flex},
     prelude::FluentBuilder as _,
+    px,
 };
 use openwoot_protocol::{
     device::{self, KeyboardFormat, Layout, LayoutState, Speed},
@@ -24,81 +19,50 @@ use openwoot_protocol::{
     global,
 };
 
-use self::sleep::Sleep;
+use self::sleep::{Sleep, Step};
 pub(super) use self::{
     layout::name as layout_name,
-    sheet::{Tone, callout, entry, sheet},
+    sheet::{Tone, body_text, callout, emphasised, entry, heading, sheet},
 };
 use super::Page;
 use crate::{
-    panel,
+    panel::{self, ActionButton},
     store::{Scope, Store, StoreEvent},
     switch::Switch,
 };
 
 const POLLING_RATES: [(Speed, &str); 2] = [(Speed::High, "8000 Hz"), (Speed::Full, "1000 Hz")];
+const SLEEP_TOP: f32 = 16.0;
+const SLEEP_GAP: f32 = 24.0;
 const NUM_LOCK: [(bool, &str); 2] = [
     (false, "Regular: Input numbers when the indicator is on"),
     (true, "Inverted: Input numbers when the indicator is off"),
 ];
+const RESTART_FAILED: &str = "Could not restart the keyboard.";
 
 pub(crate) struct SettingsPage {
     store: Entity<Store>,
-    device: Option<device::Settings>,
-    started_with: Option<device::Settings>,
+    device: Option<device::SettingsState>,
     global: Option<global::Settings>,
     layout: Option<LayoutState>,
     sleep: Sleep,
-    dim_after: Entity<SliderState>,
-    off_after: Entity<SliderState>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl SettingsPage {
     pub(crate) fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let dim_after = cx.new(|_| sleep::slider_state());
-        let off_after = cx.new(|_| sleep::slider_state());
         let subscriptions = vec![
             cx.subscribe_in(&store, window, |this, _, event, window, cx| match event {
-                StoreEvent::Connected => {
-                    this.started_with = None;
-                    this.load(window, cx);
-                }
-                StoreEvent::Reloaded => this.load(window, cx),
+                StoreEvent::Connected | StoreEvent::Reloaded => this.load(window, cx),
                 StoreEvent::Disconnected | StoreEvent::ProfileChanged | StoreEvent::Failed(_) => {}
             }),
-            cx.subscribe_in(
-                &dim_after,
-                window,
-                |this, _, event: &SliderEvent, window, cx| match event {
-                    SliderEvent::Change(value) => {
-                        let sleep = this.sleep.with_dim(sleep::stop_of(value.end()));
-                        this.move_sleep(sleep, window, cx);
-                    }
-                    SliderEvent::Release(_) => this.store_sleep(cx),
-                },
-            ),
-            cx.subscribe_in(
-                &off_after,
-                window,
-                |this, _, event: &SliderEvent, window, cx| match event {
-                    SliderEvent::Change(value) => {
-                        let sleep = this.sleep.with_off(sleep::stop_of(value.end()));
-                        this.move_sleep(sleep, window, cx);
-                    }
-                    SliderEvent::Release(_) => this.store_sleep(cx),
-                },
-            ),
         ];
         let mut page = Self {
             store,
             device: None,
-            started_with: None,
             global: None,
             layout: None,
             sleep: Sleep::of(None),
-            dim_after,
-            off_after,
             _subscriptions: subscriptions,
         };
         page.load(window, cx);
@@ -117,15 +81,11 @@ impl SettingsPage {
             let device = device.await.ok();
             let global = global.await.ok();
             let layout = layout.await.ok();
-            this.update_in(cx, |page, window, cx| {
+            this.update(cx, |page, cx| {
                 page.device = device;
-                if page.started_with.is_none() {
-                    page.started_with = device;
-                }
                 page.global = global;
                 page.layout = layout;
                 page.sleep = Sleep::of(global.and_then(|global| global.idle));
-                page.sync_sleep(window, cx);
                 cx.notify();
             })
             .ok();
@@ -138,8 +98,8 @@ impl SettingsPage {
         change: impl Fn(&mut device::Settings) + 'static,
         cx: &mut Context<Self>,
     ) {
-        if let Some(settings) = &mut self.device {
-            change(settings);
+        if let Some(state) = &mut self.device {
+            change(&mut state.chosen);
         }
         cx.notify();
         let current = self
@@ -149,18 +109,21 @@ impl SettingsPage {
             let Ok(stored) = current.await else {
                 return;
             };
-            let mut settings = stored;
+            let mut settings = stored.chosen;
             change(&mut settings);
             let Ok(applied) = this.update(cx, |page, cx| {
                 page.store.update(cx, |store, cx| {
-                    store.change::<SetDeviceSettings>(&stored, settings, Scope::Keyboard, cx)
+                    store.change::<SetDeviceSettings>(&stored.chosen, settings, Scope::Keyboard, cx)
                 })
             }) else {
                 return;
             };
             let written = applied.await.is_ok();
             this.update(cx, |page, cx| {
-                page.device = Some(if written { settings } else { stored });
+                page.device = Some(device::SettingsState {
+                    chosen: if written { settings } else { stored.chosen },
+                    ..stored
+                });
                 cx.notify();
             })
             .ok();
@@ -201,19 +164,9 @@ impl SettingsPage {
         .detach();
     }
 
-    fn sync_sleep(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let dim = sleep::position(self.sleep.dim);
-        let off = sleep::position(self.sleep.off);
-        self.dim_after
-            .update(cx, |slider, cx| slider.set_value(dim, window, cx));
-        self.off_after
-            .update(cx, |slider, cx| slider.set_value(off, window, cx));
-    }
-
-    fn move_sleep(&mut self, sleep: Sleep, window: &mut Window, cx: &mut Context<Self>) {
+    fn move_sleep(&mut self, sleep: Sleep, cx: &mut Context<Self>) {
         if self.sleep != sleep {
             self.sleep = sleep;
-            self.sync_sleep(window, cx);
             cx.notify();
         }
     }
@@ -225,9 +178,11 @@ impl SettingsPage {
         }
     }
 
-    fn pick_sleep(&mut self, sleep: Sleep, window: &mut Window, cx: &mut Context<Self>) {
-        self.move_sleep(sleep, window, cx);
-        self.store_sleep(cx);
+    fn step_sleep(&mut self, step: Step, change: fn(Sleep, u8) -> Sleep, cx: &mut Context<Self>) {
+        match step {
+            Step::Move(index) => self.move_sleep(change(self.sleep, index), cx),
+            Step::Release => self.store_sleep(cx),
+        }
     }
 
     fn choose_layout(&mut self, layout: Layout, cx: &mut Context<Self>) {
@@ -259,11 +214,13 @@ impl SettingsPage {
         .detach();
     }
 
-    fn changed_since_start<T: PartialEq>(&self, field: impl Fn(&device::Settings) -> T) -> bool {
-        matches!(
-            (self.device, self.started_with),
-            (Some(now), Some(started)) if field(&now) != field(&started)
-        )
+    fn pending<T: PartialEq>(&self, field: impl Fn(&device::Settings) -> T) -> bool {
+        self.device
+            .is_some_and(|state| restart_pending(&state, field))
+    }
+
+    fn limited_to_full_speed(&self) -> bool {
+        self.device.is_some_and(|state| runs_at_full_speed(&state))
     }
 
     fn layout_pending(&self) -> bool {
@@ -278,8 +235,8 @@ impl SettingsPage {
             if save.await.is_err() {
                 return;
             }
-            if let Err(error) = device.call::<Restart>(()).await {
-                let message = Notification::error(error.to_string());
+            if device.call::<Restart>(()).await.is_err() {
+                let message = Notification::error(RESTART_FAILED);
                 cx.update(|window, cx| window.push_notification(message, cx))
                     .ok();
             }
@@ -290,8 +247,8 @@ impl SettingsPage {
     fn restart(&self, window: &mut Window, cx: &mut Context<Self>) {
         let restart = self.store.read(cx).device().call::<Restart>(());
         cx.spawn_in(window, async move |_, cx| {
-            if let Err(error) = restart.await {
-                let message = Notification::error(error.to_string());
+            if restart.await.is_err() {
+                let message = Notification::error(RESTART_FAILED);
                 cx.update(|window, cx| window.push_notification(message, cx))
                     .ok();
             }
@@ -301,40 +258,38 @@ impl SettingsPage {
 
     fn confirm_factory_reset(&self, window: &mut Window, cx: &mut Context<Self>) {
         let store = self.store.clone();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let store = store.clone();
-            alert
-                .title("Reset all keyboard settings?")
-                .description("Every profile and setting returns to the factory state.")
-                .confirm()
-                .ok_text("Reset")
-                .ok_variant(ButtonVariant::Danger)
-                .on_ok(move |_, _, cx| {
-                    store.update(cx, |store, cx| {
-                        let reset = store.apply::<FactoryReset>((), Scope::Runtime, cx);
-                        cx.spawn(async move |store, cx| {
-                            if reset.await.is_ok()
-                                && let Ok(reload) = store.update(cx, |store, cx| {
-                                    store.forget_changes(cx);
-                                    store.reload(cx)
-                                })
-                            {
-                                reload.await;
-                            }
-                        })
-                        .detach();
-                    });
-                    true
-                })
-        });
+        panel::confirm(
+            panel::Confirmation::new(
+                "Are you sure you want to reset?",
+                "This will reset all keyboard settings.",
+                "Reset",
+            )
+            .danger(),
+            move |_, cx| {
+                store.update(cx, |store, cx| {
+                    let reset = store.apply::<FactoryReset>((), Scope::Runtime, cx);
+                    cx.spawn(async move |store, cx| {
+                        if reset.await.is_ok()
+                            && let Ok(reload) = store.update(cx, |store, cx| {
+                                store.forget_changes(cx);
+                                store.reload(cx)
+                            })
+                        {
+                            reload.await;
+                        }
+                    })
+                    .detach();
+                });
+            },
+            window,
+            cx,
+        );
     }
 
     fn restart_callout(id: &'static str, cx: &mut Context<Self>) -> Div {
         callout(Tone::Info, "Applies after a restart.", cx).child(
-            Button::new(id)
+            ActionButton::new(id, "Save and restart")
                 .primary()
-                .small()
-                .label("Save and restart")
                 .on_click(cx.listener(|this, _, window, cx| this.save_and_restart(window, cx))),
         )
     }
@@ -342,11 +297,13 @@ impl SettingsPage {
     fn compatibility_section(&self, cx: &mut Context<Self>) -> Div {
         let boot = self
             .device
-            .map(|settings| settings.keyboard == KeyboardFormat::Boot);
+            .map(|state| state.chosen.keyboard == KeyboardFormat::Boot);
         entry(
-            "Compatibility mode (disable NKRO)",
+            "Compatibility Mode (Disable NKRO)",
             Some(
-                "Reports six keys at a time, for BIOS screens, consoles and old computers.".into(),
+                "Turn it on if you have issues with your BIOS or (legacy) devices like a \
+                 Playstation or Xbox."
+                    .into(),
             ),
             Some(
                 Switch::new("compatibility-mode")
@@ -365,18 +322,16 @@ impl SettingsPage {
             cx,
         )
         .when(
-            self.changed_since_start(|settings| settings.keyboard)
-                && !self.changed_since_start(|settings| settings.speed),
+            self.pending(|settings| settings.keyboard) && !self.pending(|settings| settings.speed),
             |this| this.child(Self::restart_callout("restart-compatibility", cx)),
         )
     }
 
     fn polling_section(&self, cx: &mut Context<Self>) -> Div {
         entry(
-            "Polling rate",
+            "Polling Rate",
             Some(
-                "How often the keyboard reports to the computer; lower it if the connection is \
-                 unstable."
+                "The polling rate determines how often the keyboard can report to the computer."
                     .into(),
             ),
             None,
@@ -385,25 +340,32 @@ impl SettingsPage {
         .child(choice::choices(
             "polling-rate",
             &POLLING_RATES,
-            self.device.map(|settings| settings.speed),
+            self.device.map(|state| state.chosen.speed),
             cx.listener(|this, speed: &Speed, _, cx| {
                 let speed = *speed;
                 this.change_device(move |settings| settings.speed = speed, cx);
             }),
             cx,
         ))
-        .when(
-            self.changed_since_start(|settings| settings.speed),
-            |this| this.child(Self::restart_callout("restart-polling-rate", cx)),
-        )
+        .map(|this| {
+            if self.pending(|settings| settings.speed) {
+                this.child(Self::restart_callout("restart-polling-rate", cx))
+            } else if self.limited_to_full_speed() {
+                this.child(callout(
+                    Tone::Info,
+                    "The USB connection limits it to 1000 Hz.",
+                    cx,
+                ))
+            } else {
+                this
+            }
+        })
     }
 
     fn num_lock_section(&self, cx: &mut Context<Self>) -> Div {
         entry(
-            "Num Lock indicator",
-            cfg!(target_os = "macos").then(|| {
-                SharedString::from("macOS has no Num Lock; choose regular to hide the indicator.")
-            }),
+            "Num Lock indicator behaviour",
+            Some("On MacOS, select regular behavior to hide the indicator.".into()),
             None,
             cx,
         )
@@ -422,48 +384,47 @@ impl SettingsPage {
     fn sleep_section(&self, cx: &mut Context<Self>) -> Div {
         let disabled = self.global.is_none();
         entry(
-            "RGB sleep mode",
-            Some("Dims and then turns off the lighting while no key is pressed.".into()),
+            "RGB Sleep Mode",
+            Some(
+                "Minutes of inactivity before the keyboard dims the RGB and then turns it off."
+                    .into(),
+            ),
             None,
             cx,
         )
-        .child(panel::field(
-            "Turn off after",
-            sleep::stepped(
-                "turn-off-after",
-                &self.off_after,
-                self.sleep.off,
-                disabled,
-                cx.listener(|this, stop: &u8, window, cx| {
-                    let sleep = this.sleep.with_off(*stop);
-                    this.pick_sleep(sleep, window, cx);
-                }),
-                cx,
-            ),
-            cx,
-        ))
-        .child(panel::field(
-            "Dim after",
-            sleep::stepped(
-                "dim-after",
-                &self.dim_after,
-                self.sleep.dim,
-                disabled,
-                cx.listener(|this, stop: &u8, window, cx| {
-                    let sleep = this.sleep.with_dim(*stop);
-                    this.pick_sleep(sleep, window, cx);
-                }),
-                cx,
-            ),
-            cx,
-        ))
+        .child(
+            v_flex()
+                .w_full()
+                .pt(px(SLEEP_TOP))
+                .gap(px(SLEEP_GAP))
+                .child(sleep::stepped(
+                    "turn-off-after",
+                    "TURN OFF AFTER",
+                    self.sleep.off,
+                    disabled,
+                    cx.listener(|this, step: &Step, _, cx| {
+                        this.step_sleep(*step, Sleep::with_off, cx);
+                    }),
+                    cx,
+                ))
+                .child(sleep::stepped(
+                    "dim-after",
+                    "DIM AFTER",
+                    self.sleep.dim,
+                    disabled,
+                    cx.listener(|this, step: &Step, _, cx| {
+                        this.step_sleep(*step, Sleep::with_dim, cx);
+                    }),
+                    cx,
+                )),
+        )
     }
 
     fn debounce_section(&self, cx: &mut Context<Self>) -> Div {
         let filtered = self.global.map(|settings| settings.release_rebound_filter);
         entry(
-            "Debounce filter",
-            Some("Ignores keys that bounce back down after a release; adds no latency.".into()),
+            "Debounce Filter",
+            Some("Ignores unwanted keypresses from keys bouncing back down when released.".into()),
             Some(
                 Switch::new("debounce-filter")
                     .checked(filtered.unwrap_or(false))
@@ -502,15 +463,13 @@ impl SettingsPage {
     fn restart_section(cx: &mut Context<Self>) -> Div {
         entry(
             "Restart keyboard",
-            Some("Starts the firmware again; unsaved changes are lost.".into()),
+            Some("Restarts the keyboard and loses any unsaved changes.".into()),
             None,
             cx,
         )
         .child(
             h_flex().child(
-                Button::new("restart")
-                    .outline()
-                    .label("Restart")
+                ActionButton::new("restart", "Restart")
                     .on_click(cx.listener(|this, _, window, cx| this.restart(window, cx))),
             ),
         )
@@ -519,25 +478,20 @@ impl SettingsPage {
     fn reset_section(cx: &mut Context<Self>) -> Div {
         entry(
             "Reset all keyboard settings",
-            Some("Restores every profile and setting to the factory state.".into()),
+            Some("Resetting all keyboard settings will restore the keyboard to its factory settings.".into()),
             None,
             cx,
         )
         .child(
             h_flex().child(
-                Button::new("factory-reset")
+                ActionButton::new("factory-reset", "Reset all Keyboard Settings")
                     .danger()
-                    .label("Reset all keyboard settings")
                     .on_click(
                         cx.listener(|this, _, window, cx| this.confirm_factory_reset(window, cx)),
                     ),
             ),
         )
-        .child(callout(
-            Tone::Danger,
-            "This cannot be undone; every profile and setting is lost.",
-            cx,
-        ))
+        .child(callout(Tone::Danger, "This action cannot be reversed.", cx))
     }
 }
 
@@ -562,6 +516,67 @@ impl Render for SettingsPage {
         }
         sections.push(Self::restart_section(cx));
         sections.push(Self::reset_section(cx));
-        panel::page().child(sheet(Page::Settings.title(), sections, cx))
+        sheet("settings-sheet", Page::Settings.title(), sections, cx)
+    }
+}
+
+fn restart_pending<T: PartialEq>(
+    state: &device::SettingsState,
+    field: impl Fn(&device::Settings) -> T,
+) -> bool {
+    field(&state.active) != field(&state.chosen)
+}
+
+fn runs_at_full_speed(state: &device::SettingsState) -> bool {
+    state.active.speed == Speed::High
+        && state.chosen.speed == Speed::High
+        && state.negotiated == Some(Speed::Full)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state(active: Speed, chosen: Speed, negotiated: Option<Speed>) -> device::SettingsState {
+        device::SettingsState {
+            active: device::Settings {
+                speed: active,
+                ..device::Settings::default()
+            },
+            chosen: device::Settings {
+                speed: chosen,
+                ..device::Settings::default()
+            },
+            negotiated,
+        }
+    }
+
+    #[test]
+    fn a_chosen_rate_waits_for_a_restart_until_it_runs() {
+        let waiting = state(Speed::High, Speed::Full, Some(Speed::High));
+        assert!(restart_pending(&waiting, |settings| settings.speed));
+        assert!(!restart_pending(&waiting, |settings| settings.keyboard));
+        let running = state(Speed::Full, Speed::Full, Some(Speed::Full));
+        assert!(!restart_pending(&running, |settings| settings.speed));
+    }
+
+    #[test]
+    fn a_full_speed_port_caps_the_high_rate() {
+        assert!(runs_at_full_speed(&state(
+            Speed::High,
+            Speed::High,
+            Some(Speed::Full)
+        )));
+        assert!(!runs_at_full_speed(&state(
+            Speed::High,
+            Speed::High,
+            Some(Speed::High)
+        )));
+        assert!(!runs_at_full_speed(&state(Speed::Full, Speed::Full, None)));
+        assert!(!runs_at_full_speed(&state(
+            Speed::High,
+            Speed::Full,
+            Some(Speed::Full)
+        )));
     }
 }

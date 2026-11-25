@@ -14,7 +14,7 @@ use openwoot_protocol::{
             self, Accelerator, Back, DpadDown, Guide, HatLeft, LeftStickDown, LeftStickLeft,
             LeftStickRight, LeftTrigger, RightStickRight, RightStickUp, RxPositive, Start,
         },
-        CurvePoint, Normalization, Settings,
+        CurvePoint, Normalization, Settings, StickBias,
     },
     keys::Action,
 };
@@ -730,7 +730,13 @@ const fn settings(
         ],
         normalization,
         single_direction_axes,
-        left_stick_up_bias,
+        left_stick_up_bias: match left_stick_up_bias {
+            Some(percent) => StickBias {
+                enabled: true,
+                percent,
+            },
+            None => StickBias::DISABLED,
+        },
     }
 }
 

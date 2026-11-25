@@ -1,12 +1,15 @@
 mod boards;
 mod build;
+mod call_graph;
 mod check;
 mod elf;
+mod entry_points;
 mod firmware;
 mod flash;
 mod output;
 mod pac;
 mod process;
+mod symbol_order;
 mod workspace;
 
 use std::{

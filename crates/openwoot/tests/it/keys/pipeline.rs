@@ -160,6 +160,7 @@ pub(super) fn capabilities() -> Capabilities {
         key_rows: u8::try_from(ROWS).unwrap_or(u8::MAX),
         key_columns: u8::try_from(COLUMNS).unwrap_or(u8::MAX),
         profiles: 4,
+        linked_profiles: 0,
         layouts: Bounded::new(),
         lightbar_leds: 0,
         host_signals: false,

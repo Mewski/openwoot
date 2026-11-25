@@ -4,36 +4,71 @@ use gpui_kit::{
     StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, Window,
     assets::IconName as Catalog,
     component::{
-        ActiveTheme as _, Disableable as _, Icon, Sizable as _,
-        button::{Button, ButtonVariants as _},
-        h_flex,
-        input::{Input, InputEvent, InputState},
+        ActiveTheme as _, Icon, h_flex,
+        input::{InputEvent, InputState},
         v_flex,
     },
     div,
     prelude::FluentBuilder as _,
-    px,
+    px, transparent_black,
 };
 use openwoot_protocol::{lighting::Rgb, profile};
 
 use super::{
-    Name, ProfilesPage,
-    editor::{BODY_TOP, banner},
+    Destination, LINKING_NEEDS_SERVICE, Name, ProfilesPage,
+    apps::{AppList, AppListEvent},
+    card::count_chip,
+    editor::{BODY_PADDING_X, BODY_TOP, header, problem_text},
     icon,
     preset::Preset,
-    profile_name,
+    profile_name, service_running,
 };
 use crate::{
     color_picker::{ColorPicker, ColorPickerEvent},
-    panel,
+    panel::{self, ActionButton},
     store::Store,
+    theme,
 };
 
 const TEMPLATES_PER_ROW: usize = 3;
+const RADIUS: f32 = 8.0;
+const INNER_RADIUS: f32 = 7.0;
+const OPTION_RADIUS: f32 = 6.0;
+const TITLE_TEXT: f32 = 24.0;
+const TITLE_LINE: f32 = 28.8;
+const BODY_TEXT: f32 = 16.0;
+const NAME_LINE: f32 = 19.2;
+const BODY_LINE: f32 = 22.4;
+const INTRO_GAP: f32 = 8.0;
+const VIEW_GAP: f32 = 24.0;
+const GRID_GAP: f32 = 16.0;
 const ILLUSTRATION_HEIGHT: f32 = 132.0;
-const TEMPLATE_LIST_WIDTH: f32 = 340.0;
-const TEMPLATE_ROW_HEIGHT: f32 = 60.0;
+const ILLUSTRATION_GAP: f32 = 8.0;
+const TEMPLATE_PADDING: f32 = 24.0;
+const TEMPLATE_TEXT_GAP: f32 = 8.0;
+const DETAILS_GAP: f32 = 20.0;
+const EDITOR_BOTTOM: f32 = 80.0;
+const FIELDS_GAP: f32 = 32.0;
+const FIELD_GAP: f32 = 8.0;
+const OPTIONS_GAP: f32 = 12.0;
+const OPTION_PADDING: f32 = 12.0;
+const OPTION_GAP: f32 = 8.0;
+const UNAVAILABLE_OPACITY: f32 = 0.5;
+const LIST_WIDTH: f32 = 346.0;
+const LIST_GAP: f32 = 8.0;
+const ROW_HEIGHT: f32 = 68.0;
+const ROW_PADDING_X: f32 = 20.0;
+const ROW_GAP: f32 = 28.0;
+const THUMB_WIDTH: f32 = 56.0;
+const THUMB_HEIGHT: f32 = 34.0;
+const THUMB_ICON: f32 = 20.0;
+const BUTTON_GAP: f32 = 8.0;
 const KEYCAP_SIZE: f32 = 34.0;
+const NEW_COLOR: Rgb = Rgb {
+    red: 255,
+    green: 212,
+    blue: 92,
+};
 
 pub(super) struct Creator {
     page: WeakEntity<ProfilesPage>,
@@ -43,10 +78,9 @@ pub(super) struct Creator {
     step: Step,
     storage: Storage,
     name: Entity<InputState>,
-    named: bool,
     picker: Entity<ColorPicker>,
+    apps: Entity<AppList>,
     color: Rgb,
-    colored: bool,
     icon: Option<u8>,
     problem: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
@@ -61,6 +95,7 @@ enum Step {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Storage {
     Onboard,
+    Linked,
     Inactive,
 }
 
@@ -72,9 +107,11 @@ impl Creator {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let color = Preset::Custom.color();
-        let name = cx.new(|cx| InputState::new(window, cx).placeholder("Profile name"));
+        let color = NEW_COLOR;
+        let name = cx.new(|cx| InputState::new(window, cx));
         let picker = cx.new(|cx| ColorPicker::new(color, window, cx));
+        let linked = store.clone();
+        let apps = cx.new(|cx| AppList::new(linked, None, Vec::new(), window, cx));
         let subscriptions = vec![
             cx.subscribe_in(
                 &picker,
@@ -82,7 +119,6 @@ impl Creator {
                 |this, _, event: &ColorPickerEvent, _, cx| {
                     if let ColorPickerEvent::Change(Some(color)) = event {
                         this.color = *color;
-                        this.colored = true;
                         cx.notify();
                     }
                 },
@@ -92,7 +128,6 @@ impl Creator {
                 window,
                 |this, _, event: &InputEvent, window, cx| match event {
                     InputEvent::Change => {
-                        this.named = true;
                         this.problem = None;
                         cx.notify();
                     }
@@ -100,6 +135,8 @@ impl Creator {
                     InputEvent::Focus | InputEvent::Blur => {}
                 },
             ),
+            cx.subscribe(&apps, |_, _, _: &AppListEvent, cx| cx.notify()),
+            cx.observe(&store, |_, _, cx| cx.notify()),
         ];
         Self {
             page,
@@ -109,10 +146,9 @@ impl Creator {
             step: Step::Templates,
             storage: Storage::Onboard,
             name,
-            named: false,
             picker,
+            apps,
             color,
-            colored: false,
             icon: None,
             problem: None,
             _subscriptions: subscriptions,
@@ -120,25 +156,36 @@ impl Creator {
     }
 
     fn store(&mut self, storage: Storage, cx: &mut Context<Self>) {
-        if storage == Storage::Onboard || self.library {
+        if self.available(storage, cx) {
             self.storage = storage;
             cx.notify();
         }
     }
 
-    fn choose(&mut self, preset: Preset, window: &mut Window, cx: &mut Context<Self>) {
+    fn available(&self, storage: Storage, cx: &App) -> bool {
+        self.reason(storage, cx).is_none() && (storage != Storage::Inactive || self.library)
+    }
+
+    fn reason(&self, storage: Storage, cx: &App) -> Option<&'static str> {
+        let (used, capacity) = self.room(storage, cx)?;
+        match storage {
+            Storage::Linked if used >= capacity => Some("Device has no free linked profile slots"),
+            Storage::Linked if !service_running(cx) => Some(LINKING_NEEDS_SERVICE),
+            Storage::Onboard | Storage::Inactive if used >= capacity => {
+                Some("Device has no free onboard profile slots")
+            }
+            Storage::Onboard | Storage::Linked | Storage::Inactive => None,
+        }
+    }
+
+    fn ready(&self, cx: &App) -> bool {
+        self.preset.is_some()
+            && self.available(self.storage, cx)
+            && (self.storage != Storage::Linked || !self.apps.read(cx).links().is_empty())
+    }
+
+    fn choose(&mut self, preset: Preset, cx: &mut Context<Self>) {
         self.preset = Some(preset);
-        if !self.named {
-            let name = default_name(preset);
-            self.name
-                .update(cx, |input, cx| input.set_value(name, window, cx));
-        }
-        if !self.colored {
-            self.color = preset.color();
-            let color = self.color;
-            self.picker
-                .update(cx, |picker, cx| picker.set_value(color, window, cx));
-        }
         cx.notify();
     }
 
@@ -160,27 +207,30 @@ impl Creator {
         self.page.update(cx, ProfilesPage::close_creator).ok();
     }
 
-    fn room(&self, cx: &App) -> Option<(usize, usize)> {
+    fn room(&self, storage: Storage, cx: &App) -> Option<(usize, usize)> {
         let keyboard = self.store.read(cx).keyboard()?;
-        Some((
-            keyboard.profiles.len(),
-            usize::from(keyboard.capabilities.profiles),
-        ))
+        Some(match storage {
+            Storage::Linked => (
+                keyboard.linked.len(),
+                usize::from(keyboard.capabilities.linked_profiles),
+            ),
+            Storage::Onboard | Storage::Inactive => (
+                keyboard.profiles.len(),
+                usize::from(keyboard.capabilities.profiles),
+            ),
+        })
     }
 
     fn create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(preset) = self.preset else {
             return;
         };
-        if self
-            .room(cx)
-            .is_none_or(|(used, capacity)| used >= capacity)
-        {
+        if !self.ready(cx) {
             return;
         }
         let text = self.name.read(cx).value();
         let text = if text.trim().is_empty() {
-            SharedString::from(default_name(preset))
+            SharedString::from(new_name(preset))
         } else {
             text
         };
@@ -197,57 +247,63 @@ impl Creator {
             color: self.color,
             icon: self.icon(),
         };
-        let inactive = self.storage == Storage::Inactive;
+        let destination = match self.storage {
+            Storage::Onboard => Destination::Onboard,
+            Storage::Linked => Destination::Linked(self.apps.read(cx).links().to_vec()),
+            Storage::Inactive => Destination::Inactive,
+        };
         ColorPicker::remember(self.color, cx);
         self.page
             .update(cx, |page, cx| {
-                page.create(preset, info, inactive, window, cx);
+                page.create(preset, info, destination, window, cx);
             })
             .ok();
     }
 
     fn templates(&self, cx: &Context<Self>) -> Div {
-        let cards: Vec<AnyElement> = Preset::ALL
+        let mut rows = v_flex().w_full().gap(px(GRID_GAP));
+        let mut cards = Preset::ALL
             .into_iter()
-            .map(|preset| self.template_card(preset, cx).into_any_element())
-            .collect();
-        let mut rows = v_flex().w_full().gap_4();
-        let mut cards = cards.into_iter().peekable();
+            .enumerate()
+            .map(|(index, preset)| self.template_card(index, preset, cx))
+            .peekable();
         while cards.peek().is_some() {
-            let mut row = h_flex().w_full().gap_4().items_start();
+            let mut row = h_flex().w_full().items_stretch().gap(px(GRID_GAP));
             for _ in 0..TEMPLATES_PER_ROW {
-                row = row.child(div().flex_1().min_w_0().children(cards.next()));
+                row = row.child(v_flex().flex_1().min_w_0().children(cards.next()));
             }
             rows = rows.child(row);
         }
         rows
     }
 
-    fn template_card(&self, preset: Preset, cx: &Context<Self>) -> Stateful<Div> {
+    fn template_card(&self, index: usize, preset: Preset, cx: &Context<Self>) -> Stateful<Div> {
         let theme = cx.theme();
         let selected = self.preset == Some(preset);
-        let hover = theme.secondary_hover;
+        let raised = theme::palette().overlay_hover;
+        let border_hover = theme.secondary_hover;
         v_flex()
-            .id(SharedString::from(format!("template-{}", preset.name())))
+            .id(("template", index))
+            .flex_1()
             .w_full()
-            .rounded(theme.radius_lg)
-            .overflow_hidden()
-            .bg(theme.secondary)
+            .rounded(px(RADIUS))
             .border_1()
             .border_color(if selected {
                 theme.primary
             } else {
-                theme.secondary
+                transparent_black()
             })
+            .bg(if selected { raised } else { theme.tab_active })
             .cursor_pointer()
             .when(!selected, |this| {
-                this.hover(move |style| style.border_color(hover))
+                this.hover(move |style| style.border_color(border_hover).bg(raised))
             })
-            .on_click(cx.listener(move |this, _, window, cx| this.choose(preset, window, cx)))
+            .on_click(cx.listener(move |this, _, _, cx| this.choose(preset, cx)))
             .child(
                 div()
                     .w_full()
                     .h(px(ILLUSTRATION_HEIGHT))
+                    .rounded_t(px(INNER_RADIUS))
                     .bg(theme.group_box)
                     .flex()
                     .items_center()
@@ -256,23 +312,72 @@ impl Creator {
             )
             .child(
                 v_flex()
-                    .p_5()
-                    .gap_1p5()
+                    .mt(px(ILLUSTRATION_GAP))
+                    .p(px(TEMPLATE_PADDING))
+                    .gap(px(TEMPLATE_TEXT_GAP))
                     .child(
                         div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(SharedString::from(default_name(preset))),
+                            .text_size(px(BODY_TEXT))
+                            .line_height(px(NAME_LINE))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(theme.foreground)
+                            .child(preset.title()),
                     )
                     .child(
                         div()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
+                            .text_size(px(BODY_TEXT))
+                            .line_height(px(BODY_LINE))
+                            .text_color(theme.group_box_foreground)
                             .child(preset.description()),
                     ),
             )
     }
 
-    fn details(&self, cx: &Context<Self>) -> Div {
+    fn types(&self, cx: &Context<Self>) -> Div {
+        let supports_linked = self
+            .store
+            .read(cx)
+            .keyboard()
+            .is_some_and(|keyboard| keyboard.capabilities.linked_profiles > 0);
+        let reason = self.reason(self.storage, cx).or_else(|| {
+            [Storage::Onboard, Storage::Linked]
+                .into_iter()
+                .filter(|storage| *storage != Storage::Linked || supports_linked)
+                .find_map(|storage| self.reason(storage, cx))
+        });
+        v_flex()
+            .gap(px(OPTIONS_GAP))
+            .child(panel::label("Profile Type", cx))
+            .child(self.storage_option(
+                Storage::Onboard,
+                "Onboard profile",
+                "Stored on your device and can be accessed anytime.",
+                self.room(Storage::Onboard, cx),
+                cx,
+            ))
+            .when(supports_linked, |this| {
+                this.child(self.storage_option(
+                    Storage::Linked,
+                    "Linked Profile",
+                    "Switches on when the linked app is in front.",
+                    self.room(Storage::Linked, cx),
+                    cx,
+                ))
+            })
+            .child(self.storage_option(
+                Storage::Inactive,
+                "Inactive profile",
+                "Stored in openwoot and accessible only while it is running.",
+                None,
+                cx,
+            ))
+            .children(reason.map(|reason| problem_text(reason.into(), cx)))
+            .when(self.storage == Storage::Linked, |this| {
+                this.child(self.apps.clone())
+            })
+    }
+
+    fn details(&self, window: &Window, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
         let creator = cx.entity().downgrade();
         let pick = move |icon: u8, _: &mut Window, cx: &mut App| {
@@ -283,76 +388,61 @@ impl Creator {
                 })
                 .ok();
         };
-        let room = self.room(cx);
-        let full = room.is_none_or(|(used, capacity)| used >= capacity);
-        let slots = room.map_or_else(SharedString::default, |(used, capacity)| {
-            SharedString::from(format!("{used} / {capacity}"))
-        });
-        let types = v_flex()
-            .gap_3()
-            .child(self.storage_option(
-                Storage::Onboard,
-                "Onboard profile",
-                "Stored on the keyboard and available on any computer.",
-                Some(slots),
-                cx,
-            ))
-            .child(self.storage_option(
-                Storage::Inactive,
-                "Inactive profile",
-                "Stored on this computer only.",
-                None,
-                cx,
-            ))
-            .children(full.then(|| {
-                div()
-                    .text_sm()
-                    .text_color(theme.danger)
-                    .child("A new profile is built in a free keyboard slot; free one first.")
-            }));
+        let types = self.types(cx);
         let editor = v_flex()
             .flex_1()
             .min_w_0()
-            .rounded(theme.radius_lg)
+            .pb(px(EDITOR_BOTTOM))
+            .rounded(px(RADIUS))
             .bg(theme.group_box)
-            .child(banner(
-                "new-profile-color",
+            .child(header(
+                "new-profile",
                 &self.picker,
                 self.color,
                 self.icon(),
                 pick,
-                cx,
             ))
             .child(
                 v_flex()
-                    .px_10()
+                    .px(px(BODY_PADDING_X))
                     .pt(px(BODY_TOP))
-                    .pb_8()
-                    .gap_6()
+                    .gap(px(FIELDS_GAP))
                     .child(
                         v_flex()
-                            .gap_2()
-                            .child(panel::field("Profile name", Input::new(&self.name), cx))
-                            .children(self.problem.clone().map(|problem| {
-                                div().text_xs().text_color(theme.danger).child(problem)
-                            })),
+                            .gap(px(FIELD_GAP))
+                            .child(panel::field(
+                                "Profile Name",
+                                panel::text_field(
+                                    &self.name,
+                                    self.preset.map_or_else(String::new, new_name),
+                                    window,
+                                    cx,
+                                ),
+                                cx,
+                            ))
+                            .children(
+                                self.problem
+                                    .clone()
+                                    .map(|problem| problem_text(problem, cx)),
+                            ),
                     )
-                    .child(panel::field("Profile type", types, cx)),
+                    .child(types),
             );
         let list = v_flex()
             .flex_none()
-            .w(px(TEMPLATE_LIST_WIDTH))
-            .gap_2()
-            .child(panel::label("Selected template", cx))
+            .w(px(LIST_WIDTH))
+            .gap(px(LIST_GAP))
+            .child(panel::label("Selected Template", cx))
             .children(
                 Preset::ALL
                     .into_iter()
-                    .map(|preset| self.template_row(preset, cx)),
+                    .enumerate()
+                    .map(|(index, preset)| self.template_row(index, preset, cx)),
             );
         h_flex()
             .w_full()
             .items_start()
-            .gap_5()
+            .gap(px(DETAILS_GAP))
             .child(editor)
             .child(list)
     }
@@ -362,163 +452,186 @@ impl Creator {
         storage: Storage,
         title: &'static str,
         description: &'static str,
-        chip: Option<SharedString>,
+        room: Option<(usize, usize)>,
         cx: &Context<Self>,
     ) -> Stateful<Div> {
         let theme = cx.theme();
         let selected = self.storage == storage;
-        let available = storage == Storage::Onboard || self.library;
-        let hover = theme.secondary_hover;
-        h_flex()
+        let available = self.available(storage, cx);
+        let (border_hover, hover) = (theme.secondary_hover, theme.secondary);
+        v_flex()
             .id(title)
             .w_full()
-            .p_4()
-            .gap_3()
-            .rounded(theme.radius)
-            .bg(theme.secondary)
+            .p(px(OPTION_PADDING))
+            .gap(px(OPTION_GAP))
+            .rounded(px(OPTION_RADIUS))
             .border_1()
             .border_color(if selected {
                 theme.primary
             } else {
-                theme.secondary
+                theme.border
             })
-            .when(!available, |this| this.opacity(0.5))
+            .bg(if selected {
+                theme.secondary
+            } else {
+                theme.accent
+            })
+            .when(!available, |this| this.opacity(UNAVAILABLE_OPACITY))
             .when(available && !selected, |this| {
                 this.cursor_pointer()
-                    .hover(move |style| style.border_color(hover))
+                    .hover(move |style| style.border_color(border_hover).bg(hover))
                     .on_click(cx.listener(move |this, _, _, cx| this.store(storage, cx)))
             })
             .child(
-                v_flex()
-                    .flex_1()
-                    .gap_1()
-                    .child(div().font_weight(FontWeight::MEDIUM).child(title))
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .gap(px(OPTION_GAP))
                     .child(
                         div()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .child(description),
-                    ),
+                            .text_size(px(BODY_TEXT))
+                            .line_height(px(NAME_LINE))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.foreground)
+                            .child(title),
+                    )
+                    .children(room.map(|(used, capacity)| count_chip(used, capacity, cx))),
             )
-            .children(chip.map(|chip| {
+            .child(
                 div()
-                    .px_1p5()
-                    .rounded(px(4.0))
-                    .bg(theme.group_box)
-                    .text_xs()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.muted_foreground)
-                    .child(chip)
-            }))
+                    .text_size(px(BODY_TEXT))
+                    .line_height(px(BODY_LINE))
+                    .text_color(theme.group_box_foreground)
+                    .child(description),
+            )
     }
 
-    fn template_row(&self, preset: Preset, cx: &Context<Self>) -> Stateful<Div> {
+    fn template_row(&self, index: usize, preset: Preset, cx: &Context<Self>) -> Stateful<Div> {
         let theme = cx.theme();
         let selected = self.preset == Some(preset);
-        let hover = theme.secondary_hover;
+        let (border_hover, hover) = (theme.secondary_hover, theme.tab_active);
         h_flex()
-            .id(SharedString::from(format!(
-                "template-row-{}",
-                preset.name()
-            )))
+            .id(("template-row", index))
             .w_full()
-            .h(px(TEMPLATE_ROW_HEIGHT))
-            .px_4()
-            .gap_4()
-            .rounded(theme.radius_lg)
-            .bg(theme.secondary)
+            .h(px(ROW_HEIGHT))
+            .px(px(ROW_PADDING_X))
+            .gap(px(ROW_GAP))
+            .rounded(px(RADIUS))
             .border_1()
             .border_color(if selected {
                 theme.primary
             } else {
-                theme.secondary
+                theme.border
             })
-            .cursor_pointer()
+            .bg(if selected {
+                theme::palette().overlay_hover
+            } else {
+                theme.group_box
+            })
             .when(!selected, |this| {
-                this.hover(move |style| style.border_color(hover))
+                this.cursor_pointer()
+                    .hover(move |style| style.border_color(border_hover).bg(hover))
             })
-            .on_click(cx.listener(move |this, _, window, cx| this.choose(preset, window, cx)))
+            .on_click(cx.listener(move |this, _, _, cx| this.choose(preset, cx)))
             .child(
-                Icon::new(preset_icon(preset))
-                    .small()
-                    .text_color(if selected {
-                        theme.primary
-                    } else {
-                        theme.muted_foreground
-                    }),
+                div()
+                    .flex_none()
+                    .w(px(THUMB_WIDTH))
+                    .h(px(THUMB_HEIGHT))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        Icon::new(preset_icon(preset))
+                            .size(px(THUMB_ICON))
+                            .text_color(if selected {
+                                theme.primary
+                            } else {
+                                theme.muted_foreground
+                            }),
+                    ),
             )
             .child(
                 div()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(SharedString::from(default_name(preset))),
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(BODY_TEXT))
+                    .line_height(px(NAME_LINE))
+                    .font_weight(if selected {
+                        FontWeight::BOLD
+                    } else {
+                        FontWeight::SEMIBOLD
+                    })
+                    .text_color(theme.foreground)
+                    .child(preset.title()),
             )
     }
 }
 
 impl Render for Creator {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let full = self
-            .room(cx)
-            .is_none_or(|(used, capacity)| used >= capacity);
+        let ready = self.ready(cx);
         let (subtitle, body, action) = if self.step == Step::Details {
             (
-                "Name your profile and pick its colour.",
-                self.details(cx),
-                Button::new("create-profile")
+                "Name your profile, customize its appearance, and select where it is stored.",
+                self.details(window, cx),
+                ActionButton::new("create-profile", "Create profile")
+                    .large()
                     .primary()
-                    .label("Create profile")
-                    .disabled(full)
+                    .disabled(!ready)
                     .on_click(cx.listener(|this, _, window, cx| this.create(window, cx))),
             )
         } else {
             (
-                "Select the type of profile you would like to create.",
+                "Select the type of profile you would like to create",
                 self.templates(cx),
-                Button::new("continue-profile")
+                ActionButton::new("continue-profile", "Continue")
+                    .large()
                     .primary()
-                    .label("Continue")
                     .disabled(self.preset.is_none())
                     .on_click(cx.listener(|this, _, _, cx| this.proceed(cx))),
             )
         };
-        v_flex()
-            .w_full()
-            .gap_5()
+        let intro = v_flex()
+            .gap(px(INTRO_GAP))
             .child(
-                v_flex()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_2xl()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Creating new profile"),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .child(subtitle),
-                    ),
+                div()
+                    .text_size(px(TITLE_TEXT))
+                    .line_height(px(TITLE_LINE))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme.foreground)
+                    .child("Creating new profile"),
             )
-            .child(body)
             .child(
+                div()
+                    .text_size(px(BODY_TEXT))
+                    .line_height(px(NAME_LINE))
+                    .text_color(theme.group_box_foreground)
+                    .child(subtitle),
+            );
+        panel::page_with_heading(
+            "profile-creator",
+            intro,
+            v_flex().w_full().gap(px(VIEW_GAP)).child(body).child(
                 h_flex()
                     .w_full()
                     .justify_end()
-                    .gap_2()
+                    .gap(px(BUTTON_GAP))
                     .child(
-                        Button::new("cancel-profile")
-                            .label("Cancel")
+                        ActionButton::new("cancel-profile", "Cancel")
+                            .large()
                             .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                     )
                     .child(action),
-            )
+            ),
+        )
+        .gap(px(VIEW_GAP))
     }
 }
 
-fn default_name(preset: Preset) -> String {
-    format!("{} profile", preset.name())
+fn new_name(preset: Preset) -> String {
+    format!("New {}", preset.title())
 }
 
 const fn preset_icon(preset: Preset) -> Catalog {

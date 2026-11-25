@@ -1,13 +1,13 @@
 use std::{
-    env, fs,
+    fs,
     path::{Path, PathBuf},
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use super::file::{EXTENSION, FileError, ProfileFile};
+use crate::local_data;
 
-const APPLICATION: &str = "openwoot";
 const FOLDER: &str = "profiles";
 const WORKER_STACK: usize = 16 * 1024 * 1024;
 
@@ -18,8 +18,8 @@ pub(super) struct Stored {
 }
 
 pub(super) fn directory() -> Result<PathBuf, FileError> {
-    data_directory()
-        .map(|data| data.join(APPLICATION).join(FOLDER))
+    local_data::directory()
+        .map(|data| data.join(FOLDER))
         .ok_or(FileError::NoDataDirectory)
 }
 
@@ -107,28 +107,10 @@ fn now_millis() -> u128 {
         .map_or(0, |elapsed| elapsed.as_millis())
 }
 
-fn data_directory() -> Option<PathBuf> {
-    let home = || {
-        env::var_os("HOME")
-            .filter(|home| !home.is_empty())
-            .map(PathBuf::from)
-    };
-    if cfg!(target_os = "macos") {
-        home().map(|home| home.join("Library").join("Application Support"))
-    } else if cfg!(windows) {
-        env::var_os("APPDATA")
-            .filter(|data| !data.is_empty())
-            .map(PathBuf::from)
-    } else {
-        env::var_os("XDG_DATA_HOME")
-            .filter(|data| !data.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| home().map(|home| home.join(".local").join("share")))
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::env;
+
     use super::*;
 
     #[test]

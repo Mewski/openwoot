@@ -30,7 +30,7 @@ pub(super) fn trigger_value(travel: u16, full_scale: u16, settings: Option<&Sett
 
 #[cfg(test)]
 mod tests {
-    use openwoot_protocol::gamepad::{CurvePoint, Normalization};
+    use openwoot_protocol::gamepad::{CurvePoint, Normalization, StickBias};
 
     use super::*;
 
@@ -41,7 +41,7 @@ mod tests {
                 .map(|(travel, output)| CurvePoint { travel, output }),
             normalization: Normalization::Circular,
             single_direction_axes: false,
-            left_stick_up_bias: None,
+            left_stick_up_bias: StickBias::DISABLED,
         };
         assert_eq!(trigger_value(0, 255, None), 0);
         assert_eq!(trigger_value(500, 255, Some(&raised)), 0);

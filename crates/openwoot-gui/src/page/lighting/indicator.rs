@@ -42,10 +42,10 @@ impl Lock {
 
     pub(super) const fn name(self) -> &'static str {
         match self {
-            Self::Caps => "Caps Lock indicator",
-            Self::Scroll => "Scroll Lock indicator",
-            Self::Num => "Num Lock indicator",
-            Self::Layer => "Layer lock indicator",
+            Self::Caps => "Caps Lock Indicator",
+            Self::Scroll => "Scroll Lock Indicator",
+            Self::Num => "Num Lock Indicator",
+            Self::Layer => "Layer Lock Indicator",
         }
     }
 

@@ -57,11 +57,20 @@ enum Template {
     Socd(Resolution, bool),
 }
 
+const STRAFE: &str = "Instant strafe switching";
+const STRAFE_KEYS: &str = "Switch between A and D instantly without the normal input delay.";
+const STRAFE_ARROWS: &str =
+    "Switch between left and right instantly without the normal input delay.";
+const ALT_TAB: &str = "Reduce accidental Alt + Tab";
+const ALT_TAB_DESCRIPTION: &str = "Alt+Tab only triggers when both keys are fully bottomed out.";
+const RUNNING: &str = "Key Response for Running in Games";
+const RUNNING_DESCRIPTION: &str = "Enable shift at the full press for running";
+
 pub(crate) const PRESETS: &[Preset] = &[
     Preset {
         kind: Kind::DepthPriority,
-        title: "Instant strafe switching",
-        description: "Switch between A and D at once, without the usual input delay",
+        title: STRAFE,
+        description: STRAFE_KEYS,
         parts: &[pair(
             KEY_A,
             KEY_D,
@@ -70,24 +79,24 @@ pub(crate) const PRESETS: &[Preset] = &[
     },
     Preset {
         kind: Kind::DepthPriority,
-        title: "Instant arrow switching",
-        description: "Switch between left and right at once, without the usual input delay",
-        parts: &[pair(LEFT, RIGHT, Template::DepthPriority(Resolution::Both))],
-    },
-    Preset {
-        kind: Kind::DepthPriority,
-        title: "Reduce accidental Alt + Tab",
-        description: "Alt + Tab triggers only when both keys are fully pressed",
+        title: ALT_TAB,
+        description: ALT_TAB_DESCRIPTION,
         parts: &[pair(
-            TAB,
             LEFT_ALT,
+            TAB,
             Template::DepthPriority(Resolution::Both),
         )],
     },
     Preset {
+        kind: Kind::DepthPriority,
+        title: STRAFE,
+        description: STRAFE_ARROWS,
+        parts: &[pair(LEFT, RIGHT, Template::DepthPriority(Resolution::Both))],
+    },
+    Preset {
         kind: Kind::Socd,
-        title: "Instant strafe switching",
-        description: "Switch between A and D at once, without the usual input delay",
+        title: STRAFE,
+        description: STRAFE_KEYS,
         parts: &[pair(
             KEY_A,
             KEY_D,
@@ -96,8 +105,18 @@ pub(crate) const PRESETS: &[Preset] = &[
     },
     Preset {
         kind: Kind::Socd,
-        title: "Instant arrow switching",
-        description: "Switch between left and right at once, without the usual input delay",
+        title: ALT_TAB,
+        description: ALT_TAB_DESCRIPTION,
+        parts: &[pair(
+            LEFT_ALT,
+            TAB,
+            Template::Socd(Resolution::Neither, true),
+        )],
+    },
+    Preset {
+        kind: Kind::Socd,
+        title: STRAFE,
+        description: STRAFE_ARROWS,
         parts: &[pair(
             LEFT,
             RIGHT,
@@ -105,19 +124,9 @@ pub(crate) const PRESETS: &[Preset] = &[
         )],
     },
     Preset {
-        kind: Kind::Socd,
-        title: "Reduce accidental Alt + Tab",
-        description: "Alt + Tab triggers only when both keys are fully pressed",
-        parts: &[pair(
-            TAB,
-            LEFT_ALT,
-            Template::Socd(Resolution::Neither, true),
-        )],
-    },
-    Preset {
         kind: Kind::DynamicKeystroke,
-        title: "Key response for running in games",
-        description: "Shift at the full press of W, A, S and D, for running",
+        title: RUNNING,
+        description: RUNNING_DESCRIPTION,
         parts: &[
             running(KEY_W),
             running(KEY_A),
@@ -127,14 +136,14 @@ pub(crate) const PRESETS: &[Preset] = &[
     },
     Preset {
         kind: Kind::DynamicKeystroke,
-        title: "Key response for running in games",
-        description: "Shift at the full press of W, for running",
+        title: RUNNING,
+        description: RUNNING_DESCRIPTION,
         parts: &[running(KEY_W)],
     },
     Preset {
         kind: Kind::ModTap,
-        title: "Mod Tap arrow keys",
-        description: "Tap the lower right keys for arrows, hold them as before",
+        title: "Mod Tap Arrow Keys",
+        description: "Add arrow keys to your keyboard in one click",
         parts: &[
             mod_tap(MENU, LEFT, MENU),
             mod_tap(RIGHT_SHIFT, UP, RIGHT_SHIFT),
@@ -145,19 +154,19 @@ pub(crate) const PRESETS: &[Preset] = &[
     Preset {
         kind: Kind::ModTap,
         title: "Mod Tap Fn 2 on Caps Lock",
-        description: "Hold Caps Lock for Fn layer 2, tap it for Caps Lock",
+        description: "Add Fn 2 as a hold key on Caps Lock in one click",
         parts: &[mod_tap(CAPS_LOCK, CAPS_LOCK, FN_2)],
     },
     Preset {
         kind: Kind::Toggle,
-        title: "Toggle Fn layer 1",
-        description: "Tap Fn to keep Fn layer 1 on without holding the key",
+        title: "Toggle Function Layer 1",
+        description: "Toggle Fn 1 on and off without holding the key",
         parts: &[single(FN_1, Template::Toggle(FN_1))],
     },
     Preset {
         kind: Kind::Toggle,
-        title: "Toggle Fn layer 2 on Caps Lock",
-        description: "Tap Caps Lock to switch Fn layer 2 on or off",
+        title: "Toggle Function Layer 2 on Caps Lock",
+        description: "Swap between Fn 2 and Caps Lock in one click",
         parts: &[single(CAPS_LOCK, Template::Toggle(FN_2))],
     },
 ];
@@ -167,6 +176,7 @@ impl Preset {
         self.parts
             .iter()
             .flat_map(|part| match part.template {
+                Template::ModTap(mod_tap) if mod_tap.tap == part.key => vec![mod_tap.hold],
                 Template::ModTap(mod_tap) => vec![mod_tap.tap],
                 Template::Toggle(action) => vec![action],
                 Template::Keystroke(_) | Template::DepthPriority(_) | Template::Socd(..) => {
@@ -174,6 +184,21 @@ impl Preset {
                 }
             })
             .collect()
+    }
+
+    pub(crate) fn offered(&self, base: &Keymap) -> bool {
+        let added: Vec<Action> = self
+            .parts
+            .iter()
+            .filter_map(|part| match part.template {
+                Template::ModTap(mod_tap) if mod_tap.tap != part.key => Some(mod_tap.tap),
+                _ => None,
+            })
+            .collect();
+        added.is_empty()
+            || added
+                .iter()
+                .any(|action| key_bound_to(base, *action).is_none())
     }
 
     pub(crate) fn entries(&self, base: &Keymap) -> Result<Vec<advanced::Key>, Vec<Action>> {
@@ -352,6 +377,7 @@ mod tests {
             key_rows: 6,
             key_columns: COLUMNS,
             profiles: 4,
+            linked_profiles: 0,
             layouts: heapless::Vec::new(),
             lightbar_leds: 0,
             host_signals: false,
@@ -385,7 +411,7 @@ mod tests {
         let base = base();
         let Some(preset) = PRESETS
             .iter()
-            .find(|preset| preset.title == "Mod Tap arrow keys")
+            .find(|preset| preset.title == "Mod Tap Arrow Keys")
         else {
             unreachable!("the arrow preset is listed");
         };
@@ -413,7 +439,7 @@ mod tests {
         }
         let socd = PRESETS
             .iter()
-            .find(|preset| preset.kind == Kind::Socd && preset.title == "Instant strafe switching");
+            .find(|preset| preset.kind == Kind::Socd && preset.title == STRAFE);
         assert_eq!(
             socd.map(|preset| preset.entries(&base)),
             Some(Err(vec![KEY_D]))
@@ -428,18 +454,49 @@ mod tests {
                 .find(|preset| preset.title == title && preset.kind == kind)
                 .map(Preset::chips)
         };
+        assert_eq!(chips(STRAFE, Kind::Socd), Some(vec![KEY_A, KEY_D]));
         assert_eq!(
-            chips("Instant strafe switching", Kind::Socd),
-            Some(vec![KEY_A, KEY_D])
+            chips(ALT_TAB, Kind::DepthPriority),
+            Some(vec![LEFT_ALT, TAB])
         );
         assert_eq!(
-            chips("Mod Tap arrow keys", Kind::ModTap),
+            chips("Mod Tap Arrow Keys", Kind::ModTap),
             Some(vec![LEFT, UP, RIGHT, DOWN])
         );
         assert_eq!(
-            chips("Toggle Fn layer 2 on Caps Lock", Kind::Toggle),
+            chips("Mod Tap Fn 2 on Caps Lock", Kind::ModTap),
             Some(vec![FN_2])
         );
+        assert_eq!(
+            chips("Toggle Function Layer 2 on Caps Lock", Kind::Toggle),
+            Some(vec![FN_2])
+        );
+    }
+
+    #[test]
+    fn arrow_presets_are_offered_only_without_arrow_keys() {
+        let arrows = PRESETS
+            .iter()
+            .find(|preset| preset.title == "Mod Tap Arrow Keys");
+        let caps = PRESETS
+            .iter()
+            .find(|preset| preset.title == "Mod Tap Fn 2 on Caps Lock");
+        let with_arrows = base();
+        let mut without_arrows = base();
+        for slot in &mut without_arrows {
+            if [LEFT, RIGHT, UP, DOWN].contains(slot) {
+                *slot = Action::None;
+            }
+        }
+        assert_eq!(
+            arrows.map(|preset| preset.offered(&with_arrows)),
+            Some(false)
+        );
+        assert_eq!(
+            arrows.map(|preset| preset.offered(&without_arrows)),
+            Some(true)
+        );
+        assert_eq!(caps.map(|preset| preset.offered(&with_arrows)), Some(true));
     }
 
     #[test]

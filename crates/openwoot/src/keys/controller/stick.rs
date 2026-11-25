@@ -24,7 +24,7 @@ pub fn shape_stick(
         response_curve(largest, settings)
     };
     let up_bias = settings
-        .and_then(|settings| settings.left_stick_up_bias)
+        .and_then(|settings| settings.left_stick_up_bias.active())
         .filter(|_| left_stick && y < 0.0);
     let (weight_x, weight_y) = match up_bias {
         Some(percent) => {
@@ -49,11 +49,11 @@ pub fn shape_stick(
 
 #[cfg(test)]
 mod tests {
-    use openwoot_protocol::gamepad::CurvePoint;
+    use openwoot_protocol::gamepad::{CurvePoint, StickBias};
 
     use super::*;
 
-    fn settings(normalization: Normalization, left_stick_up_bias: Option<u8>) -> Settings {
+    fn settings(normalization: Normalization, left_stick_up_bias: StickBias) -> Settings {
         Settings {
             curve: [(0, 0), (85, 85), (170, 170), (255, 255)]
                 .map(|(travel, output)| CurvePoint { travel, output }),
@@ -78,7 +78,7 @@ mod tests {
         let (x, y) = shape_stick(1.0, 1.0, false, 0.0, None);
         assert_eq!(x, y);
         assert!((x - core::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6);
-        let square = settings(Normalization::Square, None);
+        let square = settings(Normalization::Square, StickBias::default());
         assert_eq!(
             shape_stick(1.0, -1.0, false, 0.0, Some(&square)),
             (1.0, -1.0)
@@ -91,7 +91,13 @@ mod tests {
 
     #[test]
     fn the_up_bias_weights_the_left_stick_pointing_up() {
-        let biased = settings(Normalization::Square, Some(25));
+        let biased = settings(
+            Normalization::Square,
+            StickBias {
+                enabled: true,
+                percent: 25,
+            },
+        );
         assert_eq!(
             shape_stick(1.0, -1.0, true, 0.0, Some(&biased)),
             (1.0 / 3.0, -1.0)
@@ -101,5 +107,18 @@ mod tests {
             shape_stick(1.0, -1.0, false, 0.0, Some(&biased)),
             (1.0, -1.0)
         );
+    }
+
+    #[test]
+    fn a_disabled_up_bias_keeps_its_percentage_and_weights_nothing() {
+        let kept = settings(
+            Normalization::Square,
+            StickBias {
+                enabled: false,
+                percent: 25,
+            },
+        );
+        assert_eq!(shape_stick(1.0, -1.0, true, 0.0, Some(&kept)), (1.0, -1.0));
+        assert_eq!(kept.left_stick_up_bias.percent, 25);
     }
 }

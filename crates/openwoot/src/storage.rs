@@ -4,10 +4,12 @@ mod layout_variant;
 mod nor_identity;
 mod nor_layout;
 mod partition;
+mod read_ahead;
 mod record;
 mod settings;
 mod store;
 mod stored_keys;
+mod usage;
 
 pub use device_info::{
     AuxRecord, DeviceInfo, DeviceInfoError, DeviceInfoSource, LEGACY_SERIAL_LEN, McuPage,

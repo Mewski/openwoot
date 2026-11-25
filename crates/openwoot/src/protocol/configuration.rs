@@ -1,11 +1,12 @@
 use openwoot_protocol::{
-    advanced,
+    advanced, apps,
     configuration::{Capabilities, Rejection},
     device::{self, Layout, LayoutState},
+    diagnostics::StorageUsage,
     gamepad, geometry, global,
     keys::{self, Layer},
     lightbar, lighting,
-    profile::{self, Slot, Summary},
+    profile::{self, Namespace, Selection, Slot, Summary},
     switches,
 };
 
@@ -18,11 +19,19 @@ pub trait Configuration {
         Err(Rejection::Unsupported)
     }
 
-    async fn device_settings(&mut self) -> Result<device::Settings, Rejection> {
+    async fn device_settings(&mut self) -> Result<device::SettingsState, Rejection> {
         Err(Rejection::Unsupported)
     }
 
     async fn set_device_settings(&mut self, _settings: device::Settings) -> Result<(), Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    async fn device_name(&mut self) -> Result<device::Name, Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    async fn set_device_name(&mut self, _name: device::Name) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 
@@ -58,7 +67,37 @@ pub trait Configuration {
         Err(Rejection::Unsupported)
     }
 
-    async fn create_profile(&mut self) -> Result<Slot, Rejection> {
+    async fn create_profile(&mut self, _namespace: Namespace) -> Result<Slot, Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    async fn select_linked_profile(&mut self, _selection: Selection) -> Result<(), Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    async fn app_link_count(&mut self, _profile: Slot) -> Result<u8, Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    async fn app_link(
+        &mut self,
+        _profile: Slot,
+        _index: u8,
+        _link: &mut apps::Link,
+    ) -> Result<(), Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    async fn set_app_link(
+        &mut self,
+        _profile: Slot,
+        _index: u8,
+        _link: &apps::Link,
+    ) -> Result<(), Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    async fn delete_app_link(&mut self, _profile: Slot, _index: u8) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 
@@ -121,6 +160,14 @@ pub trait Configuration {
         _layer: Layer,
         _keymap: &keys::Keymap,
     ) -> Result<(), Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    async fn keymap_link(&mut self, _profile: Slot) -> Result<bool, Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    async fn set_keymap_link(&mut self, _profile: Slot, _linked: bool) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 
@@ -267,6 +314,10 @@ pub trait Configuration {
     }
 
     async fn factory_reset(&mut self) -> Result<(), Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    async fn storage_usage(&mut self) -> Result<StorageUsage, Rejection> {
         Err(Rejection::Unsupported)
     }
 }

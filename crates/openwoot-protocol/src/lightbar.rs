@@ -1,4 +1,4 @@
-use heapless::Vec;
+use heapless::{String, Vec};
 use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
@@ -14,8 +14,11 @@ pub const MAX_TERMS: usize = 2;
 pub const MAX_LEDS: usize = 16;
 pub const MAX_HOST_SIGNALS: usize = 20;
 pub const MAX_HOLD_MS: u16 = 60_000;
+pub const TITLE_LEN: usize = 30;
 
 pub type Entries = Vec<Entry, MAX_ENTRIES>;
+pub type Colors = Vec<Rgb, MAX_LEDS>;
+pub type Title = String<TITLE_LEN>;
 pub type HostSignals = Vec<HostSignal, MAX_HOST_SIGNALS>;
 pub type HostSignalIds = Vec<u32, MAX_HOST_SIGNALS>;
 
@@ -29,6 +32,7 @@ pub struct Settings {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Schema)]
 pub struct Entry {
+    pub title: Title,
     pub condition: Option<Condition>,
     pub effect: Effect,
 }

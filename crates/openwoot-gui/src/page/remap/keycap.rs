@@ -1,5 +1,5 @@
 use gpui_kit::{
-    AnyElement, App, Div, ElementId, Hsla, InteractiveElement as _, IntoElement,
+    AnyElement, App, Div, ElementId, FontWeight, Hsla, InteractiveElement as _, IntoElement,
     ParentElement as _, Pixels, SharedString, Stateful, Styled as _,
     assets::IconName as Catalog,
     component::{ActiveTheme as _, Icon, h_flex},
@@ -12,9 +12,20 @@ use openwoot_protocol::keys::{Action, Function, MouseButton, SystemControl};
 use crate::{keyboard::Glyph, theme, usage};
 
 pub(crate) const TILE: f32 = 44.0;
-const CHIP: f32 = 26.0;
+const TILE_RADIUS: f32 = 4.8;
+const TILE_TEXT: f32 = 12.0;
+const CHIP_HEIGHT: f32 = 20.0;
+const CHIP_PADDING: f32 = 10.0;
+const CHIP_RADIUS: f32 = 8.0;
+const CHIP_TEXT: f32 = 12.8;
+const PRESET_CHIP: f32 = 34.0;
+const PRESET_CHIP_PADDING: f32 = 4.0;
+const PRESET_CHIP_RADIUS: f32 = 6.0;
+const PRESET_CHIP_LINE: f32 = 14.4;
+const LARGE_BINDING: f32 = 60.0;
+const LARGE_BINDING_TEXT: f32 = 16.0;
 const ICON_SHARE: f32 = 0.42;
-const TILE_RADIUS: f32 = 5.0;
+const DISABLED_OPACITY: f32 = 0.4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Art {
@@ -53,8 +64,9 @@ pub(crate) fn tile(
     cx: &App,
 ) -> Stateful<Div> {
     let theme = cx.theme();
+    let palette = theme::palette();
     let caps = theme::keycaps();
-    let hover = theme.secondary_hover;
+    let (hover, hover_border) = (palette.raised_hover, theme.muted_foreground);
     div()
         .id(id)
         .flex_none()
@@ -64,54 +76,84 @@ pub(crate) fn tile(
         .justify_center()
         .overflow_hidden()
         .rounded(px(TILE_RADIUS))
-        .bg(caps.top)
+        .bg(palette.raised)
         .border_1()
         .border_color(if look.current {
             theme.primary
         } else {
-            theme.border
+            palette.border_strong
         })
-        .shadow_sm()
-        .text_xs()
+        .text_size(px(TILE_TEXT))
         .text_center()
         .text_color(caps.legend)
         .map(|this| {
             if look.disabled {
-                this.opacity(0.4)
+                this.opacity(DISABLED_OPACITY)
             } else {
-                this.cursor_pointer().hover(move |style| style.bg(hover))
+                this.cursor_pointer()
+                    .hover(move |style| style.bg(hover).border_color(hover_border))
             }
         })
         .child(face(action, px(TILE), caps.legend, theme.primary))
 }
 
 pub(crate) fn chip(action: Action, cx: &App) -> Div {
+    let caps = theme::keycaps();
+    chip_frame(cx).child(face(
+        action,
+        px(CHIP_HEIGHT * 2.0),
+        caps.legend,
+        cx.theme().primary,
+    ))
+}
+
+pub(crate) fn text_chip(text: SharedString, cx: &App) -> Div {
+    chip_frame(cx).child(text)
+}
+
+pub(crate) fn preset_chip(action: Action, cx: &App) -> Div {
     let theme = cx.theme();
     let caps = theme::keycaps();
     h_flex()
         .flex_none()
-        .h(px(CHIP))
-        .min_w(px(CHIP))
-        .px_1p5()
+        .min_w(px(PRESET_CHIP))
+        .h(px(PRESET_CHIP))
+        .p(px(PRESET_CHIP_PADDING))
+        .justify_center()
+        .rounded(px(PRESET_CHIP_RADIUS))
+        .bg(theme.secondary)
+        .border_1()
+        .border_color(theme.secondary)
+        .text_size(px(TILE_TEXT))
+        .line_height(px(PRESET_CHIP_LINE))
+        .font_weight(FontWeight::BOLD)
+        .text_color(caps.legend)
+        .child(face(action, px(PRESET_CHIP), caps.legend, theme.primary))
+}
+
+pub(crate) fn binding(action: Action, size: Pixels, cx: &App) -> Div {
+    let caps = theme::keycaps();
+    let text = if size >= px(LARGE_BINDING) {
+        LARGE_BINDING_TEXT
+    } else {
+        TILE_TEXT
+    };
+    div()
+        .flex_none()
+        .size(size)
+        .flex()
+        .items_center()
         .justify_center()
         .rounded(px(TILE_RADIUS))
         .bg(caps.top)
         .border_1()
-        .border_color(theme.border)
-        .text_xs()
+        .border_color(caps.border)
+        .text_size(px(text))
+        .text_center()
         .text_color(caps.legend)
-        .child(face(action, px(CHIP + 8.0), caps.legend, theme.primary))
-}
-
-pub(crate) fn blank_chip(cx: &App) -> Div {
-    let theme = cx.theme();
-    div()
-        .flex_none()
-        .size(px(CHIP))
-        .rounded(px(TILE_RADIUS))
-        .bg(theme::keycaps().top)
-        .border_1()
-        .border_color(theme.border)
+        .when(action != Action::None, |this| {
+            this.child(face(action, size, caps.legend, cx.theme().primary))
+        })
 }
 
 pub(crate) fn face(action: Action, height: Pixels, ink: Hsla, accent: Hsla) -> AnyElement {
@@ -123,6 +165,19 @@ pub(crate) fn face(action: Action, height: Pixels, ink: Hsla, accent: Hsla) -> A
             .child(SharedString::from(usage::legend(action)))
             .into_any_element(),
     }
+}
+
+fn chip_frame(cx: &App) -> Div {
+    h_flex()
+        .flex_none()
+        .h(px(CHIP_HEIGHT))
+        .px(px(CHIP_PADDING))
+        .justify_center()
+        .rounded(px(CHIP_RADIUS))
+        .bg(cx.theme().secondary)
+        .text_size(px(CHIP_TEXT))
+        .font_weight(FontWeight::BOLD)
+        .text_color(theme::keycaps().legend)
 }
 
 const fn art(action: Action) -> Option<Art> {

@@ -163,6 +163,21 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
         self.sensors.get_mut(position)
     }
 
+    pub fn conversion_order(&self) -> impl Iterator<Item = (Position, Key)> + '_ {
+        let parallel = self.mode_is_parallel();
+        let (groups, members) = if parallel {
+            (ADDRESSES, INPUTS)
+        } else {
+            (INPUTS, ADDRESSES)
+        };
+        (0..groups as u8)
+            .flat_map(move |group| {
+                (0..members as u8)
+                    .map(move |member| self.converted_position(parallel, group, member))
+            })
+            .filter_map(move |position| self.map.key(position).map(|key| (position, key)))
+    }
+
     pub fn set_map(&mut self, map: Map<INPUTS, ADDRESSES>) {
         self.map = map;
         self.successors = successors(&map);
@@ -263,6 +278,19 @@ impl<S: Sensing, const INPUTS: usize, const ADDRESSES: usize> Scanner<S, INPUTS,
 
     const fn mode_is_parallel(&self) -> bool {
         matches!(self.mode, Mode::Parallel)
+    }
+
+    fn converted_position(&self, parallel: bool, group: u8, member: u8) -> Position {
+        if parallel {
+            let input = self
+                .order
+                .get(usize::from(member))
+                .copied()
+                .unwrap_or_default();
+            Position::new(input, group)
+        } else {
+            Position::new(group, member)
+        }
     }
 
     fn switch_mode(&mut self) {

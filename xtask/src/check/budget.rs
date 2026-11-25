@@ -6,8 +6,7 @@ use anyhow::{Result, bail};
 use openwoot_image::MemoryLayout;
 use stack::StackBound;
 
-use super::{call_graph::CallGraph, entry_points::EntryPoints};
-use crate::elf::Elf;
+use crate::{call_graph::CallGraph, elf::Elf, entry_points::EntryPoints};
 
 const STACK_MARGIN: u32 = 2048;
 const FLASH_MARGIN: u32 = 32 * 1024;

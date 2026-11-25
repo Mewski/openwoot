@@ -1,5 +1,8 @@
 use heapless::Vec;
-use openwoot_protocol::lightbar::{Builtin, Entries, Settings, Signal};
+use openwoot_protocol::{
+    lightbar::{Builtin, Entries, Settings, Signal},
+    lighting::Rgb,
+};
 
 use super::{
     paint::Strip,
@@ -27,6 +30,7 @@ pub struct Bar {
     pub(super) signals: Table,
     pub(super) key_rate: KeyRate,
     pub(super) held: HeldKeys,
+    host_colors: Option<Vec<Rgb, MAX_LIGHTBAR_LEDS>>,
     brightness: u8,
     key_brightness: u8,
     brightness_changed: bool,
@@ -53,6 +57,7 @@ impl Bar {
             signals: Table::new(),
             key_rate: KeyRate::new(0),
             held: HeldKeys::new(),
+            host_colors: None,
             brightness: 0,
             key_brightness: u8::MAX,
             brightness_changed: false,
@@ -97,10 +102,16 @@ impl Bar {
         self.active = false;
         if self.setup.profile.enabled {
             self.signals.clear();
-            self.set_brightness(self.setup.profile.brightness.unwrap_or(self.key_brightness));
             self.active = self.setup.bind(&mut self.signals, self.fast_scan);
+        }
+        self.set_brightness(self.shown_brightness());
+    }
+
+    fn shown_brightness(&self) -> u8 {
+        if self.setup.profile.enabled || self.host_colors.is_some() {
+            self.setup.profile.brightness.unwrap_or(self.key_brightness)
         } else {
-            self.set_brightness(0);
+            0
         }
     }
 
@@ -114,17 +125,24 @@ impl Bar {
 
 impl Lightbar for Bar {
     fn needs_render(&self, since_render_ms: u16) -> bool {
-        self.redraw || (self.active && self.setup.needs_render(since_render_ms, self.host_control))
+        self.redraw
+            || (self.active
+                && self.host_colors.is_none()
+                && self.setup.needs_render(since_render_ms, self.host_control))
     }
 
     fn render(&mut self, canvas: &mut impl Canvas, elapsed_ms: u16) {
         self.redraw = false;
         self.stale_keys = false;
+        let strip = self.strip();
+        if let Some(colors) = &self.host_colors {
+            strip.show(canvas, colors);
+            return;
+        }
+        strip.clear(canvas);
         if !self.setup.profile.enabled {
             return;
         }
-        let strip = self.strip();
-        strip.clear(canvas);
         let pass = Pass {
             strip,
             host_signals: self.signals.host_active(),
@@ -145,9 +163,7 @@ impl Lightbar for Bar {
 
     fn apply_brightness_change(&mut self, key_brightness: u8) {
         self.key_brightness = key_brightness;
-        if self.setup.profile.enabled && self.setup.profile.brightness.is_none() {
-            self.set_brightness(key_brightness);
-        }
+        self.set_brightness(self.shown_brightness());
         self.publish(
             Signal::Builtin(Builtin::Brightness),
             f32::from(key_brightness) * 100.0 / 255.0,
@@ -194,6 +210,32 @@ impl Lightbar for Bar {
 
     fn set_host_control(&mut self, host_control: bool) {
         self.host_control = host_control;
+    }
+
+    fn set_host_colors(&mut self, colors: &[Rgb]) {
+        if self.host_colors.is_none() {
+            self.stale_keys |= self.setup.forget_painted_keys();
+        }
+        let mut shown = Vec::<Rgb, MAX_LIGHTBAR_LEDS>::new();
+        let _ = shown.extend_from_slice(colors.get(..self.leds.len()).unwrap_or(colors));
+        self.host_colors = Some(shown);
+        self.redraw = true;
+        self.set_brightness(self.shown_brightness());
+    }
+
+    fn reset_host_colors(&mut self) {
+        if self.host_colors.take().is_some() {
+            self.redraw = true;
+            self.set_brightness(self.shown_brightness());
+        }
+    }
+
+    fn host_driven(&self) -> bool {
+        self.host_colors.is_some()
+    }
+
+    fn leds(&self) -> &[Led] {
+        self.leds
     }
 
     fn take_brightness_change(&mut self) -> bool {

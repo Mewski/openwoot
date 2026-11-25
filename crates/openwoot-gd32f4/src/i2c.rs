@@ -1,13 +1,15 @@
+mod bus_clear;
 mod error;
 mod pins;
 mod registers;
+mod step;
 mod timing;
 mod transfer;
 
 use core::hint::spin_loop;
 
+use bus_clear::Pins;
 use embassy_futures::yield_now;
-use embassy_time::{Duration, with_timeout};
 use embedded_hal_async::i2c::{
     self as hal_i2c, ErrorType, NoAcknowledgeSource, Operation, SevenBitAddress,
 };
@@ -15,21 +17,23 @@ pub use error::Error;
 use openwoot::diagnostics::{Bus, Transfers};
 pub use pins::{ClockPin, DataPin};
 use registers::{
-    APB1EN_I2C0EN, CTL0_ACKEN, CTL0_I2CEN, CTL0_SMBEN, CTL0_SRESET, CTL0_START, CTL1_DMAON,
-    OWN_ADDRESS, STAT0_ADDSEND, STAT0_BTC, STAT0_SBSEND, STAT1_I2CBSY, modify_ctl1, with_clock,
+    APB1EN_I2C0EN, CTL0_ACKEN, CTL0_I2CEN, CTL0_SMBEN, CTL0_SRESET, CTL0_START, CTL0_STOP,
+    CTL1_DMAON, OWN_ADDRESS, STAT0_ADDSEND, STAT0_BTC, STAT0_SBSEND, STAT1_I2CBSY, STAT1_MASTER,
+    modify_ctl1, registers, with_clock,
 };
+use step::step;
 use timing::{Timing, timing};
 pub use transfer::InterruptHandler;
 use transfer::{Channel, Transfer};
 
 use crate::{
+    dma,
     interrupt::{self, Binding, Priority, typelevel},
     pac,
     rcu::{self, Clocks},
     register::{clear_bits, modify_bits, read_bits, set_bits, write_bits},
 };
 
-const TRANSFER_TIMEOUT: Duration = Duration::from_millis(10);
 const MAX_TRANSFER: usize = 443;
 const MAX_WRITES: usize = 4;
 const RELEASE_SPINS: u32 = 10_000;
@@ -38,8 +42,9 @@ static TRANSFERS: Transfers = Transfers::new();
 
 #[derive(Debug)]
 pub struct I2c {
-    i2c: pac::I2c0,
+    peripheral: pac::I2c0,
     timing: Timing,
+    pins: Pins,
 }
 
 impl I2c {
@@ -55,12 +60,12 @@ impl I2c {
     ) -> Self {
         rcu::with_registers(|rcu| set_bits(rcu.apb1en(), APB1EN_I2C0EN));
         Channel::new().enable_clock();
-        clock.into_i2c();
-        data.into_i2c();
         let bus = Self {
-            i2c,
+            peripheral: i2c,
             timing: timing(clocks.apb1),
+            pins: Pins::new(clock.into_line(), data.into_line(), clocks.system),
         };
+        bus.pins.release();
         bus.configure();
         for irq in [
             pac::Interrupt::I2C0_EV,
@@ -73,7 +78,7 @@ impl I2c {
     }
 
     fn configure(&self) {
-        let i2c = &self.i2c;
+        let i2c = &self.peripheral;
         critical_section::with(|section| {
             modify_ctl1(section, i2c, |bits| with_clock(bits, self.timing.clock_mhz));
         });
@@ -86,43 +91,44 @@ impl I2c {
     }
 
     fn recover(&self) {
-        let i2c = &self.i2c;
+        let i2c = &self.peripheral;
         let mut spins = 0;
         while read_bits(i2c.stat1()) & STAT1_I2CBSY != 0 && spins < RELEASE_SPINS {
             spins += 1;
             spin_loop();
         }
         set_bits(i2c.ctl0(), CTL0_SRESET);
+        self.pins.release();
         clear_bits(i2c.ctl0(), CTL0_SRESET);
         Channel::new().clear_flags();
         self.configure();
     }
 
     async fn write_all(&self, address: SevenBitAddress, chunks: &[&[u8]]) -> Result<(), Error> {
-        let i2c = &self.i2c;
-        while read_bits(i2c.stat1()) & STAT1_I2CBSY != 0 {
-            yield_now().await;
-        }
+        let i2c = &self.peripheral;
+        step(self.released()).await?;
         modify_bits(i2c.stat0(), |bits| bits & !error::STAT0_ERRORS);
         let mut transfer = Transfer::new(i2c);
         set_bits(i2c.ctl0(), CTL0_START);
-        transfer
-            .event(STAT0_SBSEND, NoAcknowledgeSource::Address)
-            .await?;
+        step(transfer.event(STAT0_SBSEND, NoAcknowledgeSource::Address)).await?;
         write_bits(i2c.data(), u32::from(address) << 1);
-        transfer
-            .event(STAT0_ADDSEND, NoAcknowledgeSource::Address)
-            .await?;
+        step(transfer.event(STAT0_ADDSEND, NoAcknowledgeSource::Address)).await?;
         let _ = read_bits(i2c.stat0());
         let _ = read_bits(i2c.stat1());
         if chunks.iter().any(|chunk| !chunk.is_empty()) {
             critical_section::with(|section| modify_ctl1(section, i2c, |bits| bits | CTL1_DMAON));
             for chunk in chunks.iter().filter(|chunk| !chunk.is_empty()) {
-                transfer.send(chunk).await?;
+                step(transfer.send(chunk)).await?;
             }
-            transfer.event(STAT0_BTC, NoAcknowledgeSource::Data).await?;
+            step(transfer.event(STAT0_BTC, NoAcknowledgeSource::Data)).await?;
         }
-        transfer.stop().await;
+        step(transfer.stop()).await
+    }
+
+    async fn released(&self) -> Result<(), Error> {
+        while read_bits(self.peripheral.stat1()) & STAT1_I2CBSY != 0 {
+            yield_now().await;
+        }
         Ok(())
     }
 }
@@ -130,6 +136,20 @@ impl I2c {
 #[must_use]
 pub fn transfers() -> Bus {
     TRANSFERS.report()
+}
+
+pub(crate) fn stop_for_reset() {
+    let i2c = registers();
+    if read_bits(i2c.stat1()) & STAT1_MASTER == 0 {
+        return;
+    }
+    Channel::new().clear_control(dma::ENABLE);
+    set_bits(i2c.ctl0(), CTL0_STOP);
+    let mut spins = 0;
+    while read_bits(i2c.ctl0()) & CTL0_STOP != 0 && spins < RELEASE_SPINS {
+        spins += 1;
+        spin_loop();
+    }
 }
 
 impl ErrorType for I2c {
@@ -153,10 +173,7 @@ impl hal_i2c::I2c for I2c {
                 return refused;
             }
         };
-        let result = match with_timeout(TRANSFER_TIMEOUT, self.write_all(address, &chunks)).await {
-            Ok(result) => result,
-            Err(_) => Err(Error::Timeout),
-        };
+        let result = self.write_all(address, &chunks).await;
         TRANSFERS.record(&result);
         if result.is_err() {
             self.recover();
@@ -192,7 +209,7 @@ fn writes<'w>(operations: &'w [Operation<'_>]) -> Result<[&'w [u8]; MAX_WRITES],
 mod tests {
     use openwoot::diagnostics::BusError;
 
-    use super::*;
+    use super::{step::STEP_TIMEOUT, *};
 
     const BITS_PER_BYTE: u64 = 9;
     const ADDRESS_BYTES: u64 = 1;
@@ -202,10 +219,10 @@ mod tests {
     }
 
     #[test]
-    fn the_longest_accepted_transfer_is_the_longest_that_fits_the_time_out() {
+    fn the_longest_accepted_transfer_is_the_longest_whose_data_fits_one_step_time_out() {
         let longest = u64::try_from(MAX_TRANSFER).unwrap();
-        assert!(micros_on_the_bus(longest) <= TRANSFER_TIMEOUT.as_micros());
-        assert!(micros_on_the_bus(longest + 1) > TRANSFER_TIMEOUT.as_micros());
+        assert!(micros_on_the_bus(longest) <= STEP_TIMEOUT.as_micros());
+        assert!(micros_on_the_bus(longest + 1) > STEP_TIMEOUT.as_micros());
     }
 
     #[test]

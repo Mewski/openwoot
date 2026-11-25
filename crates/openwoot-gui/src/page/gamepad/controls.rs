@@ -1,5 +1,7 @@
 use openwoot_protocol::{device::Mode, gamepad::Control};
 
+use super::system;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Controller {
     Xbox,
@@ -71,7 +73,7 @@ pub(super) const CLASSIC: [Control; 33] = [
 ];
 
 impl Controller {
-    pub(super) const PREFERRED: Self = if cfg!(target_os = "macos") {
+    pub(super) const PREFERRED: Self = if system::WITHOUT_XBOX_DRIVER.is_some() {
         Self::Classic
     } else {
         Self::Xbox
@@ -94,8 +96,8 @@ impl Controller {
 
     pub(super) const fn name(self) -> &'static str {
         match self {
-            Self::Xbox => "Xbox controller",
-            Self::Classic => "Classic controller",
+            Self::Xbox => "Xbox Controller",
+            Self::Classic => "Classic Controller",
         }
     }
 
@@ -174,24 +176,24 @@ const fn xbox_name(control: Control) -> &'static str {
         Control::Start => "Start",
         Control::Back => "Select",
         Control::Guide => "Menu button",
-        Control::DpadUp | Control::HatUp => "Arrow up",
-        Control::DpadDown | Control::HatDown => "Arrow down",
-        Control::DpadLeft | Control::HatLeft => "Arrow left",
-        Control::DpadRight | Control::HatRight => "Arrow right",
-        Control::LeftStickUp => "Left joystick up",
-        Control::LeftStickDown => "Left joystick down",
-        Control::LeftStickLeft => "Left joystick left",
-        Control::LeftStickRight => "Left joystick right",
-        Control::LeftStickPress => "Left joystick press",
-        Control::RightStickUp => "Right joystick up",
-        Control::RightStickDown => "Right joystick down",
-        Control::RightStickLeft => "Right joystick left",
-        Control::RightStickRight => "Right joystick right",
-        Control::RightStickPress => "Right joystick press",
-        Control::LeftBumper => "Left bumper",
-        Control::RightBumper => "Right bumper",
-        Control::LeftTrigger => "Left trigger",
-        Control::RightTrigger => "Right trigger",
+        Control::DpadUp | Control::HatUp => "Arrow Up",
+        Control::DpadDown | Control::HatDown => "Arrow Down",
+        Control::DpadLeft | Control::HatLeft => "Arrow Left",
+        Control::DpadRight | Control::HatRight => "Arrow Right",
+        Control::LeftStickUp => "Left Joystick Up",
+        Control::LeftStickDown => "Left Joystick Down",
+        Control::LeftStickLeft => "Left Joystick Left",
+        Control::LeftStickRight => "Left Joystick Right",
+        Control::LeftStickPress => "Left Joystick Press",
+        Control::RightStickUp => "Right Joystick Up",
+        Control::RightStickDown => "Right Joystick Down",
+        Control::RightStickLeft => "Right Joystick Left",
+        Control::RightStickRight => "Right Joystick Right",
+        Control::RightStickPress => "Right Joystick Press",
+        Control::LeftBumper => "Left Bumper",
+        Control::RightBumper => "Right Bumper",
+        Control::LeftTrigger => "Left Trigger",
+        Control::RightTrigger => "Right Trigger",
         Control::Accelerator
         | Control::Rudder
         | Control::Trigger
@@ -204,18 +206,18 @@ const fn xbox_name(control: Control) -> &'static str {
 
 const fn classic_name(control: Control) -> &'static str {
     match control {
-        Control::LeftStickLeft => "X axis left (joystick 1 left)",
-        Control::LeftStickRight => "X axis right (joystick 1 right)",
-        Control::LeftStickUp => "Y axis up (joystick 1 up)",
-        Control::LeftStickDown => "Y axis down (joystick 1 down)",
-        Control::RxNegative => "Z axis forward (joystick 2 left)",
-        Control::RxPositive => "Z axis backward (joystick 2 right)",
-        Control::RyNegative => "Z rotation forward (joystick 2 up)",
-        Control::RyPositive => "Z rotation back (joystick 2 down)",
-        Control::RightStickLeft => "X rotation left",
-        Control::RightStickRight => "X rotation right",
-        Control::RightStickUp => "Y rotation up",
-        Control::RightStickDown => "Y rotation down",
+        Control::LeftStickLeft => "X Axis Left (Joystick 1 Left)",
+        Control::LeftStickRight => "X Axis Right (Joystick 1 Right)",
+        Control::LeftStickUp => "Y Axis Up (Joystick 1 Up)",
+        Control::LeftStickDown => "Y Axis Down (Joystick 1 Down)",
+        Control::RxNegative => "Z Axis Forward (Joystick 2 Left)",
+        Control::RxPositive => "Z Axis Backward (Joystick 2 Right)",
+        Control::RyNegative => "Z Rotation Forward (Joystick 2 Up)",
+        Control::RyPositive => "Z Rotation Back (Joystick 2 Down)",
+        Control::RightStickLeft => "X Rotation Left",
+        Control::RightStickRight => "X Rotation Right",
+        Control::RightStickUp => "Y Rotation Up",
+        Control::RightStickDown => "Y Rotation Down",
         Control::LeftTrigger => "Throttle",
         Control::RightTrigger => "Elevator",
         Control::Accelerator => "Accelerator",
@@ -233,10 +235,10 @@ const fn classic_name(control: Control) -> &'static str {
         Control::DpadRight => "Button 10",
         Control::LeftBumper => "Button 11",
         Control::RightBumper => "Button 12",
-        Control::HatUp => "Arrow up",
-        Control::HatDown => "Arrow down",
-        Control::HatLeft => "Arrow left",
-        Control::HatRight => "Arrow right",
+        Control::HatUp => "Arrow Up",
+        Control::HatDown => "Arrow Down",
+        Control::HatLeft => "Arrow Left",
+        Control::HatRight => "Arrow Right",
         Control::Guide | Control::LeftStickPress | Control::RightStickPress => xbox_name(control),
     }
 }
@@ -280,15 +282,15 @@ mod tests {
         assert_eq!(name(Control::LeftTrigger, Controller::Classic), "Throttle");
         assert_eq!(
             name(Control::RxNegative, Controller::Xbox),
-            "Z axis forward (joystick 2 left)"
+            "Z Axis Forward (Joystick 2 Left)"
         );
         assert_eq!(
             tooltip(Control::Guide, Controller::Classic),
-            "Menu button · Xbox controller only"
+            "Menu button · Xbox Controller only"
         );
         assert_eq!(
             tooltip(Control::HatLeft, Controller::Xbox),
-            "Arrow left · Classic controller only"
+            "Arrow Left · Classic Controller only"
         );
     }
 }

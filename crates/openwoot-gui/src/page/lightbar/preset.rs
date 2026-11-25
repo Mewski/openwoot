@@ -1,6 +1,6 @@
 use gpui_kit::{
-    Context, Div, InteractiveElement as _, IntoElement, ParentElement as _, SharedString,
-    StatefulInteractiveElement as _, Styled as _,
+    Context, Div, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
+    SharedString, StatefulInteractiveElement as _, Styled as _,
     assets::IconName as Catalog,
     component::{
         ActiveTheme as _, Icon, Sizable as _, h_flex, input::Input, tooltip::Tooltip, v_flex,
@@ -10,18 +10,26 @@ use gpui_kit::{
     px,
 };
 use openwoot_protocol::lightbar::{
-    Builtin, Comparator, Effect, Entry, MAX_ENTRIES, Range, Signal, Solid, Target, Term,
+    Builtin, Comparator, Effect, Entry, MAX_ENTRIES, Range, Signal, Solid, Target, Term, Title,
 };
 
 use super::{
     LightbarPage,
-    entry::{DEFAULT_TIME_MS, Kind, Matrix, color, compare, full_range, meter, single},
+    entry::{DEFAULT_TIME_MS, Kind, Matrix, color, compare, full_range, meter, single, title},
 };
-use crate::panel;
+use crate::{
+    page::lighting::{ICON_SIZE, LABEL_TEXT},
+    panel, theme,
+};
 
 const KEY_DEPTH_THRESHOLD: f32 = 5.0;
 const CAPS_LOCK_LEDS: u8 = 2;
-const ROW_HEIGHT: f32 = 40.0;
+const ROW_HEIGHT: f32 = 44.0;
+const ROW_RADIUS: f32 = 6.0;
+const ROW_LINE: f32 = 16.8;
+const SEARCH_ICON: f32 = 16.0;
+const INTRO_TEXT: f32 = 16.0;
+const INTRO_LINE: f32 = 22.4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Category {
@@ -42,56 +50,56 @@ pub(super) const PRESETS: [Preset; 8] = [
     Preset {
         name: "Solid",
         icon: Catalog::PaintBucket,
-        description: "One colour on the light indicator, or a colour per LED",
+        description: "Set your Light Indicator to a single color or a color per LED.",
         category: Category::Visual,
         build: |matrix| plain(Kind::Solid.effect(matrix)),
     },
     Preset {
         name: "Pulse",
         icon: Catalog::HeartPulse,
-        description: "Fades one colour in and out, or moves between two colours",
+        description: "Fade one color in and out or between two colors.",
         category: Category::Visual,
         build: |matrix| plain(Kind::Blink.effect(matrix)),
     },
     Preset {
-        name: "Sync with keyboard",
+        name: "Sync with Keyboard",
         icon: Catalog::RefreshCw,
-        description: "Matches the light indicator with the colours of the keys",
+        description: "This effect matches the Light Indicator with the RGB effects on the keyboard.",
         category: Category::Visual,
         build: |matrix| plain(Kind::Mirror.effect(matrix)),
     },
     Preset {
-        name: "Profile indicator",
+        name: "Profile Indicator",
         icon: Catalog::ToggleRight,
-        description: "Shows the colour and slot of the active profile",
+        description: "This effect displays the color and slot of the active profile.",
         category: Category::General,
         build: |matrix| plain(Kind::ProfileIndicator.effect(matrix)),
     },
     Preset {
-        name: "Caps Lock indicator",
+        name: "Caps Lock Indicator",
         icon: Catalog::Keyboard,
-        description: "Shows a colour while Caps Lock is on",
+        description: "This effect displays the color of your choice to indicate whether Caps Lock is enabled.",
         category: Category::General,
         build: caps_lock,
     },
     Preset {
-        name: "Brightness change",
+        name: "Brightness Change",
         icon: Catalog::Sun,
-        description: "Shows the brightness level while it changes",
+        description: "This effect displays the keyboard's brightness level whenever it is being adjusted.",
         category: Category::General,
         build: brightness,
     },
     Preset {
-        name: "Key depth",
+        name: "Key Depth",
         icon: Catalog::ArrowDownToLine,
-        description: "Shows how deep a key is pressed as a progress bar",
+        description: "This effect visually represents your key press depth with a progress bar.",
         category: Category::KeyPress,
         build: key_depth,
     },
     Preset {
-        name: "Typing speed meter",
+        name: "Typing Speed Meter (KPS)",
         icon: Catalog::Gauge,
-        description: "Lights more LEDs the more keys you press per second",
+        description: "This effect displays your typing speed.",
         category: Category::KeyPress,
         build: typing_speed,
     },
@@ -102,16 +110,18 @@ impl Category {
 
     const fn name(self) -> &'static str {
         match self {
-            Self::Visual => "Visual",
-            Self::General => "General indicators",
-            Self::KeyPress => "Key press indicators",
+            Self::Visual => "VISUAL",
+            Self::General => "GENERAL INDICATORS",
+            Self::KeyPress => "KEY PRESS INDICATORS",
         }
     }
 }
 
 impl Preset {
     pub(super) fn entry(&self, matrix: Matrix) -> Entry {
-        (self.build)(matrix)
+        let mut entry = (self.build)(matrix);
+        entry.title = title(self.name);
+        entry
     }
 
     fn matches(&self, search: &str) -> bool {
@@ -125,6 +135,7 @@ impl Preset {
 impl LightbarPage {
     pub(super) fn presets_card(&self, cx: &Context<Self>) -> Option<Div> {
         self.settings.as_ref()?;
+        let theme = cx.theme();
         let search = self.search.read(cx).value();
         let full = self
             .entries(self.owner)
@@ -139,25 +150,41 @@ impl LightbarPage {
             (!rows.is_empty()).then(|| {
                 v_flex()
                     .w_full()
-                    .gap_2()
+                    .gap_3()
                     .child(panel::label(category.name(), cx))
-                    .children(rows)
+                    .child(v_flex().w_full().gap_2().children(rows))
             })
         });
-        Some(
-            panel::section(
-                "Effect presets",
-                Some("Click an effect to add it".into()),
-                cx,
+        let intro = v_flex()
+            .w_full()
+            .gap_4()
+            .child(
+                div()
+                    .text_size(px(INTRO_TEXT))
+                    .line_height(px(INTRO_LINE))
+                    .text_color(theme.group_box_foreground)
+                    .child(if full {
+                        SharedString::from(format!("Up to {MAX_ENTRIES} effects"))
+                    } else {
+                        SharedString::from(
+                            "To add a new effect, simply click on one from the list below.",
+                        )
+                    }),
             )
-            .child(Input::new(&self.search).prefix(Icon::new(Catalog::Search).small()))
-            .when(full, |this| {
-                this.child(panel::note(
-                    format!("This list holds {MAX_ENTRIES} effects at most"),
-                    cx,
-                ))
-            })
-            .children(sections),
+            .child(
+                Input::new(&self.search)
+                    .large()
+                    .bg(theme::palette().input)
+                    .prefix(Icon::new(Catalog::Search).size(px(SEARCH_ICON))),
+            );
+        Some(
+            panel::section("Effect Presets", None, cx).p_6().child(
+                v_flex()
+                    .w_full()
+                    .gap_6()
+                    .child(intro)
+                    .child(v_flex().w_full().gap_4().children(sections)),
+            ),
         )
     }
 
@@ -174,16 +201,22 @@ impl LightbarPage {
             .id(SharedString::from(format!("lightbar-preset-{index}")))
             .w_full()
             .h(px(ROW_HEIGHT))
-            .px_3()
-            .gap_3()
+            .px_4()
+            .gap_2()
             .items_center()
-            .rounded(px(6.0))
+            .rounded(px(ROW_RADIUS))
             .border_1()
             .border_color(theme.transparent)
-            .bg(theme.secondary)
-            .text_sm()
-            .text_color(theme.foreground)
-            .child(Icon::new(preset.icon).small())
+            .bg(theme.accent)
+            .text_size(px(LABEL_TEXT))
+            .line_height(px(ROW_LINE))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(theme.group_box_foreground)
+            .child(
+                div()
+                    .text_color(theme.foreground)
+                    .child(Icon::new(preset.icon).size(px(ICON_SIZE))),
+            )
             .child(div().min_w_0().truncate().child(preset.name))
             .tooltip(move |window, cx| Tooltip::new(description).build(window, cx))
             .map(|this| {
@@ -205,6 +238,7 @@ impl LightbarPage {
 
 const fn plain(effect: Effect) -> Entry {
     Entry {
+        title: Title::new(),
         condition: None,
         effect,
     }
@@ -213,6 +247,7 @@ const fn plain(effect: Effect) -> Entry {
 fn caps_lock(matrix: Matrix) -> Entry {
     let last = matrix.leds.saturating_sub(1);
     Entry {
+        title: Title::new(),
         condition: Some(single(compare(
             Signal::Builtin(Builtin::CapsLock),
             Comparator::Equal,
@@ -230,6 +265,7 @@ fn caps_lock(matrix: Matrix) -> Entry {
 
 fn brightness(matrix: Matrix) -> Entry {
     Entry {
+        title: Title::new(),
         condition: Some(single(Term::Trigger {
             signal: Signal::Builtin(Builtin::Brightness),
             duration_ms: DEFAULT_TIME_MS,
@@ -245,6 +281,7 @@ fn brightness(matrix: Matrix) -> Entry {
 
 fn key_depth(matrix: Matrix) -> Entry {
     Entry {
+        title: Title::new(),
         condition: Some(single(compare(
             Signal::Builtin(Builtin::AnalogLevel),
             Comparator::Greater,
@@ -284,6 +321,7 @@ mod tests {
             key_rows: 6,
             key_columns: 17,
             profiles: 4,
+            linked_profiles: 0,
             layouts: heapless::Vec::new(),
             lightbar_leds: leds,
             host_signals: false,

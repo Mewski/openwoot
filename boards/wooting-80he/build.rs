@@ -2,8 +2,11 @@ use std::{env, error::Error, fs, path::PathBuf};
 
 use openwoot_image::MemoryLayout;
 
+const SYMBOL_ORDER: &str = "OPENWOOT_SYMBOL_ORDER";
+
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=memory.x");
+    println!("cargo:rerun-if-env-changed={SYMBOL_ORDER}");
     let memory_x = fs::read_to_string("memory.x")?;
     let layout = MemoryLayout::parse(&memory_x)?;
 
@@ -26,6 +29,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("cargo:rustc-link-arg-bins=--nmagic");
         println!("cargo:rustc-link-arg-bins=-Tlink.x");
         println!("cargo:rustc-link-arg-bins=--emit-relocs");
+        if let Some(order) = env::var_os(SYMBOL_ORDER).map(PathBuf::from) {
+            println!("cargo:rerun-if-changed={}", order.display());
+            println!(
+                "cargo:rustc-link-arg-bins=--symbol-ordering-file={}",
+                order.display()
+            );
+            println!("cargo:rustc-link-arg-bins=--no-warn-symbol-ordering");
+        }
     }
     Ok(())
 }

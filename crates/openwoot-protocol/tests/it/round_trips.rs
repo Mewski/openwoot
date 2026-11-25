@@ -343,7 +343,11 @@ fn host_lighting_and_full_sensor_readouts_fit_one_frame() {
         Reading::Travel,
         Reading::Value,
         Reading::RestLevel,
+        Reading::SingleRestLevel,
+        Reading::ParallelRestLevel,
         Reading::BottomLevel,
+        Reading::AboveRest,
+        Reading::ScanOrder,
     ] {
         round_trip!(
             GetSensorValues,
@@ -460,10 +464,16 @@ fn profile_management_and_session_endpoints_survive_a_round_trip() {
         Ok(profile::Summary {
             count: 3,
             active: Slot::new(2),
+            linked: 1,
+            selected: Some(Slot::linked(0)),
         }),
     );
-    round_trip!(CreateProfile, (), Ok(Slot::new(3)));
-    round_trip!(CreateProfile, (), Err(Rejection::ProfileLimitReached));
+    round_trip!(CreateProfile, profile::Namespace::Onboard, Ok(Slot::new(3)));
+    round_trip!(
+        CreateProfile,
+        profile::Namespace::Linked,
+        Err(Rejection::ProfileLimitReached)
+    );
     round_trip!(
         DeleteProfile,
         Slot::new(0),
@@ -604,28 +614,61 @@ fn every_lighting_effect_survives_a_round_trip() {
 }
 
 #[test]
+fn device_state_device_name_and_keymap_links_survive_a_round_trip() {
+    use openwoot_protocol::{
+        configuration::Invalid,
+        device::SettingsState,
+        endpoints::{
+            GetDeviceName, GetDeviceSettings, GetKeymapLink, SetDeviceName, SetKeymapLink,
+        },
+    };
+
+    let chosen = device::Settings {
+        mode: device::Mode::Gamepad,
+        keyboard: device::KeyboardFormat::NKeyRollover,
+        speed: device::Speed::High,
+        gamepad_polling: device::PollingRate::Every4Milliseconds,
+    };
+    round_trip!(
+        GetDeviceSettings,
+        (),
+        Ok(SettingsState {
+            active: device::Settings {
+                mode: device::Mode::Xinput,
+                ..chosen
+            },
+            chosen,
+            negotiated: Some(device::Speed::Full),
+        }),
+    );
+    let mut name = device::Name::new();
+    while name.push('W').is_ok() {}
+    round_trip!(GetDeviceName, (), Ok::<_, Rejection>(name.clone()));
+    round_trip!(SetDeviceName, name, DONE);
+    round_trip!(GetKeymapLink, Slot::new(2), Ok::<_, Rejection>(true));
+    round_trip!(
+        SetKeymapLink,
+        Change {
+            profile: Slot::new(0),
+            value: true,
+        },
+        Err(Rejection::Invalid(Invalid::FirstProfileLinked)),
+    );
+}
+
+#[test]
 fn keyboard_wide_reads_runtime_switches_and_rejections_survive_a_round_trip() {
     use openwoot_protocol::{
         configuration::Invalid,
         device::LayoutState,
         endpoints::{
-            GetDefaultKeymap, GetDeviceSettings, GetGamepadState, GetGlobalLightbar,
-            GetGlobalSettings, GetHostSignals, GetLayout, GetSwitchModels, LeaveHostControl,
-            ResetHostColors, ResetHostKeyColor, SetGamepadDetection, SetKeyReports, SetRawScanning,
+            GetDefaultKeymap, GetGamepadState, GetGlobalLightbar, GetGlobalSettings,
+            GetHostSignals, GetLayout, GetSwitchModels, LeaveHostControl, ResetHostColors,
+            ResetHostKeyColor, SetGamepadDetection, SetKeyReports, SetRawScanning,
         },
         gamepad::{Player, State},
     };
 
-    round_trip!(
-        GetDeviceSettings,
-        (),
-        Ok(device::Settings {
-            mode: device::Mode::Gamepad,
-            keyboard: device::KeyboardFormat::NKeyRollover,
-            speed: device::Speed::High,
-            gamepad_polling: device::PollingRate::Every4Milliseconds,
-        }),
-    );
     round_trip!(
         GetLayout,
         (),
@@ -703,4 +746,41 @@ fn keyboard_wide_reads_runtime_switches_and_rejections_survive_a_round_trip() {
     round_trip!(ResetHostKeyColor, Position { row: 5, column: 16 }, DONE);
     round_trip!(ResetHostColors, (), DONE);
     round_trip!(LeaveHostControl, (), Err(Rejection::Locked));
+}
+
+#[test]
+fn led_readbacks_light_bar_drive_and_profile_state_survive_a_round_trip() {
+    use openwoot_protocol::{
+        endpoints::{
+            GetLedFrame, GetLightbarColors, GetProfileState, ResetHostLightbar, SetHostLightbar,
+        },
+        host_lighting::Frame,
+    };
+
+    let colors: lightbar::Colors = filled(white(), lightbar::MAX_LEDS);
+    round_trip!(SetHostLightbar, colors.clone(), DONE);
+    round_trip!(ResetHostLightbar, (), DONE);
+    round_trip!(GetLightbarColors, (), Ok::<_, Rejection>(colors.clone()));
+    round_trip!(
+        GetLightbarColors,
+        (),
+        Err::<lightbar::Colors, _>(Rejection::Unsupported),
+    );
+    round_trip!(
+        GetLedFrame,
+        (),
+        Ok::<_, Rejection>(Frame {
+            keys: filled(white(), MAX_KEYS),
+            lightbar: colors,
+        }),
+    );
+    round_trip!(
+        GetProfileState,
+        (),
+        Ok::<_, Rejection>(profile::State {
+            active: Slot::new(u8::MAX),
+            host_control: true,
+            idle_off: true,
+        }),
+    );
 }

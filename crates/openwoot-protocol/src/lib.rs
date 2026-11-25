@@ -1,7 +1,12 @@
 #![no_std]
 #![forbid(unsafe_code)]
+#![allow(
+    long_running_const_eval,
+    reason = "postcard-rpc checks every schema of the endpoint table for unique keys at compile time"
+)]
 
 pub mod advanced;
+pub mod apps;
 pub mod configuration;
 pub mod device;
 pub mod diagnostics;

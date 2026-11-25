@@ -1,13 +1,11 @@
 use std::time::Duration;
 
 use gpui_kit::{
-    AnyElement, Context, Div, InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent,
-    Modifiers, ModifiersChangedEvent, ParentElement as _, SharedString,
+    AnyElement, Context, Div, FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent,
+    KeyUpEvent, Modifiers, ModifiersChangedEvent, ParentElement as _, SharedString,
     StatefulInteractiveElement as _, Styled as _, Task, Window,
     component::{ActiveTheme as _, h_flex, v_flex},
-    div,
-    prelude::FluentBuilder as _,
-    px, relative,
+    div, px, relative,
 };
 use openwoot_protocol::{
     advanced,
@@ -16,16 +14,30 @@ use openwoot_protocol::{
     sensors::{self, Reading},
 };
 
-use super::{AdvancedPage, editor::section_title, rules};
-use crate::{page::remap::usage_of_key, panel, theme, usage};
+use super::{AdvancedPage, editor::heading, rules};
+use crate::{
+    page::remap::{text_chip, usage_of_key},
+    panel, usage,
+};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(33);
 const VISIBLE_WITHIN: Duration = Duration::from_millis(500);
 const FULL_TRAVEL: f32 = 4095.0;
 const BAR_WIDTH: f32 = 160.0;
 const VALUE_WIDTH: f32 = 56.0;
-const PANE_HEIGHT: f32 = 180.0;
+const TITLE_GAP: f32 = 8.0;
+const SECTION_GAP: f32 = 16.0;
+const PANES_HEIGHT: f32 = 200.0;
+const PANES_RADIUS: f32 = 8.0;
+const PANES_RULE: f32 = 1.0;
+const PANE_PADDING_X: f32 = 8.0;
+const PANE_PADDING_Y: f32 = 12.0;
+const PANE_GAP: f32 = 8.0;
+const PANE_TITLE_TEXT: f32 = 12.8;
+const PANE_TITLE_LINE: f32 = 19.2;
+const KEYS_GAP: f32 = 4.0;
 const RELEASED_KEPT: usize = 12;
+const TEST_TITLE: &str = "Test your binding";
 
 pub(super) struct Tester {
     travel: Option<sensors::Values>,
@@ -110,6 +122,8 @@ impl AdvancedPage {
             .collect();
         let mut pressed = modifier_names(tester.modifiers);
         pressed.extend(tester.pressed.iter().cloned());
+        let theme = cx.theme();
+        let (frame, surface) = (theme.secondary, theme.background);
         v_flex()
             .id("advanced-tester")
             .track_focus(&self.tester_focus)
@@ -117,21 +131,28 @@ impl AdvancedPage {
             .on_key_up(cx.listener(Self::tested_key_up))
             .on_modifiers_changed(cx.listener(Self::tested_modifiers))
             .on_click(cx.listener(|this, _, window, cx| this.tester_focus.focus(window, cx)))
-            .gap_4()
-            .child(section_title(
-                "Test your binding",
-                "Press the keys; this shows what the computer receives",
-                cx,
-            ))
+            .gap(px(SECTION_GAP))
             .child(
-                h_flex()
-                    .w_full()
-                    .h(px(PANE_HEIGHT))
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .child(pane("Pressed keys", &pressed, false, cx))
-                    .child(pane("Released keys", &tester.released, true, cx)),
+                v_flex()
+                    .gap(px(TITLE_GAP))
+                    .child(heading(TEST_TITLE, cx))
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .h(px(PANES_HEIGHT))
+                            .p(px(PANES_RULE))
+                            .gap(px(PANES_RULE))
+                            .rounded(px(PANES_RADIUS))
+                            .bg(frame)
+                            .child(
+                                pane("Pressed Keys", &pressed, surface, cx)
+                                    .rounded_l(px(PANES_RADIUS - PANES_RULE)),
+                            )
+                            .child(
+                                pane("Released Keys", &tester.released, surface, cx)
+                                    .rounded_r(px(PANES_RADIUS - PANES_RULE)),
+                            ),
+                    ),
             )
             .child(v_flex().gap_1().children(bars))
             .into_any_element()
@@ -189,38 +210,30 @@ fn release(tester: &mut Tester, name: SharedString) {
 fn pane(
     title: &'static str,
     keys: &[SharedString],
-    faded: bool,
+    surface: gpui_kit::Hsla,
     cx: &Context<AdvancedPage>,
 ) -> Div {
-    let theme = cx.theme();
-    let caps = theme::keycaps();
     v_flex()
         .flex_1()
+        .min_w_0()
         .h_full()
-        .p_3()
-        .gap_2()
-        .when(faded, |this| this.border_l_1().border_color(theme.border))
-        .child(panel::label(title, cx))
+        .px(px(PANE_PADDING_X))
+        .py(px(PANE_PADDING_Y))
+        .gap(px(PANE_GAP))
+        .bg(surface)
+        .child(
+            div()
+                .text_size(px(PANE_TITLE_TEXT))
+                .line_height(px(PANE_TITLE_LINE))
+                .font_weight(FontWeight::BOLD)
+                .text_color(cx.theme().muted_foreground)
+                .child(SharedString::from(title.to_uppercase())),
+        )
         .child(
             h_flex()
                 .flex_wrap()
-                .gap_1()
-                .children(keys.iter().map(|key| {
-                    div()
-                        .px_1p5()
-                        .py_0p5()
-                        .rounded(px(4.0))
-                        .bg(caps.top)
-                        .border_1()
-                        .border_color(theme.border)
-                        .text_xs()
-                        .text_color(if faded {
-                            theme.muted_foreground
-                        } else {
-                            caps.legend
-                        })
-                        .child(key.clone())
-                })),
+                .gap(px(KEYS_GAP))
+                .children(keys.iter().map(|key| text_chip(key.clone(), cx))),
         )
 }
 

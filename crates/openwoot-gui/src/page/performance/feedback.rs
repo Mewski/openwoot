@@ -36,7 +36,7 @@ pub(crate) fn pressed_key(
         name: keyboard
             .legends
             .get(key)
-            .map_or_default(|action| SharedString::from(usage::name(*action))),
+            .map_or_default(|action| SharedString::from(usage::legend(*action))),
         travel: fraction,
         actuation: f32::from(actuation.fraction()) / f32::from(u16::MAX),
         reached: effective::reaches(travel, actuation),

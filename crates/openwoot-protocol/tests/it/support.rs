@@ -2,7 +2,7 @@ use openwoot_protocol::{
     advanced::{self, Behaviour, DynamicKeystroke, Stroke, StrokeEvent},
     configuration::{Capabilities, Rejection},
     device::Layout,
-    gamepad::{self, CurvePoint, Normalization},
+    gamepad::{self, CurvePoint, Normalization, StickBias},
     heapless::Vec,
     keys::{
         self, Action, Distance, Index, Layer, Override, RapidTrigger, RapidTriggerOverride,
@@ -10,7 +10,7 @@ use openwoot_protocol::{
     },
     lightbar::{
         self, Background, Builtin, Comparator, Comparison, Condition, Custom, Entry, Group, Logic,
-        Meter, Operand, ProfileIndicator, Range, Signal, Term,
+        Meter, Operand, ProfileIndicator, Range, Signal, Term, Title,
     },
     lighting::{
         self, AnalogLevel, Color, Effect, Indicators, ReactiveColoring, ReactiveFade, Rgb, Scanner,
@@ -61,6 +61,7 @@ pub(crate) fn capabilities() -> Capabilities {
         key_rows: 6,
         key_columns: 17,
         profiles: 4,
+        linked_profiles: 10,
         layouts: [Layout::Ansi, Layout::Iso, Layout::Jis]
             .into_iter()
             .collect(),
@@ -124,7 +125,10 @@ pub(crate) fn widest_lightbar_entry() -> Entry {
         logic: Logic::Any,
         terms: filled(term, lightbar::MAX_TERMS),
     };
+    let mut title = Title::new();
+    while title.push('W').is_ok() {}
     Entry {
+        title,
         condition: Some(Condition {
             logic: Logic::Any,
             groups: filled(group, lightbar::MAX_GROUPS),
@@ -185,6 +189,7 @@ pub(crate) fn lighting_settings() -> lighting::Settings {
 
 pub(crate) fn lightbar_settings() -> lightbar::Settings {
     let indicator = Entry {
+        title: Title::try_from("Profiles").unwrap_or_default(),
         condition: None,
         effect: lightbar::Effect::ProfileIndicator(ProfileIndicator {
             range: Range { first: 0, last: 9 },
@@ -193,6 +198,7 @@ pub(crate) fn lightbar_settings() -> lightbar::Settings {
         }),
     };
     let meter = Entry {
+        title: Title::new(),
         condition: Some(caps_lock_trigger()),
         effect: lightbar::Effect::Meter(Meter {
             signal: Signal::Builtin(Builtin::AnalogLevel),
@@ -223,7 +229,10 @@ pub(crate) fn gamepad_settings() -> gamepad::Settings {
         ],
         normalization: Normalization::Square,
         single_direction_axes: true,
-        left_stick_up_bias: Some(50),
+        left_stick_up_bias: StickBias {
+            enabled: true,
+            percent: 50,
+        },
     }
 }
 

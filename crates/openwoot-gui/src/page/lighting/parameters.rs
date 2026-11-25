@@ -1,6 +1,9 @@
 use gpui_kit::{
-    AnyElement, Context, Div, IntoElement, ParentElement as _, SharedString, Styled as _, Window,
-    component::{h_flex, v_flex},
+    AnyElement, Context, Div, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    assets::IconName as Catalog,
+    component::{ActiveTheme as _, Icon, h_flex, tooltip::Tooltip, v_flex},
+    div,
     prelude::FluentBuilder as _,
     px,
 };
@@ -10,7 +13,7 @@ use openwoot_protocol::lighting::{
 
 use super::{
     Choice, LightingPage, choices,
-    controls::param_label,
+    controls::{ICON_SIZE, PARAM_TEXT, param_label},
     dial_row,
     effect::{self, Dial, HUE_RANGES, Paint, Turn},
     sunken,
@@ -18,11 +21,11 @@ use super::{
 use crate::{
     color_picker::Swatch,
     dropdown::{Dropdown, Item},
-    panel,
     switch::Switch,
 };
 
-const SWATCH_SIZE: f32 = 30.0;
+const SWATCH_SIZE: f32 = 32.0;
+const PLACEHOLDER_LINE: f32 = 19.2;
 const WAVE_DIRECTIONS: [(bool, &str); 2] = [(true, "Left"), (false, "Right")];
 const SCAN_DIRECTIONS: [(ScannerDirection, &str); 4] = [
     (ScannerDirection::Left, "Left"),
@@ -31,21 +34,21 @@ const SCAN_DIRECTIONS: [(ScannerDirection, &str); 4] = [
     (ScannerDirection::Down, "Down"),
 ];
 const TRAIL_PAINTS: [(Paint, &str); 3] = [
-    (Paint::KeyColor, "Base layer"),
-    (Paint::Palette, "Random colours"),
-    (Paint::Fixed, "Single colour"),
+    (Paint::KeyColor, "Base Layer"),
+    (Paint::Palette, "Random Colours"),
+    (Paint::Fixed, "Single Colour"),
 ];
 const FADE_DIRECTIONS: [(bool, &str); 2] = [(false, "Normal"), (true, "Inverted")];
 
 impl LightingPage {
     pub(super) fn effect_parameters(&self, cx: &Context<Self>) -> Div {
-        let body = sunken(cx).p_4().gap_4();
+        let body = sunken(cx).gap_4();
         let Some(effect) = self.focused_effect().copied() else {
-            return body.child(panel::note("Select an effect to configure it", cx));
+            return body.child(placeholder("Select an effect to configure it.", cx));
         };
         let rows = self.parameter_rows(&effect, cx);
         if rows.is_empty() {
-            body.child(panel::note("This effect has no parameters", cx))
+            body.child(placeholder("This effect has no parameters.", cx))
         } else {
             body.children(rows)
         }
@@ -96,8 +99,8 @@ impl LightingPage {
             Effect::ReactiveFade(fade) => rows.extend(self.trail_rows(*fade, cx)),
             Effect::PolarGradient(_) => {
                 for (turn, label) in [
-                    (Turn::Spin, "Spin clockwise"),
-                    (Turn::Twist, "Spiral clockwise"),
+                    (Turn::Spin, "Spin Clockwise"),
+                    (Turn::Twist, "Spiral Clockwise"),
                 ] {
                     let checked = effect::clockwise(effect, turn).unwrap_or_default();
                     rows.push(
@@ -119,8 +122,10 @@ impl LightingPage {
         if let Some(enabled) = effect::analog_curve(effect) {
             rows.push(
                 switch_row(
-                    "Use analog curve",
-                    Some("Follow the gamepad analog curve instead of a linear response"),
+                    "Use Analog Curve",
+                    Some(
+                        "When enabled, keys follow your Analog Curve instead of a linear response.",
+                    ),
                     enabled,
                     effect::set_analog_curve,
                     cx,
@@ -154,31 +159,31 @@ impl LightingPage {
     ) -> Div {
         let page = cx.entity().downgrade();
         let selected = HUE_RANGES.iter().position(|(range, _)| *range == hues);
+        let menu = Dropdown::new("effect-look")
+            .small()
+            .items(HUE_RANGES.iter().map(|(_, name)| Item::new(*name)))
+            .selected(selected)
+            .on_select(move |index, window, cx| {
+                let Some((range, _)) = HUE_RANGES.get(index) else {
+                    return;
+                };
+                let range = *range;
+                page.update(cx, |page, cx| {
+                    page.edit_focused(|effect| effect::set_hues(effect, range), window, cx);
+                })
+                .ok();
+            });
         v_flex()
             .w_full()
-            .gap_1()
+            .gap_2()
             .child(param_label(format!("{} look", effect::name(effect)), cx))
-            .child(
-                Dropdown::new("effect-look")
-                    .items(HUE_RANGES.iter().map(|(_, name)| Item::new(*name)))
-                    .selected(selected)
-                    .on_select(move |index, window, cx| {
-                        let Some((range, _)) = HUE_RANGES.get(index) else {
-                            return;
-                        };
-                        let range = *range;
-                        page.update(cx, |page, cx| {
-                            page.edit_focused(|effect| effect::set_hues(effect, range), window, cx);
-                        })
-                        .ok();
-                    }),
-            )
+            .child(div().pr_4().child(menu))
     }
 
     fn ripple_rows(ripple: KeyRipple, cx: &Context<Self>) -> [AnyElement; 2] {
         [
             switch_row(
-                "Random colours",
+                "Random Colours",
                 None,
                 ripple.palette,
                 |effect, enabled| {
@@ -209,34 +214,27 @@ impl LightingPage {
         let selected = TRAIL_PAINTS.iter().position(|(mode, _)| *mode == paint);
         let mode = v_flex()
             .w_full()
-            .gap_1()
-            .child(param_label("Colour mode", cx))
-            .child(
-                h_flex()
-                    .gap_3()
-                    .items_center()
-                    .child(choices(
-                        "trail-paint",
-                        TRAIL_PAINTS.map(|(_, label)| label),
-                        selected,
-                        Choice::Filled,
-                        cx.listener(|this, index: &usize, window, cx| {
-                            if let Some((mode, _)) = TRAIL_PAINTS.get(*index) {
-                                this.choose_trail_paint(*mode, window, cx);
-                            }
-                        }),
-                        cx,
-                    ))
-                    .when(paint == Paint::Fixed, |this| {
-                        this.child(
-                            Swatch::new("trail-colour", &self.first_color).size(px(SWATCH_SIZE)),
-                        )
-                    }),
-            );
+            .gap_2()
+            .child(param_label("Colour Mode", cx))
+            .child(choices(
+                "trail-paint",
+                TRAIL_PAINTS.map(|(_, label)| label),
+                selected,
+                Choice::Filled,
+                cx.listener(|this, index: &usize, window, cx| {
+                    if let Some((mode, _)) = TRAIL_PAINTS.get(*index) {
+                        this.choose_trail_paint(*mode, window, cx);
+                    }
+                }),
+                cx,
+            ))
+            .when(paint == Paint::Fixed, |this| {
+                this.child(Swatch::new("trail-colour", &self.first_color).size(px(SWATCH_SIZE)))
+            });
         vec![
             mode.into_any_element(),
             choice_row(
-                "Fade direction",
+                "Fade Direction",
                 "trail-direction",
                 &FADE_DIRECTIONS,
                 fade.inverted,
@@ -253,8 +251,8 @@ impl LightingPage {
 
     fn color_rows(&self, cx: &Context<Self>) -> [AnyElement; 2] {
         [
-            ("Primary colour", "effect-primary", &self.first_color),
-            ("Secondary colour", "effect-secondary", &self.second_color),
+            ("Primary Color", "effect-primary", &self.first_color),
+            ("Secondary Color", "effect-secondary", &self.second_color),
         ]
         .map(|(label, id, picker)| {
             h_flex()
@@ -302,8 +300,7 @@ fn choice_row<T: Copy + PartialEq + 'static, const N: usize>(
     let selected = options.iter().position(|(value, _)| *value == current);
     v_flex()
         .w_full()
-        .gap_1()
-        .child(param_label(label, cx))
+        .child(param_label(label, cx).pb_2())
         .child(choices(
             id,
             options.iter().map(|(_, name)| *name),
@@ -327,15 +324,40 @@ fn switch_row(
     cx: &Context<LightingPage>,
 ) -> Div {
     let id = SharedString::from(format!("effect-switch-{label}"));
-    panel::toggle(
-        label,
-        help.map(SharedString::from),
-        Switch::new(id).checked(checked).on_change(cx.listener(
+    let muted = cx.theme().muted_foreground;
+    h_flex()
+        .gap_3()
+        .items_center()
+        .child(
+            h_flex()
+                .gap_1()
+                .items_center()
+                .child(param_label(label, cx).pr_0())
+                .when_some(help, |this, help| {
+                    this.child(
+                        div()
+                            .id(SharedString::from(format!("effect-help-{label}")))
+                            .text_color(muted)
+                            .child(Icon::new(Catalog::CircleQuestionMark).size(px(ICON_SIZE)))
+                            .tooltip(move |window, cx| Tooltip::new(help).build(window, cx)),
+                    )
+                }),
+        )
+        .child(Switch::new(id).checked(checked).on_change(cx.listener(
             move |this, enabled: &bool, window, cx| {
                 let enabled = *enabled;
                 this.edit_focused(|effect| change(effect, enabled), window, cx);
             },
-        )),
-        cx,
-    )
+        )))
+}
+
+fn placeholder(text: &'static str, cx: &Context<LightingPage>) -> Div {
+    div()
+        .w_full()
+        .text_center()
+        .text_size(px(PARAM_TEXT))
+        .line_height(px(PLACEHOLDER_LINE))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(cx.theme().group_box_foreground)
+        .child(text)
 }

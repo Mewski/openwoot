@@ -16,7 +16,7 @@ use gpui_kit::{
     },
     div,
     prelude::FluentBuilder as _,
-    px,
+    px, relative,
 };
 use openwoot_protocol::{
     configuration::Validate as _,
@@ -26,30 +26,39 @@ use openwoot_protocol::{
 
 use super::{
     Page,
-    performance::{Committed, DistanceField, Shown, Span, actions, millimetres_text, stage},
+    performance::{
+        Committed, DistanceField, Shown, Span, actions, distance_block, millimetres_text, stage,
+        tuning_card,
+    },
 };
 use crate::{
     dropdown::{Dropdown, Item},
     keyboard::{Glyph, KeyFace, KeyboardView, Selection},
-    panel,
+    panel::{self, Stage},
     store::{Keyboard, Scope, Store, StoreEvent},
     switch::Switch as Toggle,
-    usage,
+    theme, usage,
 };
 
 const FIRST_BRAND: &str = "Wooting";
 const ALL_BRANDS: &str = "All brands";
 const SPACER_DEFAULT_MM: f32 = 0.5;
-const GRID_COLUMNS: u16 = 4;
-const CARD_HEIGHT: f32 = 128.0;
-const CARD_GLYPH: f32 = 44.0;
-const SPACERS_WIDTH: f32 = 340.0;
+const GRID_COLUMNS: u16 = 5;
+const CARD_GLYPH: f32 = 48.0;
+const DISABLED_GLYPH_OPACITY: f32 = 0.64;
+const TIGHT_LINE_HEIGHT: f32 = 1.2;
+const ASSIGN_GROW: f32 = 2.5;
+const SEARCH_HEIGHT: f32 = 40.0;
+const SEARCH_ICON: f32 = 20.0;
+const SEARCH_INSET: f32 = 6.0;
+const SEARCH_RADIUS: f32 = 6.0;
+const CARD_RADIUS: f32 = 8.0;
 const KEY_GLYPH_SHARE: f32 = 0.62;
-const TOOLTIP_GLYPH: f32 = 18.0;
-const BRAND_WIDTH: f32 = 200.0;
-const PROMPT: &str = "To adjust your switches, select one or more keys first";
-const HELP: &str = "Assign the switches installed in your keyboard. Each switch brings its calibrated analog curve and total travel, so the keyboard knows the precise position of every key.";
-const SPACERS_HELP: &str = "Spacers are thin inserts inside your switches that physically shorten the total travel, making keystrokes feel quicker and more responsive.";
+const TOOLTIP_GLYPH: f32 = 17.0;
+const BRAND_WIDTH: f32 = 168.0;
+const PROMPT: &str = "To adjust your switches, please select one or more keys first";
+const HELP: &str = "Use the Switch Selector to assign the switches installed on your keyboard.";
+const SPACERS_HELP: &str = "Spacers are thin inserts that limit a switch's total travel distance.";
 
 pub(crate) struct SwitchesPage {
     store: Entity<Store>,
@@ -126,7 +135,13 @@ impl SwitchesPage {
                 return;
             };
             let targets = self.targets(keyboard);
-            let travel = targets
+            let factory = [fitting::factory(&keyboard.capabilities)];
+            let measured = if targets.is_empty() {
+                &factory[..]
+            } else {
+                &targets[..]
+            };
+            let travel = measured
                 .iter()
                 .filter_map(|switch| keyboard.models.get(usize::from(switch.model)))
                 .map(|model| fitting::millimetres(model.travel))
@@ -315,7 +330,7 @@ impl SwitchesPage {
         }
     }
 
-    fn keyboard(&self, keyboard: &Keyboard, window: &Window, cx: &Context<Self>) -> Div {
+    fn keyboard(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Stage {
         let housing = cx.theme().muted_foreground.opacity(0.45);
         let page = cx.weak_entity();
         let swept = cx.weak_entity();
@@ -323,7 +338,6 @@ impl SwitchesPage {
             self.face(keyboard, key, housing)
         })
         .selection(&self.selection)
-        .fit_width(panel::content_width(window))
         .on_key_click(move |key, _, window, cx| {
             page.update(cx, |page, cx| page.toggle_key(key, window, cx))
                 .ok();
@@ -333,7 +347,7 @@ impl SwitchesPage {
                 .update(cx, |page, cx| page.sweep_key(key, window, cx))
                 .ok();
         });
-        stage(view, self.selection.len(), PROMPT, cx)
+        stage(view, self.selection.len(), PROMPT)
     }
 
     fn face(&self, keyboard: &Keyboard, key: usize, housing: Hsla) -> KeyFace {
@@ -377,9 +391,10 @@ impl SwitchesPage {
             .filter(|(_, product)| self.brand.is_none_or(|brand| product.brand == brand))
             .filter(|(_, product)| query.is_empty() || matches(product, &query))
             .collect();
+        let theme = cx.theme();
         panel::section(
-            "Assign switches",
-            Some("Select keys on the keyboard, then pick the switches installed in them.".into()),
+            "Assign Switches",
+            Some("Assign your installed switches to the selected keys.".into()),
             cx,
         )
         .child(
@@ -389,8 +404,18 @@ impl SwitchesPage {
                 .child(
                     div().flex_1().min_w_0().child(
                         Input::new(&self.search)
-                            .prefix(Icon::new(IconName::Search).small())
-                            .cleanable(true),
+                            .large()
+                            .prefix(
+                                Icon::new(IconName::Search)
+                                    .size(px(SEARCH_ICON))
+                                    .text_color(theme.muted_foreground),
+                            )
+                            .cleanable(true)
+                            .h(px(SEARCH_HEIGHT))
+                            .pl(px(SEARCH_INSET))
+                            .gap(px(SEARCH_INSET))
+                            .rounded(px(SEARCH_RADIUS))
+                            .bg(theme::palette().input),
                     ),
                 )
                 .child(
@@ -400,7 +425,17 @@ impl SwitchesPage {
                         .child(self.brand_filter(brands, cx)),
                 ),
         )
-        .child(self.grid(keyboard, shown, cx))
+        .child(
+            v_flex()
+                .w_full()
+                .gap_4()
+                .child(self.grid(keyboard, shown, cx))
+                .child(panel::info_titled(
+                    "Don't see your switch on the list?",
+                    "Select a supported switch from the same brand or with the same total travel.",
+                    cx,
+                )),
+        )
     }
 
     fn brand_filter(&self, brands: Vec<&'static str>, cx: &Context<Self>) -> Dropdown {
@@ -410,6 +445,7 @@ impl SwitchesPage {
             .and_then(|brand| brands.iter().position(|known| *known == brand))
             .map(|index| index + 1);
         Dropdown::new("brand-filter")
+            .subtle()
             .placeholder("Filter by brand")
             .items(
                 std::iter::once(Item::new(ALL_BRANDS))
@@ -433,21 +469,12 @@ impl SwitchesPage {
     ) -> Div {
         let theme = cx.theme();
         if shown.is_empty() {
-            return v_flex()
-                .gap_1()
+            return div()
                 .py_4()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.foreground)
-                        .child("Switch not found"),
-                )
-                .child(
-                    div().text_sm().text_color(theme.muted_foreground).child(
-                        "Pick a switch of the same brand, or one with the same total travel.",
-                    ),
-                );
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.foreground)
+                .child("Switch not found");
         }
         let current = same(
             self.shown_switches(keyboard)
@@ -457,6 +484,7 @@ impl SwitchesPage {
         let selectable = !self.selection.is_empty();
         let housing = theme.muted_foreground.opacity(0.45);
         div()
+            .w_full()
             .grid()
             .grid_cols(GRID_COLUMNS)
             .gap_2()
@@ -482,37 +510,39 @@ impl SwitchesPage {
         let selectable = !self.selection.is_empty();
         let tuned = keyboard.switches.as_ref().map_or(0, fitting::tuned_pairs);
         let page = cx.weak_entity();
-        panel::section_with_help(
-            "Spacers",
-            SPACERS_HELP,
-            Some(
-                "If you have spacers installed, select those keys and enter their exact size."
-                    .into(),
-            ),
-            Some(
-                Toggle::new("spacers")
-                    .checked(state == Spacers::On)
-                    .mixed(state == Spacers::Mixed)
-                    .disabled(!selectable)
-                    .on_change(move |enabled: &bool, window, cx| {
-                        page.update(cx, |page, cx| page.set_spacers(*enabled, window, cx))
-                            .ok();
-                    })
-                    .into_any_element(),
-            ),
-            cx,
+        tuning_card(
+            panel::section_with_help(
+                "Spacers",
+                SPACERS_HELP,
+                Some(
+                    "If you have spacers installed, select those keys and enter the exact size."
+                        .into(),
+                ),
+                Some(
+                    Toggle::new("spacers")
+                        .checked(state == Spacers::On)
+                        .mixed(state == Spacers::Mixed)
+                        .disabled(!selectable)
+                        .on_change(move |enabled: &bool, window, cx| {
+                            page.update(cx, |page, cx| page.set_spacers(*enabled, window, cx))
+                                .ok();
+                        })
+                        .into_any_element(),
+                ),
+                cx,
+            )
+            .child(distance_block("Size", &self.spacer, cx))
+            .child(panel::note(
+                format!("{tuned} of {MAX_TUNED} spacer combinations used"),
+                cx,
+            )),
+            selectable,
         )
-        .child(panel::field("Size", self.spacer.clone(), cx))
-        .child(panel::note(
-            format!("{tuned} of {MAX_TUNED} spacer combinations used"),
-            cx,
-        ))
-        .when(!selectable, |this| this.opacity(0.5))
     }
 }
 
 impl Render for SwitchesPage {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let page = panel::page();
         let Some(keyboard) = self.store.read(cx).keyboard() else {
             return page;
@@ -527,44 +557,44 @@ impl Render for SwitchesPage {
             .count();
         panel::page_with_stage(
             "switch-page",
-            self.keyboard(keyboard, window, cx),
-            v_flex()
+            self.keyboard(keyboard, cx),
+            panel::heading(Page::Switches.title())
+                .help(HELP)
+                .trailing(actions(
+                    self.selection.len(),
+                    total,
+                    move |window, cx| {
+                        selecting
+                            .update(cx, |page, cx| page.select_all(window, cx))
+                            .ok();
+                    },
+                    move |window, cx| {
+                        discarding
+                            .update(cx, |page, cx| page.clear_selection(window, cx))
+                            .ok();
+                    },
+                )),
+            h_flex()
                 .w_full()
-                .gap_5()
-                .child(panel::heading(
-                    Page::Switches.title(),
-                    Some(HELP.into()),
-                    actions(
-                        self.selection.len(),
-                        total,
-                        move |window, cx| {
-                            selecting
-                                .update(cx, |page, cx| page.select_all(window, cx))
-                                .ok();
-                        },
-                        move |window, cx| {
-                            discarding
-                                .update(cx, |page, cx| page.clear_selection(window, cx))
-                                .ok();
-                        },
-                    ),
-                    cx,
-                ))
+                .items_start()
+                .gap_4()
                 .child(
-                    h_flex()
-                        .w_full()
-                        .items_start()
-                        .gap_4()
-                        .child(self.assign_card(keyboard, cx).flex_1().min_w_0())
-                        .child(
-                            self.spacers_card(keyboard, cx)
-                                .id("spacers-card")
-                                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                                    this.hover_spacers(*hovered, cx);
-                                }))
-                                .flex_none()
-                                .w(px(SPACERS_WIDTH)),
-                        ),
+                    self.assign_card(keyboard, cx)
+                        .flex_1()
+                        .min_w_0()
+                        .map(|mut this| {
+                            this.style().flex_grow = Some(ASSIGN_GROW);
+                            this
+                        }),
+                )
+                .child(
+                    self.spacers_card(keyboard, cx)
+                        .id("spacers-card")
+                        .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                            this.hover_spacers(*hovered, cx);
+                        }))
+                        .flex_1()
+                        .min_w_0(),
                 ),
         )
     }
@@ -581,43 +611,60 @@ impl SwitchCard {
             selectable,
             housing,
         } = self;
-        let hover = theme.muted_foreground;
+        let disabled_text = theme.secondary_active;
+        let subtle = theme.description_list_label_foreground;
+        let hover_background = theme.secondary;
+        let hover_border = theme.secondary_hover;
         let stem = glyph::stem_color(model);
         div()
             .id(("switch-card", u32::from(model)))
             .w_full()
-            .h(px(CARD_HEIGHT))
             .flex()
             .flex_col()
             .items_center()
-            .justify_center()
             .gap_1()
-            .px_2()
-            .rounded(theme.radius)
-            .bg(theme.tab_active)
+            .py_4()
+            .px_3()
+            .rounded(px(CARD_RADIUS))
+            .bg(if selectable {
+                theme.accent
+            } else {
+                theme.group_box
+            })
             .border_1()
             .border_color(if current { theme.primary } else { theme.border })
             .when(selectable, |this| {
                 this.cursor_pointer()
                     .hover(move |style| {
+                        let style = style.bg(hover_background);
                         if current {
                             style
                         } else {
-                            style.border_color(hover)
+                            style.border_color(hover_border)
                         }
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.assign_model(model, window, cx);
                     }))
             })
-            .child(glyph::switch(px(CARD_GLYPH), stem, housing))
+            .child(
+                div()
+                    .mb_3()
+                    .when(!selectable, |this| this.opacity(DISABLED_GLYPH_OPACITY))
+                    .child(glyph::switch(px(CARD_GLYPH), stem, housing)),
+            )
             .child(
                 div()
                     .w_full()
                     .text_center()
                     .truncate()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
+                    .text_sm()
+                    .line_height(relative(TIGHT_LINE_HEIGHT))
+                    .text_color(match (selectable, current) {
+                        (false, _) => disabled_text,
+                        (true, true) => theme.foreground,
+                        (true, false) => subtle,
+                    })
                     .when(current, |this| this.font_weight(FontWeight::SEMIBOLD))
                     .child(product.brand),
             )
@@ -626,8 +673,9 @@ impl SwitchCard {
                     .w_full()
                     .text_center()
                     .truncate()
-                    .text_sm()
-                    .text_color(theme.foreground)
+                    .text_base()
+                    .line_height(relative(TIGHT_LINE_HEIGHT))
+                    .text_color(if selectable { theme.foreground } else { subtle })
                     .child(product.name),
             )
             .tooltip(move |window, cx| {
@@ -647,31 +695,37 @@ fn switch_tooltip(
 ) -> Div {
     let theme = cx.theme();
     v_flex()
-        .gap_2()
+        .gap_4()
         .py_1()
-        .child(
-            div()
-                .text_sm()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.foreground)
-                .child(format!("{} {}", product.brand, product.name)),
-        )
+        .text_base()
+        .text_color(theme.foreground)
         .child(
             h_flex()
-                .gap_2()
+                .gap_1()
                 .items_center()
-                .child(Icon::new(IconName::ArrowUpDown).small())
-                .child(format!("Total travel: {travel:.1} mm")),
+                .child(Icon::new(IconName::ArrowUpDown).size(px(TOOLTIP_GLYPH)))
+                .child(format!("Total travel: {travel:.1}mm")),
         )
         .when(!product.variants.is_empty(), |this| {
-            this.child(panel::label("Supported variants", cx)).children(
-                product.variants.iter().map(|variant| {
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .child(glyph::switch(px(TOOLTIP_GLYPH), stem, housing))
-                        .child(div().text_sm().text_color(theme.foreground).child(*variant))
-                }),
+            this.child(
+                v_flex()
+                    .gap_1p5()
+                    .line_height(px(TOOLTIP_GLYPH))
+                    .child(
+                        div()
+                            .text_xs()
+                            .line_height(relative(TIGHT_LINE_HEIGHT))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.group_box_foreground)
+                            .child("SUPPORTED VARIANTS"),
+                    )
+                    .children(product.variants.iter().map(|variant| {
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(glyph::switch(px(TOOLTIP_GLYPH), stem, housing))
+                            .child(*variant)
+                    })),
             )
         })
 }
@@ -730,7 +784,7 @@ fn matches(product: &catalog::Product, query: &str) -> bool {
 
 fn product_name(model: u8) -> SharedString {
     catalog::product(model).map_or_else(
-        || format!("Switch model {model}").into(),
+        || SharedString::from("Unknown"),
         |product| format!("{} {}", product.brand, product.name).into(),
     )
 }
@@ -789,8 +843,8 @@ mod tests {
     }
 
     #[test]
-    fn unknown_models_still_have_a_name() {
-        assert_eq!(product_name(200), "Switch model 200");
+    fn unknown_models_read_as_unknown() {
+        assert_eq!(product_name(200), "Unknown");
         assert_eq!(product_name(2), "Gateron Jade");
     }
 }

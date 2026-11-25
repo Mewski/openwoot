@@ -15,7 +15,7 @@ use openwoot::{
 use static_cell::StaticCell;
 use wooting_60he_plus::{
     Board, DESCRIPTOR, KEY_COLUMNS, KEY_ROWS, UsbDriver, entry, hal,
-    keys::{self, PROFILES},
+    keys::{self, LINKED_PROFILES, PROFILES},
     lighting::{self, COLUMNS, LedDriver, PAGE_LENGTH, PAGES, ROWS, Task},
     profiles::FACTORY,
     scan, storage,
@@ -52,7 +52,9 @@ fn start(spawner: Spawner, key_executor: SendSpawner) {
             env!("CARGO_PKG_VERSION_PATCH"),
         ),
         board.stock_identity(),
-        Configurator::new(model, keys::capabilities()).with_geometry(&keys::GEOMETRY),
+        Configurator::new(model, keys::capabilities())
+            .with_geometry(&keys::GEOMETRY)
+            .with_negotiated_speed(hal::usb::negotiated_speed),
     )
     .with_diagnostics(STATE.readout(hal::usb::negotiated_speed, hal::diagnostics::hardware))
     .with_host(STATE.host())
@@ -114,7 +116,8 @@ fn open_model(board: &mut Board) -> &'static Mutex<Mutual, ProfileModel> {
             board.storage.layout_variant,
             PROFILES,
         )
-        .with_factory_variant(board.storage.factory_layout_variant),
+        .with_factory_variant(board.storage.factory_layout_variant)
+        .with_linked(LINKED_PROFILES),
     ));
     block_on(model.get_mut().load());
     model

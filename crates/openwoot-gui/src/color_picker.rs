@@ -3,20 +3,19 @@ use std::{cell::Cell, mem, rc::Rc};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, DragMoveEvent,
     ElementId, Empty, Entity, EventEmitter, Global, Hsla, InteractiveElement as _, IntoElement,
-    MouseButton, MouseDownEvent, ParentElement as _, Pixels, Point, Render, RenderOnce, Rgba,
-    Stateful, StatefulInteractiveElement as _, Styled as _, Subscription, Window,
+    MouseButton, MouseDownEvent, ParentElement as _, PathBuilder, Pixels, Point, Render,
+    RenderOnce, Rgba, Stateful, StatefulInteractiveElement as _, Styled as _, Subscription, Task,
+    Window,
     assets::IconName as Catalog,
     base::actions::Confirm,
     canvas,
     component::{
-        ActiveTheme as _, Icon, Selectable as _, Sizable as _, WindowExt as _,
-        button::{Button, ButtonVariants as _},
-        h_flex,
+        ActiveTheme as _, Icon, Sizable as _, WindowExt as _, h_flex,
         input::{Input, InputEvent, InputState},
         notification::Notification,
         v_flex,
     },
-    div, hsla, linear_color_stop, linear_gradient,
+    div, hsla, linear_color_stop, linear_gradient, point,
     prelude::FluentBuilder as _,
     px, relative,
 };
@@ -24,7 +23,8 @@ use openwoot_protocol::lighting::Rgb;
 
 use crate::{
     dropdown::{Dropdown, Item},
-    panel,
+    eye_dropper,
+    panel::{self, ActionButton},
 };
 
 pub(crate) const POPOVER_WIDTH: f32 = 288.0;
@@ -34,6 +34,8 @@ const AREA_KNOB: f32 = 14.0;
 const STRIP_HEIGHT: f32 = 12.0;
 const STRIP_KNOB: f32 = 18.0;
 const SWATCH_SIZE: f32 = 32.0;
+const NO_COLOR_INSET: f32 = 0.146;
+const NO_COLOR_STROKE: f32 = 2.0;
 const SWATCHES_PER_ROW: usize = 6;
 const RECENT_LIMIT: usize = 12;
 const MODE_WIDTH: f32 = 58.0;
@@ -63,7 +65,7 @@ pub(crate) struct ColorPicker {
     value: Option<Rgb>,
     hsv: Hsv,
     allow_none: bool,
-    pipette: Option<bool>,
+    picking: Option<Task<()>>,
     channels: [Entity<InputState>; 3],
     hex: Entity<InputState>,
     area: Rc<Cell<Bounds<Pixels>>>,
@@ -76,7 +78,6 @@ pub(crate) struct ColorPicker {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ColorPickerEvent {
     Change(Option<Rgb>),
-    Pipette,
 }
 
 #[derive(IntoElement)]
@@ -159,7 +160,7 @@ impl ColorPicker {
             value,
             hsv,
             allow_none: false,
-            pipette: None,
+            picking: None,
             channels,
             hex,
             area: Rc::default(),
@@ -194,13 +195,6 @@ impl ColorPicker {
         self.value = value;
         self.uncommitted = false;
         cx.notify();
-    }
-
-    pub(crate) fn set_pipette(&mut self, pipette: Option<bool>, cx: &mut Context<Self>) {
-        if self.pipette != pipette {
-            self.pipette = pipette;
-            cx.notify();
-        }
     }
 
     pub(crate) fn remember(color: Rgb, cx: &mut App) {
@@ -305,6 +299,39 @@ impl ColorPicker {
         self.change(Some(color), cx);
     }
 
+    fn pick_from_screen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.picking.is_some() {
+            return;
+        }
+        let picked = eye_dropper::pick(cx);
+        self.picking = Some(cx.spawn_in(window, async move |this, cx| {
+            let picked = picked.await;
+            this.update_in(cx, |this, window, cx| this.apply_pick(picked, window, cx))
+                .ok();
+        }));
+        cx.notify();
+    }
+
+    fn apply_pick(
+        &mut self,
+        picked: Result<Option<Rgb>, eye_dropper::Error>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.picking = None;
+        match picked {
+            Ok(Some(color)) => {
+                self.choose(color, window, cx);
+                Self::remember(color, cx);
+            }
+            Ok(None) => cx.notify(),
+            Err(error) => {
+                window.push_notification(Notification::error(error.to_string()), cx);
+                cx.notify();
+            }
+        }
+    }
+
     fn write_fields(&self, color: Rgb, source: Source, window: &mut Window, cx: &mut App) {
         if source != Source::Channels {
             for (state, channel) in self
@@ -326,7 +353,7 @@ impl ColorPicker {
     fn copy_hex(&self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(color) = self.value {
             cx.write_to_clipboard(ClipboardItem::new_string(hex_of(color)));
-            window.push_notification(Notification::success("Colour copied"), cx);
+            window.push_notification(Notification::success("Colour copied to clipboard"), cx);
         }
     }
 
@@ -408,19 +435,16 @@ impl ColorPicker {
     }
 
     fn hue_row(&self, cx: &Context<Self>) -> Div {
-        let pipette = self.pipette.map(|active| {
-            Button::new("color-pipette")
-                .ghost()
-                .small()
-                .icon(Catalog::Pipette)
-                .selected(active)
-                .tooltip("Eye dropper")
-                .on_click(cx.listener(|_, _, _, cx| cx.emit(ColorPickerEvent::Pipette)))
-        });
         h_flex()
             .w_full()
             .gap_2()
-            .children(pipette)
+            .child(
+                ActionButton::icon_only("color-pipette", Catalog::Pipette)
+                    .ghost()
+                    .selected(self.picking.is_some())
+                    .tooltip("Eye Dropper")
+                    .on_click(cx.listener(|this, _, window, cx| this.pick_from_screen(window, cx))),
+            )
             .child(self.strip(cx))
     }
 
@@ -527,10 +551,9 @@ impl ColorPicker {
             Mode::Hex => h_flex().flex_1().min_w_0().child(
                 div().flex_1().min_w_0().child(
                     Input::new(&self.hex).small().suffix(
-                        Button::new("color-copy")
+                        ActionButton::icon_only("color-copy", Catalog::Copy)
                             .ghost()
-                            .xsmall()
-                            .icon(Catalog::Copy)
+                            .tiny()
                             .tooltip("Copy")
                             .on_click(cx.listener(|this, _, window, cx| this.copy_hex(window, cx))),
                     ),
@@ -585,13 +608,14 @@ impl ColorPicker {
         v_flex()
             .w_full()
             .gap_3()
-            .child(panel::label("Recently used", cx))
+            .child(panel::label("Recently Used", cx))
             .child(v_flex().w_full().gap_3().children(rows))
     }
 
     fn no_color(&self, cx: &Context<Self>) -> Stateful<Div> {
         let theme = cx.theme();
         let chosen = self.value.is_none();
+        let stroke = theme.danger;
         h_flex()
             .id("no-color")
             .w_full()
@@ -599,19 +623,14 @@ impl ColorPicker {
             .cursor_pointer()
             .child(
                 div()
+                    .relative()
                     .flex_none()
                     .size(px(SWATCH_SIZE))
                     .rounded_full()
+                    .bg(theme.background)
                     .border_2()
                     .border_color(if chosen { theme.primary } else { theme.border })
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        Icon::new(Catalog::Ban)
-                            .small()
-                            .text_color(theme.muted_foreground),
-                    ),
+                    .child(crossed(stroke)),
             )
             .child(
                 div()
@@ -824,19 +843,33 @@ fn swatch_face(value: Option<Rgb>, open: bool, size: Pixels, cx: &App) -> AnyEle
         .child(value.map_or_else(
             || {
                 div()
+                    .relative()
                     .size_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        Icon::new(Catalog::Ban)
-                            .small()
-                            .text_color(theme.muted_foreground),
-                    )
+                    .rounded_full()
+                    .bg(theme.background)
+                    .child(crossed(theme.danger))
             },
             |color| div().size_full().rounded_full().bg(hsla_of(color)),
         ))
         .into_any_element()
+}
+
+fn crossed(stroke: Hsla) -> Div {
+    div().absolute().top_0().left_0().size_full().child(
+        canvas(
+            |_, _, _| {},
+            move |bounds, (), window, _| {
+                let inset = bounds.size.width * NO_COLOR_INSET;
+                let mut line = PathBuilder::stroke(px(NO_COLOR_STROKE));
+                line.move_to(point(bounds.left() + inset, bounds.bottom() - inset));
+                line.line_to(point(bounds.right() - inset, bounds.top() + inset));
+                if let Ok(path) = line.build() {
+                    window.paint_path(path, stroke);
+                }
+            },
+        )
+        .size_full(),
+    )
 }
 
 const fn color(red: u8, green: u8, blue: u8) -> Rgb {

@@ -162,7 +162,7 @@ that endpoint.
 
 `xtask check` reads every board image with its relocations (the boards link with
 `--emit-relocs`) and builds a call graph: an edge for every branch and every address a function
-or a table takes, through data such as vtables. An image without call relocations, or with a `bl` that has none, is rejected. Three checks run on it:
+or a table takes, through data such as vtables. An image without call relocations, or with a `bl` that has none, is rejected. `xtask build` orders the link by the same graph ([link order](building.md#link-order)). Four checks run on it:
 
 - No panic is reachable from an interrupt vector or from the poll function of the key task
   (`scanning`, run by the key executor), except the `async fn` resumed-after-completion panics no
@@ -172,6 +172,7 @@ or a table takes, through data such as vtables. An image without call relocation
   with its reason. Each site is waived only from the context it names (interrupts or the key
   task). A reviewed site that no image reaches any more is reported for removal.
 - No BASEPRI write is reachable from the scan vector (`ADC` on the GD32F425, `ADC0_1` on the GD32F303): the scan interrupt takes no critical section.
+- Every function that a device interrupt vector or the key task reaches lies in the zero-wait flash (`ZERO_WAIT` of `memory.x`); beyond it the GD32F425 ran the scan interrupt about 20 times slower ([lessons](hardware.md#lessons-from-the-wooting-80he)).
 - RAM and flash budget: statics (from the start of RAM to the end of the last static section) plus a stack bound must fit the RAM of `memory.x` with 2048
   bytes to spare, and the image must leave 32 KiB of its area free. The stack bound is the
   deepest path over the call graph with each function's frame decoded from its stack-pointer

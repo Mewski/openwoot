@@ -19,6 +19,7 @@ use crate::{
 };
 
 pub const PROFILES: u8 = 4;
+pub const LINKED_PROFILES: u8 = 10;
 pub const LAYOUT_VARIANTS: usize = 3;
 pub const KEYMAP: DefaultKeymap<KEY_ROWS, KEY_COLUMNS> = DefaultKeymap {
     layers: &LAYERS,
@@ -647,6 +648,7 @@ pub fn capabilities(edition: Option<u8>) -> Capabilities {
         key_rows: u8::try_from(KEY_ROWS).unwrap_or(u8::MAX),
         key_columns: u8::try_from(KEY_COLUMNS).unwrap_or(u8::MAX),
         profiles: PROFILES,
+        linked_profiles: LINKED_PROFILES,
         layouts: Vec::from_iter([Layout::Ansi, Layout::Iso, Layout::Jis]),
         lightbar_leds: u8::try_from(crate::lighting::LIGHTBAR_LEDS.len()).unwrap_or(u8::MAX),
         host_signals: true,

@@ -11,18 +11,20 @@ use super::{
     Carried, GamepadPage, controls,
     glyph::{self, Ink},
 };
-use crate::keyboard::Dragged;
+use crate::{keyboard::Dragged, theme};
 
 const TILE: f32 = 44.0;
-const ICON: f32 = 36.0;
-const DISABLED: f32 = 0.4;
+const TILE_SPACING: f32 = 8.0;
+const TILE_RADIUS: f32 = 4.8;
+const ICON: f32 = 38.0;
+const DISABLED: f32 = 0.5;
 
 impl GamepadPage {
     pub(super) fn palette(&self, enabled: bool, cx: &mut Context<Self>) -> Div {
         let controller = self.shown_controller();
         let ink = Ink::of(cx);
-        let theme = cx.theme();
-        let (surface, border, hover) = (theme.secondary, theme.border, theme.secondary_hover);
+        let palette = theme::palette();
+        let hover_border = cx.theme().muted_foreground;
         let tiles =
             controller
                 .palette()
@@ -35,30 +37,40 @@ impl GamepadPage {
                         .id(("gamepad-tile", index))
                         .size(px(TILE))
                         .flex_none()
+                        .mr(px(TILE_SPACING))
+                        .mb(px(TILE_SPACING))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(6.0))
-                        .bg(surface)
+                        .rounded(px(TILE_RADIUS))
+                        .bg(palette.raised)
                         .border_1()
-                        .border_color(border)
-                        .child(glyph::icon(control, controller, ink, px(ICON)))
+                        .border_color(palette.border_strong)
+                        .child(
+                            div()
+                                .when(!enabled, |this| this.opacity(DISABLED))
+                                .child(glyph::icon(control, controller, ink, px(ICON))),
+                        )
                         .tooltip(move |window, cx| Tooltip::new(name).build(window, cx))
-                        .when(enabled, |this| {
-                            this.cursor_grab()
-                                .hover(|style| style.border_color(hover))
-                                .on_drag(
-                                    Dragged::new(Carried::Control(control), name)
-                                        .glyph(glyph::glyph(control, controller, ink, false)),
-                                    |dragged, _, _, cx| cx.new(|_| dragged.clone()),
-                                )
+                        .map(|this| {
+                            if enabled {
+                                this.cursor_grab()
+                                    .hover(|style| {
+                                        style.bg(palette.raised_hover).border_color(hover_border)
+                                    })
+                                    .on_drag(
+                                        Dragged::new(Carried::Control(control), name)
+                                            .glyph(glyph::glyph(control, controller, ink, false)),
+                                        |dragged, _, _, cx| cx.new(|_| dragged.clone()),
+                                    )
+                            } else {
+                                this.cursor_not_allowed()
+                            }
                         })
-                        .when(!enabled, |this| this.opacity(DISABLED))
                 });
         h_flex()
             .w_full()
             .flex_wrap()
-            .gap_2()
             .on_drop(cx.listener(|this, _: &Dragged<Carried>, _, cx| {
                 this.carried_from = None;
                 cx.notify();

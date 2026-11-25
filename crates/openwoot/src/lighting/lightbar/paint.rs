@@ -30,6 +30,12 @@ impl Strip<'_> {
         }
     }
 
+    pub(super) fn show(self, canvas: &mut impl Canvas, colors: &[Rgb]) {
+        for (index, led) in self.leds.iter().enumerate() {
+            canvas.set_led(*led, colors.get(index).copied().unwrap_or(BLACK));
+        }
+    }
+
     pub(super) fn fill(self, canvas: &mut impl Canvas, target: Target, color: Rgb) {
         match target {
             Target::Lightbar(range) => self.fill_range(canvas, range, color),

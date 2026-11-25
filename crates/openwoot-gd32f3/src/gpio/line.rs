@@ -6,11 +6,11 @@
 use super::{
     Level, Speed,
     registers::{
-        self, INPUT_ANALOG, OUTPUT_PUSH_PULL, PINS, enable_clock, is_port, port_index, set_mode,
-        set_reset,
+        self, ALTERNATE_OPEN_DRAIN, INPUT_ANALOG, OUTPUT_OPEN_DRAIN, OUTPUT_PUSH_PULL, PINS,
+        enable_clock, is_port, level_of, port_index, set_mode, set_reset,
     },
 };
-use crate::register::write_bits;
+use crate::register::{read_bits, write_bits};
 
 const BACKUP_DOMAIN_PORT: u8 = port_index('C');
 const BACKUP_DOMAIN_FIRST_PIN: u8 = 13;
@@ -44,12 +44,16 @@ impl Line {
     }
 
     pub(crate) fn into_output(self, level: Level) {
+        self.into_driven(OUTPUT_PUSH_PULL, level);
+    }
+
+    pub(crate) fn into_open_drain(self, level: Level) {
+        self.into_driven(OUTPUT_OPEN_DRAIN, level);
+    }
+
+    pub(crate) fn into_alternate_open_drain(self) {
         enable_clock(self.port);
-        match level {
-            Level::High => self.set_high(),
-            Level::Low => self.set_low(),
-        }
-        self.configure(OUTPUT_PUSH_PULL | self.output_speed().mode());
+        self.configure(ALTERNATE_OPEN_DRAIN | self.output_speed().mode());
     }
 
     pub(crate) fn into_analog(self) {
@@ -78,6 +82,19 @@ impl Line {
     #[inline(always)]
     const fn mask(self) -> u32 {
         1 << self.pin
+    }
+
+    pub(crate) fn level(self) -> Level {
+        level_of(read_bits(registers::port(self.port).istat()), self.pin)
+    }
+
+    fn into_driven(self, control: u32, level: Level) {
+        enable_clock(self.port);
+        match level {
+            Level::High => self.set_high(),
+            Level::Low => self.set_low(),
+        }
+        self.configure(control | self.output_speed().mode());
     }
 
     fn configure(self, nibble: u32) {

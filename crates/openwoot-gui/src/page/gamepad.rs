@@ -4,16 +4,17 @@ mod curve;
 mod glyph;
 mod output;
 mod palette;
+mod system;
 mod tester;
 mod view;
 
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
-    AppContext as _, Context, Entity, Subscription, Task, Window,
+    AppContext as _, Context, Entity, SharedString, Subscription, Task, Window,
     component::{
         WindowExt as _,
-        button::ButtonVariant,
+        input::{InputEvent, InputState},
         notification::Notification,
         slider::{SliderEvent, SliderState},
     },
@@ -38,7 +39,10 @@ use self::{
     curve::DEFAULT_UP_BIAS,
     output::{Output, Priorities},
 };
-use crate::store::{Keyboard, Scope, Store, StoreEvent};
+use crate::{
+    panel,
+    store::{Keyboard, Scope, Store, StoreEvent},
+};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(33);
 const SENSOR_TRAVEL: u32 = 4095;
@@ -67,7 +71,7 @@ enum DeviceChange {
 pub(crate) struct GamepadPage {
     store: Entity<Store>,
     view: View,
-    device: Option<device::Settings>,
+    device: Option<device::SettingsState>,
     mapping: Option<gamepad::Mapping>,
     key_settings: Option<keys::Settings>,
     overrides: Option<keys::Overrides>,
@@ -77,6 +81,7 @@ pub(crate) struct GamepadPage {
     dragged_point: Option<usize>,
     carried_from: Option<usize>,
     up_bias: Entity<SliderState>,
+    angle: Entity<InputState>,
     detecting: bool,
     detection_pending: bool,
     gamepad_state: Option<gamepad::State>,
@@ -96,43 +101,54 @@ impl GamepadPage {
                 .step(1.0)
                 .default_value(f32::from(DEFAULT_UP_BIAS))
         });
-        let subscriptions = vec![
-            cx.subscribe_in(&store, window, |this, _, event, window, cx| match event {
-                StoreEvent::Connected => {
-                    this.detecting = false;
-                    this.load(window, cx);
-                }
-                StoreEvent::ProfileChanged | StoreEvent::Reloaded => this.load(window, cx),
-                StoreEvent::Disconnected => {
-                    this.detecting = false;
-                    this.travel = None;
-                    this.gamepad_state = None;
-                    cx.notify();
-                }
-                StoreEvent::Failed(_) => {}
-            }),
-            cx.subscribe_in(
-                &up_bias,
-                window,
-                |this, _, event: &SliderEvent, window, cx| match event {
-                    SliderEvent::Change(value) => {
-                        let percent = curve::point_value(value.end()).min(100);
-                        this.slide_bias(percent, cx);
+        let angle =
+            cx.new(|cx| InputState::new(window, cx).default_value(curve::degrees(DEFAULT_UP_BIAS)));
+        let subscriptions =
+            vec![
+                cx.subscribe_in(&store, window, |this, _, event, window, cx| match event {
+                    StoreEvent::Connected => {
+                        this.detecting = false;
+                        this.load(window, cx);
                     }
-                    SliderEvent::Release(_) => this.finish_edit(window, cx),
-                },
-            ),
-            cx.on_release(|page: &mut Self, cx| {
-                if page.detecting {
-                    let stop = page
-                        .store
-                        .read(cx)
-                        .device()
-                        .call::<SetGamepadDetection>(false);
-                    cx.background_spawn(stop).detach();
-                }
-            }),
-        ];
+                    StoreEvent::ProfileChanged | StoreEvent::Reloaded => this.load(window, cx),
+                    StoreEvent::Disconnected => {
+                        this.detecting = false;
+                        this.travel = None;
+                        this.gamepad_state = None;
+                        cx.notify();
+                    }
+                    StoreEvent::Failed(_) => {}
+                }),
+                cx.subscribe_in(
+                    &up_bias,
+                    window,
+                    |this, _, event: &SliderEvent, window, cx| match event {
+                        SliderEvent::Change(value) => {
+                            let percent = curve::point_value(value.end()).min(100);
+                            this.slide_bias(percent, window, cx);
+                        }
+                        SliderEvent::Release(_) => this.finish_edit(window, cx),
+                    },
+                ),
+                cx.subscribe_in(&angle, window, |this, _, event: &InputEvent, window, cx| {
+                    match event {
+                        InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                            this.commit_angle(window, cx);
+                        }
+                        InputEvent::Change | InputEvent::Focus => {}
+                    }
+                }),
+                cx.on_release(|page: &mut Self, cx| {
+                    if page.detecting {
+                        let stop = page
+                            .store
+                            .read(cx)
+                            .device()
+                            .call::<SetGamepadDetection>(false);
+                        cx.background_spawn(stop).detach();
+                    }
+                }),
+            ];
         let mut page = Self {
             store,
             view: View::Setup,
@@ -146,6 +162,7 @@ impl GamepadPage {
             dragged_point: None,
             carried_from: None,
             up_bias,
+            angle,
             detecting: false,
             detection_pending: false,
             gamepad_state: None,
@@ -201,7 +218,17 @@ impl GamepadPage {
 
     fn controller(&self) -> Option<Controller> {
         self.device
-            .and_then(|settings| Controller::of(settings.mode))
+            .and_then(|state| Controller::of(state.chosen.mode))
+    }
+
+    fn running_controller(&self) -> Option<Controller> {
+        self.device
+            .and_then(|state| Controller::of(state.active.mode))
+    }
+
+    fn restart_pending(&self) -> bool {
+        self.device
+            .is_some_and(|state| state.active != state.chosen)
     }
 
     fn shown_controller(&self) -> Controller {
@@ -209,13 +236,26 @@ impl GamepadPage {
     }
 
     fn sync_bias(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let bias = self
-            .analog
-            .and_then(|settings| settings.left_stick_up_bias)
-            .unwrap_or(DEFAULT_UP_BIAS);
+        let bias = self.analog.map_or(DEFAULT_UP_BIAS, |settings| {
+            settings.left_stick_up_bias.percent
+        });
         self.up_bias.update(cx, |slider, cx| {
             slider.set_value(f32::from(bias), window, cx);
         });
+        self.angle.update(cx, |field, cx| {
+            field.set_value(curve::degrees(bias), window, cx);
+        });
+    }
+
+    fn commit_angle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match curve::bias_of_degrees(&self.angle.read(cx).value()) {
+            Some(percent) => self.change_analog(
+                |settings| settings.left_stick_up_bias.percent = percent,
+                window,
+                cx,
+            ),
+            None => self.sync_bias(window, cx),
+        }
     }
 
     fn choose_view(&mut self, view: View, window: &mut Window, cx: &mut Context<Self>) {
@@ -310,36 +350,41 @@ impl GamepadPage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let title = match change {
-            DeviceChange::Mode(Mode::NoGamepad) => "Disable gamepad",
-            DeviceChange::Mode(_) if self.controller().is_none() => "Enable gamepad",
-            DeviceChange::Mode(_) => "Change controller type",
-            DeviceChange::Polling(_) => "Change polling rate",
+        let (title, action) = match change {
+            DeviceChange::Mode(Mode::NoGamepad) => ("Disable Gamepad", "disable gamepad mode"),
+            DeviceChange::Mode(_) if self.controller().is_none() => {
+                ("Enable Gamepad", "enable gamepad mode")
+            }
+            DeviceChange::Mode(_) => (
+                "Changing Gamepad Controller Type",
+                "change the gamepad controller type",
+            ),
+            DeviceChange::Polling(_) => (
+                "Changing Gamepad Polling Rate",
+                "change the gamepad polling rate",
+            ),
         };
         let unsaved = self
             .store
             .read(cx)
             .keyboard()
             .is_some_and(|keyboard| keyboard.unsaved);
-        let description = if unsaved {
-            "Your keyboard saves your changes and restarts to apply this."
+        let outcome = if unsaved {
+            "saves your changes and restarts"
         } else {
-            "Your keyboard restarts to apply this."
+            "has to restart"
         };
+        let description = SharedString::from(format!("When you {action}, your device {outcome}."));
         let page = cx.entity().downgrade();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let page = page.clone();
-            alert
-                .title(title)
-                .description(description)
-                .confirm()
-                .ok_text("Restart")
-                .on_ok(move |_, window, cx| {
-                    page.update(cx, |page, cx| page.apply_device_change(change, window, cx))
-                        .ok();
-                    true
-                })
-        });
+        panel::confirm(
+            panel::Confirmation::new(title, description, "Confirm"),
+            move |window, cx| {
+                page.update(cx, |page, cx| page.apply_device_change(change, window, cx))
+                    .ok();
+            },
+            window,
+            cx,
+        );
     }
 
     fn apply_device_change(
@@ -351,11 +396,11 @@ impl GamepadPage {
         let current = self
             .store
             .update(cx, |store, cx| store.fetch::<GetDeviceSettings, _>((), cx));
-        let device = self.store.read(cx).device();
         cx.spawn_in(window, async move |this, cx| {
-            let Ok(mut settings) = current.await else {
+            let Ok(state) = current.await else {
                 return;
             };
+            let mut settings = state.chosen;
             match change {
                 DeviceChange::Mode(mode) => settings.mode = mode,
                 DeviceChange::Polling(rate) => settings.gamepad_polling = rate,
@@ -370,16 +415,23 @@ impl GamepadPage {
             if applied.await.is_err() {
                 return;
             }
-            let Ok(saved) = this.update(cx, |page, cx| {
-                page.device = Some(settings);
-                if settings.mode == Mode::NoGamepad {
-                    page.detecting = false;
-                }
+            this.update_in(cx, |page, window, cx| {
+                page.device = Some(device::SettingsState {
+                    chosen: settings,
+                    ..state
+                });
                 cx.notify();
-                page.store.update(cx, |store, cx| store.save(cx))
-            }) else {
-                return;
-            };
+                page.restart(window, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let saved = self.store.update(cx, |store, cx| store.save(cx));
+        let device = self.store.read(cx).device();
+        cx.spawn_in(window, async move |_, cx| {
             if saved.await.is_err() {
                 return;
             }
@@ -582,29 +634,26 @@ impl GamepadPage {
             return;
         }
         let page = cx.entity().downgrade();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let page = page.clone();
-            alert
-                .title("Disable keyboard keys")
-                .description(
-                    "This profile stops typing while the gamepad is on. Keep a profile or Fn \
-                     key on it to switch back.",
-                )
-                .confirm()
-                .ok_text("Disable")
-                .ok_variant(ButtonVariant::Danger)
-                .on_ok(move |_, window, cx| {
-                    page.update(cx, |page, cx| {
-                        page.change_key_settings(
-                            |settings| settings.keyboard_in_gamepad_mode = false,
-                            window,
-                            cx,
-                        );
-                    })
-                    .ok();
-                    true
+        panel::confirm(
+            panel::Confirmation::new(
+                "Disable keyboard keys",
+                "You might lock yourself out of typing on this profile.",
+                "Confirm",
+            )
+            .danger(),
+            move |window, cx| {
+                page.update(cx, |page, cx| {
+                    page.change_key_settings(
+                        |settings| settings.keyboard_in_gamepad_mode = false,
+                        window,
+                        cx,
+                    );
                 })
-        });
+                .ok();
+            },
+            window,
+            cx,
+        );
     }
 
     fn change_analog(
@@ -657,14 +706,17 @@ impl GamepadPage {
         cx.notify();
     }
 
-    fn slide_bias(&mut self, percent: u8, cx: &mut Context<Self>) {
+    fn slide_bias(&mut self, percent: u8, window: &mut Window, cx: &mut Context<Self>) {
         let Some(settings) = &mut self.analog else {
             return;
         };
         if self.edit_origin.is_none() {
             self.edit_origin = Some(*settings);
         }
-        settings.left_stick_up_bias = Some(percent);
+        settings.left_stick_up_bias.percent = percent;
+        self.angle.update(cx, |field, cx| {
+            field.set_value(curve::degrees(percent), window, cx);
+        });
         cx.notify();
     }
 
@@ -746,7 +798,7 @@ impl GamepadPage {
     }
 
     fn controller_output(&mut self, keyboard: &Keyboard) -> Option<Output> {
-        let controller = self.controller()?;
+        let controller = self.running_controller()?;
         let mapping = self.mapping.as_ref()?;
         self.travel.as_ref()?;
         let mapped = mapping

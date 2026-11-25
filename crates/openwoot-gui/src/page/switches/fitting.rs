@@ -130,6 +130,7 @@ mod tests {
             key_rows: 1,
             key_columns: 4,
             profiles: 1,
+            linked_profiles: 0,
             layouts: std::iter::empty().collect(),
             lightbar_leds: 0,
             host_signals: false,

@@ -15,7 +15,7 @@ use openwoot_protocol::{
     lightbar::{
         Background, Blink, Builtin, Comparator, Comparison, Condition, Custom, Effect, Entries,
         Entry, Group, HostSignal, KeyRect, Logic, Meter, Mirror, Operand, ProfileIndicator, Range,
-        Settings, Signal, Solid, Target, Term, Waveform,
+        Settings, Signal, Solid, Target, Term, Title, Waveform,
     },
     lighting::{Color, Rgb},
 };
@@ -204,7 +204,11 @@ impl<'a> Tokens<'a> {
             }
             _ => None,
         };
-        Entry { condition, effect }
+        Entry {
+            title: Title::new(),
+            condition,
+            effect,
+        }
     }
 
     fn group(&mut self) -> Group {
@@ -418,6 +422,7 @@ fn page_writes_of_the_light_bar_use_its_own_brightness() {
 
 fn meter(signal: Signal, maximum: f32, first: u8, last: u8) -> Entry {
     Entry {
+        title: Title::new(),
         condition: None,
         effect: Effect::Meter(Meter {
             signal,
@@ -495,6 +500,7 @@ fn host_signals_travel_from_the_configuration_to_the_light_bar_and_back() {
     indicator
         .entries
         .push(Entry {
+            title: Title::new(),
             condition: None,
             effect: Effect::ProfileIndicator(ProfileIndicator {
                 range: Range { first: 0, last: 9 },
@@ -572,6 +578,7 @@ static GAINED_MAP: LedMap<BAR_PAGES> = LedMap {
 
 fn solid_on(first: u8, last: u8, condition: Option<Condition>) -> Entry {
     Entry {
+        title: Title::new(),
         condition,
         effect: Effect::Solid(Solid {
             color: color_of(rgb_of("ff0000")),
@@ -649,6 +656,7 @@ fn with_engine(bar: Bar) -> Lighting<Bar, ROWS, COLUMNS, BAR_PAGES, LENGTH> {
 fn a_profile_indicator_on_one_led_is_drawn_and_then_rests() {
     let mut bar = Bar::new(&BAR_LEDS, &BAR_MAP, COLUMNS);
     let settings = profile_of([Entry {
+        title: Title::new(),
         condition: None,
         effect: Effect::ProfileIndicator(ProfileIndicator {
             range: Range { first: 0, last: 0 },
@@ -684,6 +692,7 @@ fn keys_painted_by_an_entry_get_their_colours_back_when_its_condition_falls() {
     settings
         .entries
         .push(Entry {
+            title: Title::new(),
             condition: Some(caps_is_on(Logic::All, Logic::All)),
             effect: Effect::Solid(Solid {
                 color: color_of(rgb_of("ff0000")),
@@ -858,6 +867,7 @@ fn every_entry_hears_a_signal_whatever_the_logic_of_its_condition() {
 fn a_blink_hidden_by_its_condition_does_not_ask_to_render() {
     let mut bar = Bar::new(&BAR_LEDS, &BAR_MAP, COLUMNS);
     let hidden_blink = Entry {
+        title: Title::new(),
         condition: Some(caps_is_on(Logic::All, Logic::All)),
         effect: Effect::Blink(Blink {
             from: color_of(rgb_of("ff0000")),
@@ -923,6 +933,7 @@ fn a_timed_comparison_asks_to_render_for_a_change_and_for_the_end_of_its_hold_on
 #[test]
 fn the_mirror_and_a_transparent_meter_apply_the_board_gains_once() {
     let mirror = Entry {
+        title: Title::new(),
         condition: None,
         effect: Effect::Mirror(Mirror {
             range: Range { first: 0, last: 9 },
@@ -945,6 +956,7 @@ fn the_mirror_and_a_transparent_meter_apply_the_board_gains_once() {
     let mut global = Entries::new();
     global.push(solid_on(0, 0, None)).unwrap();
     let transparent = Entry {
+        title: Title::new(),
         condition: None,
         effect: Effect::Meter(Meter {
             signal: Signal::Builtin(Builtin::KeyRate),

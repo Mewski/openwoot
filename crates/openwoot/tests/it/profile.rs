@@ -1,3 +1,7 @@
+mod linked;
+mod links;
+mod stored;
+
 use std::{pin::pin, rc::Rc};
 
 use embassy_futures::block_on;
@@ -25,7 +29,7 @@ use openwoot_protocol::{
         Color, Effect, HueRange, Idle, Indicators, KeyColors, RainbowWave, ReactiveColoring,
         ReactiveFade, Rgb, Settings as LightingSettings,
     },
-    profile::{Info, Slot, Summary},
+    profile::{Info, Namespace::Onboard, Slot, Summary},
     switches,
 };
 
@@ -392,10 +396,10 @@ fn profiles_are_created_up_to_the_capacity_and_only_the_last_one_is_deleted() {
     let shared = profile::Shared::new();
     let mut settings = storage();
     let mut model = open(&keys, &shared, Some(&mut settings));
-    assert_eq!(block_on(model.create()), Ok(Slot::new(2)));
-    assert_eq!(block_on(model.create()), Ok(Slot::new(3)));
+    assert_eq!(block_on(model.create(Onboard)), Ok(Slot::new(2)));
+    assert_eq!(block_on(model.create(Onboard)), Ok(Slot::new(3)));
     assert_eq!(
-        block_on(model.create()),
+        block_on(model.create(Onboard)),
         Err(Rejection::ProfileLimitReached)
     );
     assert_eq!(keys.profiles(), (4, 0));
@@ -589,13 +593,13 @@ fn a_profile_count_that_cannot_be_stored_creates_and_deletes_nothing() {
     let mut model = open_probed(&keys, &shared, &mut settings);
     watch.fail_writes(true);
     assert_eq!(
-        block_on(model.create()),
+        block_on(model.create(Onboard)),
         Err(Rejection::StorageInaccessible)
     );
     assert_eq!(model.summary().count, 2);
     assert_eq!(keys.profiles(), (2, 0));
     watch.fail_writes(false);
-    assert_eq!(block_on(model.create()), Ok(Slot::new(2)));
+    assert_eq!(block_on(model.create(Onboard)), Ok(Slot::new(2)));
     block_on(model.activate(Slot::new(2))).unwrap();
     watch.fail_writes(true);
     assert_eq!(
@@ -606,7 +610,9 @@ fn a_profile_count_that_cannot_be_stored_creates_and_deletes_nothing() {
         model.summary(),
         Summary {
             count: 3,
-            active: Slot::new(2)
+            active: Slot::new(2),
+            linked: 0,
+            selected: None,
         }
     );
     assert_eq!(keys.profiles(), (3, 2));
@@ -620,7 +626,9 @@ fn a_profile_count_that_cannot_be_stored_creates_and_deletes_nothing() {
         model.summary(),
         Summary {
             count: 2,
-            active: Slot::new(1)
+            active: Slot::new(1),
+            linked: 0,
+            selected: None,
         }
     );
 }
@@ -643,7 +651,7 @@ fn a_power_cut_while_a_profile_is_deleted_leaves_it_whole_or_gone() {
         let mut settings = storage_on(Nor::new(6));
         {
             let mut model = open(&keys, &shared, Some(&mut settings));
-            assert_eq!(block_on(model.create()), Ok(Slot::new(2)));
+            assert_eq!(block_on(model.create(Onboard)), Ok(Slot::new(2)));
             block_on(model.set_keymap(Slot::new(2), Layer::One, &typed(0x05))).unwrap();
             block_on(model.set_lighting(Slot::new(2), dim.clone())).unwrap();
             block_on(model.set_info(Slot::new(2), named.clone())).unwrap();
@@ -775,7 +783,10 @@ fn stored_parts_that_fail_validation_give_way_to_the_factory_parts() {
         ..TYPING
     };
     let biased = gamepad::Settings {
-        left_stick_up_bias: Some(150),
+        left_stick_up_bias: gamepad::StickBias {
+            enabled: true,
+            percent: 150,
+        },
         ..keys::default_gamepad_settings()
     };
     let frozen = LightingSettings {
@@ -849,6 +860,7 @@ fn the_layout_is_the_one_of_the_layout_variant_of_the_unit() {
         key_rows: u8::try_from(ROWS).unwrap(),
         key_columns: u8::try_from(COLUMNS).unwrap(),
         profiles: 4,
+        linked_profiles: 0,
         layouts: Vec::from_array([
             device::Layout::Ansi,
             device::Layout::Iso,
@@ -923,6 +935,7 @@ pub(crate) fn switch_capabilities() -> Capabilities {
         key_rows: u8::try_from(ROWS).unwrap_or(u8::MAX),
         key_columns: u8::try_from(COLUMNS).unwrap_or(u8::MAX),
         profiles: 4,
+        linked_profiles: 0,
         layouts: Vec::from_array([device::Layout::Ansi, device::Layout::Iso]),
         lightbar_leds: 0,
         host_signals: false,
@@ -1271,8 +1284,9 @@ fn the_default_keymap_is_the_factory_keymap_of_the_layout_in_effect_on_every_lay
             patched(FN_LAYERS[1], &ISO_PATCHES[1]),
         ),
     ] {
-        let model: Mutex<Mutual, ProfileModel<'_>> =
-            Mutex::new(Model::new(&keys, &shared, None, &LAYERED, variant, 4));
+        let mut model = Model::new(&keys, &shared, None, &LAYERED, variant, 4);
+        block_on(model.load());
+        let model: Mutex<Mutual, ProfileModel<'_>> = Mutex::new(model);
         let mut configurator = Configurator::new(&model, switch_capabilities());
         let mut keymap = Keymap::new();
         for (layer, expected) in [
@@ -1365,7 +1379,9 @@ fn swapped_profiles_keep_their_parts_and_the_active_profile_stays_active() {
             model.summary(),
             Summary {
                 count: 2,
-                active: Slot::new(1)
+                active: Slot::new(1),
+                linked: 0,
+                selected: None,
             }
         );
         assert_eq!(keys.profiles(), (2, 1));
@@ -1403,7 +1419,7 @@ fn a_moved_profile_takes_its_new_slot_and_the_profiles_between_close_up() {
     let mut settings = storage();
     let mut model = open(&keys, &shared, Some(&mut settings));
     for _ in 0..2 {
-        block_on(model.create()).unwrap();
+        block_on(model.create(Onboard)).unwrap();
     }
     for (slot, name) in [(1, "B"), (2, "C"), (3, "D")] {
         block_on(model.set_info(Slot::new(slot), named(name))).unwrap();
@@ -1424,7 +1440,7 @@ fn a_moved_profile_takes_its_new_slot_and_the_profiles_between_close_up() {
     block_on(model.delete(Slot::new(3))).unwrap();
     assert_eq!(names(&mut model), ["D", "B", "C"]);
     assert_eq!(model.summary().active, Slot::new(2));
-    assert_eq!(block_on(model.create()), Ok(Slot::new(3)));
+    assert_eq!(block_on(model.create(Onboard)), Ok(Slot::new(3)));
     assert_eq!(names(&mut model), ["D", "B", "C", "Typing Profile"]);
     assert_eq!(
         block_on(model.lighting(Slot::new(3))).map(|settings| settings.brightness),

@@ -21,5 +21,5 @@ pub use factory::{Factory, Preset};
 use key_part::KeyPart;
 pub use model::Model;
 pub use order::Order;
-pub use records::{Count, Revision};
+pub use records::{Count, DeviceName, LinkedCount, Revision};
 pub use shared::Shared;

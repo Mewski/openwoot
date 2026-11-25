@@ -4,6 +4,7 @@ use crate::Region;
 pub struct MemoryLayout {
     pub flash: Region,
     pub ram: Region,
+    pub zero_wait: Region,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -26,6 +27,7 @@ impl MemoryLayout {
         Ok(Self {
             flash: region(memory_x, "FLASH")?,
             ram: region(memory_x, "RAM")?,
+            zero_wait: region(memory_x, "ZERO_WAIT")?,
         })
     }
 }
@@ -101,18 +103,22 @@ mod tests {
     use super::*;
 
     const MEMORY_X: &str = "MEMORY\n{\n  FLASH (rx) : ORIGIN = 0x08007000, LENGTH = 0x000F6000\n  \
-                            RAM (rwx) : ORIGIN = 0x20000000, LENGTH = 0x00018000\n}\n";
+                            RAM (rwx) : ORIGIN = 0x20000000, LENGTH = 0x00018000\n  ZERO_WAIT \
+                            : ORIGIN = 0x08000000, LENGTH = 0x00040000\n}\n";
+    const ZERO_WAIT: &str = "ZERO_WAIT : ORIGIN = 0x08000000, LENGTH = 0x00080000";
 
     fn flash(definition: &str) -> Result<Region, LinkerScriptError> {
         let memory_x = format!(
-            "MEMORY\n{{\n  {definition}\n  RAM (rwx) : ORIGIN = 0x20000000, LENGTH = 0x00018000\n}}\n"
+            "MEMORY\n{{\n  {definition}\n  RAM (rwx) : ORIGIN = 0x20000000, LENGTH = \
+             0x00018000\n  {ZERO_WAIT}\n}}\n"
         );
         MemoryLayout::parse(&memory_x).map(|layout| layout.flash)
     }
 
     fn ram(definition: &str) -> Result<Region, LinkerScriptError> {
         let memory_x = format!(
-            "MEMORY\n{{\n  FLASH (rx) : ORIGIN = 0x08008000, LENGTH = 0x000F6000\n  {definition}\n}}\n"
+            "MEMORY\n{{\n  FLASH (rx) : ORIGIN = 0x08008000, LENGTH = 0x000F6000\n  \
+             {definition}\n  {ZERO_WAIT}\n}}\n"
         );
         MemoryLayout::parse(&memory_x).map(|layout| layout.ram)
     }
@@ -125,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_both_regions() {
+    fn parses_every_region() {
         assert_eq!(
             MemoryLayout::parse(MEMORY_X),
             Ok(MemoryLayout {
@@ -137,6 +143,10 @@ mod tests {
                     start: 0x2000_0000,
                     end: 0x2001_8000
                 },
+                zero_wait: Region {
+                    start: 0x0800_0000,
+                    end: 0x0804_0000
+                },
             })
         );
     }
@@ -147,6 +157,30 @@ mod tests {
         assert_eq!(
             MemoryLayout::parse(&text),
             Err(LinkerScriptError::MissingRegion("RAM"))
+        );
+    }
+
+    #[test]
+    fn reports_a_missing_zero_wait_region() {
+        let text = MEMORY_X.replace("ZERO_WAIT", "FAST");
+        assert_eq!(
+            MemoryLayout::parse(&text),
+            Err(LinkerScriptError::MissingRegion("ZERO_WAIT"))
+        );
+    }
+
+    #[test]
+    fn reads_the_zero_wait_region_without_attributes() {
+        let memory_x = format!(
+            "MEMORY\n{{\n  FLASH (rx) : ORIGIN = 0x08008000, LENGTH = 0x000F6000\n  RAM (rwx) : \
+             ORIGIN = 0x20000000, LENGTH = 0x00030000\n  {ZERO_WAIT}\n}}\n"
+        );
+        assert_eq!(
+            MemoryLayout::parse(&memory_x).map(|layout| layout.zero_wait),
+            Ok(Region {
+                start: 0x0800_0000,
+                end: 0x0808_0000
+            })
         );
     }
 
@@ -247,10 +281,12 @@ mod tests {
                 end: 0x2001_8000
             })
         );
-        let ram_first = "MEMORY\n{\n  RAM (rwx) : ORIGIN = 0x20000000, LENGTH = 0x00030000\n  \
-                         FLASH (rx) : ORIGIN = 0x08008000, LENGTH = 0x000F6000\n}\n";
+        let ram_first = format!(
+            "MEMORY\n{{\n  RAM (rwx) : ORIGIN = 0x20000000, LENGTH = 0x00030000\n  FLASH (rx) : \
+             ORIGIN = 0x08008000, LENGTH = 0x000F6000\n  {ZERO_WAIT}\n}}\n"
+        );
         assert_eq!(
-            MemoryLayout::parse(ram_first).map(|layout| layout.ram.end),
+            MemoryLayout::parse(&ram_first).map(|layout| layout.ram.end),
             Ok(0x2003_0000)
         );
     }

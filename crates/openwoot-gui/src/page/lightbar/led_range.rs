@@ -11,9 +11,11 @@ use openwoot_protocol::lightbar::{
 };
 
 use super::{LightbarPage, entry::lightbar_range};
+use crate::theme;
 
-const DOT: f32 = 22.0;
-const GAP: f32 = 3.0;
+const DOT: f32 = 30.0;
+const CELL_PADDING: f32 = 1.0;
+const NUMBER_TEXT: f32 = 14.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Grip {
@@ -28,10 +30,8 @@ impl LightbarPage {
         h_flex()
             .id("led-range")
             .flex_wrap()
-            .gap(px(GAP))
-            .p(px(GAP))
-            .rounded(px(DOT / 2.0 + GAP))
-            .bg(theme.background)
+            .rounded_full()
+            .bg(theme::palette().raised)
             .border_1()
             .border_color(theme.border)
             .on_mouse_up(
@@ -44,33 +44,34 @@ impl LightbarPage {
             )
             .children((0..leds).map(|led| {
                 let inside = (range.first..=range.last).contains(&led);
-                let end = led == range.first || led == range.last;
                 div()
                     .id(SharedString::from(format!("led-{led}")))
                     .flex_none()
-                    .size(px(DOT))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded_full()
-                    .border_2()
+                    .p(px(CELL_PADDING))
                     .cursor_pointer()
-                    .text_xs()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .map(|this| {
-                        if inside {
-                            this.border_color(theme.primary)
-                                .bg(if end {
-                                    theme.primary.opacity(0.35)
+                    .child(
+                        div()
+                            .size(px(DOT))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .border_2()
+                            .bg(theme.secondary)
+                            .text_size(px(NUMBER_TEXT))
+                            .line_height(px(NUMBER_TEXT))
+                            .font_weight(FontWeight::BOLD)
+                            .map(|this| {
+                                if inside {
+                                    this.border_color(theme.primary)
+                                        .text_color(theme.foreground)
                                 } else {
-                                    theme.primary.opacity(0.12)
-                                })
-                                .text_color(theme.foreground)
-                                .child(SharedString::from((u16::from(led) + 1).to_string()))
-                        } else {
-                            this.border_color(theme.border).bg(theme.group_box)
-                        }
-                    })
+                                    this.border_color(theme.transparent)
+                                        .text_color(theme.muted_foreground)
+                                }
+                            })
+                            .child(SharedString::from((u16::from(led) + 1).to_string())),
+                    )
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, window, cx| this.grab_led(led, window, cx)),

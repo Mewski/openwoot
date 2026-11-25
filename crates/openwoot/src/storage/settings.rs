@@ -3,6 +3,7 @@ use core::fmt;
 use embedded_storage_async::nor_flash::{
     MultiwriteNorFlash, NorFlash, NorFlashError, NorFlashErrorKind,
 };
+use openwoot_protocol::diagnostics::StorageUsage;
 use sequential_storage::{
     self as store,
     cache::{
@@ -19,6 +20,7 @@ use super::{
         Encoder, Encoding, KEY_LEN, MAX_VALUE_LEN, Record, RecordKey, Scope, Stored, VERSION_LEN,
     },
     stored_keys::StoredKeys,
+    usage::Tally,
 };
 use crate::diagnostics::Diagnostics;
 
@@ -114,6 +116,20 @@ impl<F: MultiwriteNorFlash> Settings<F> {
         visited
     }
 
+    pub async fn usage(&mut self) -> Result<StorageUsage, Error> {
+        let mut tally = Tally::new(
+            self.len,
+            Map::<F>::item_overhead_size(),
+            F::WRITE_SIZE.max(F::READ_SIZE),
+        );
+        let indexed = self.index(|_, stored| tally.add(stored)).await;
+        if let Some(diagnostics) = self.diagnostics {
+            diagnostics.storage_loaded(&indexed);
+        }
+        indexed?;
+        Ok(tally.finish(self.known.count()))
+    }
+
     pub async fn load_with<T>(
         &mut self,
         key: RecordKey,
@@ -168,14 +184,22 @@ impl<F: MultiwriteNorFlash> Settings<F> {
         erased.map_err(|error| Error::Flash(error.kind()))
     }
 
-    pub(super) async fn index(&mut self) {
+    pub(super) async fn index(
+        &mut self,
+        mut visit: impl FnMut(RecordKey, Stored<'_>),
+    ) -> Result<(), Error> {
         self.known.start();
-        if self.note_stored_keys().await.is_err() {
+        let indexed = self.note_stored_keys(&mut visit).await;
+        if indexed.is_err() {
             self.known.forget();
         }
+        indexed
     }
 
-    async fn note_stored_keys(&mut self) -> Result<(), Error> {
+    async fn note_stored_keys(
+        &mut self,
+        visit: &mut impl FnMut(RecordKey, Stored<'_>),
+    ) -> Result<(), Error> {
         let Self {
             map, buffer, known, ..
         } = self;
@@ -185,12 +209,13 @@ impl<F: MultiwriteNorFlash> Settings<F> {
             .fetch_all_items(&mut buffer.0)
             .await
             .map_err(Error::from_store)?;
-        while let Some((key, _)) = items
+        while let Some((key, stored)) = items
             .next::<Stored<'_>>(&mut buffer.0)
             .await
             .map_err(Error::from_store)?
         {
             known.insert(key);
+            visit(key, stored);
         }
         Ok(())
     }

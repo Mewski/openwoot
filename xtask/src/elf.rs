@@ -154,6 +154,7 @@ impl<'a> Elf<'a> {
             }
             symbols.push(Symbol {
                 name: format!("{:#}", demangle(&name)),
+                link_name: name.into_owned(),
                 address,
                 size: entry.st_size(self.endian),
                 kind,

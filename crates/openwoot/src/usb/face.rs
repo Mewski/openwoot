@@ -121,10 +121,7 @@ impl From<Face> for device::Settings {
                 KeyboardFormat::NKeyRollover => device::KeyboardFormat::NKeyRollover,
                 KeyboardFormat::Boot => device::KeyboardFormat::Boot,
             },
-            speed: match face.speed {
-                Speed::Full => device::Speed::Full,
-                Speed::High => device::Speed::High,
-            },
+            speed: device::Speed::from(face.speed),
             gamepad_polling: match face.gamepad_polling {
                 PollingRate::Every4Milliseconds => device::PollingRate::Every4Milliseconds,
                 PollingRate::Every1Millisecond => device::PollingRate::Every1Millisecond,
@@ -133,6 +130,16 @@ impl From<Face> for device::Settings {
         }
     }
 }
+
+impl From<Speed> for device::Speed {
+    fn from(speed: Speed) -> Self {
+        match speed {
+            Speed::Full => Self::Full,
+            Speed::High => Self::High,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

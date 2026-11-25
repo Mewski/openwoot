@@ -1,4 +1,4 @@
-use openwoot_protocol::lighting::Rgb;
+use openwoot_protocol::{lighting::Rgb, profile::Slot};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProfileState {
@@ -9,7 +9,9 @@ pub struct ProfileState {
 
 impl ProfileState {
     pub(crate) fn active_value(self) -> f32 {
-        f32::from(u16::from(self.slot) + 1)
+        let profile = Slot::new(self.slot);
+        let namespace = if profile.is_linked() { 256 } else { 0 };
+        f32::from(namespace + u16::from(profile.index()) + 1)
     }
 
     pub(crate) fn count_value(self) -> f32 {

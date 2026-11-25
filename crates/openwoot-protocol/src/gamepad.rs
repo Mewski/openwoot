@@ -57,7 +57,13 @@ pub struct Settings {
     pub curve: [CurvePoint; CURVE_POINTS],
     pub normalization: Normalization,
     pub single_direction_axes: bool,
-    pub left_stick_up_bias: Option<u8>,
+    pub left_stick_up_bias: StickBias,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+pub struct StickBias {
+    pub enabled: bool,
+    pub percent: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
@@ -101,6 +107,28 @@ impl Player {
     }
 }
 
+impl StickBias {
+    pub const DISABLED: Self = Self {
+        enabled: false,
+        percent: 50,
+    };
+
+    #[must_use]
+    pub const fn active(self) -> Option<u8> {
+        if self.enabled {
+            Some(self.percent)
+        } else {
+            None
+        }
+    }
+}
+
+impl Default for StickBias {
+    fn default() -> Self {
+        Self::DISABLED
+    }
+}
+
 impl Validate for Mapping {
     fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
         capabilities.check_key_count(self.bindings.len())
@@ -120,9 +148,11 @@ impl Validate for Settings {
         if !(rising && spans) {
             return Err(Invalid::CurveNotRising);
         }
-        match self.left_stick_up_bias {
-            Some(percent) if percent > 100 => Err(Invalid::PercentageAboveHundred(percent)),
-            _ => Ok(()),
+        let percent = self.left_stick_up_bias.percent;
+        if percent > 100 {
+            Err(Invalid::PercentageAboveHundred(percent))
+        } else {
+            Ok(())
         }
     }
 }

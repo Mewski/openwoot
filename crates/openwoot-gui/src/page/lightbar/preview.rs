@@ -193,7 +193,7 @@ const fn low_byte(value: i32) -> u8 {
 mod tests {
     use openwoot_protocol::{
         heapless,
-        lightbar::{Builtin, Custom, Signal, Solid},
+        lightbar::{Builtin, Custom, Signal, Solid, Title},
     };
 
     use super::*;
@@ -209,6 +209,7 @@ mod tests {
 
     fn plain(effect: Effect) -> Entry {
         Entry {
+            title: Title::new(),
             condition: None,
             effect,
         }

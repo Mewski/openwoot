@@ -2,32 +2,40 @@ use std::error::Error;
 
 use gpui_kit::{
     ClipboardItem, Context, Div, Entity, FontWeight, IntoElement, ParentElement as _, Render,
-    SharedString, Styled as _, Subscription, Window,
+    SharedString, Styled as _, StyledText, Subscription, Window,
     assets::IconName as Catalog,
     component::{
-        ActiveTheme as _, Icon, Sizable as _, WindowExt as _,
-        button::{Button, ButtonVariants as _},
-        h_flex,
-        notification::Notification,
-        progress::Progress,
-        v_flex,
+        ActiveTheme as _, Icon, Sizable as _, WindowExt as _, h_flex, notification::Notification,
+        progress::Progress, v_flex,
     },
     div,
     prelude::FluentBuilder as _,
     px,
 };
 use openwoot_host::{
-    flash::{Event, Plan},
+    flash::{self, Event, Plan},
     hid,
 };
 
 use crate::{
-    page::settings::{Tone, callout},
-    store::Store,
+    device::Failure,
+    page::settings::{Tone, callout, emphasised},
+    panel::ActionButton,
+    store::{Keyboard, Store},
 };
 
 const PROGRESS_HEIGHT: f32 = 12.0;
 const PROGRESS_WIDTH: f32 = 400.0;
+const PROGRESS_TOP: f32 = 8.0;
+const RUNNING_GAP: f32 = 48.0;
+const STAGE_GAP: f32 = 8.0;
+const STAGE_SIZE: f32 = 16.0;
+const STAGE_LINE: f32 = 18.0;
+const TITLE_SIZE: f32 = 20.0;
+const TITLE_LINE: f32 = 24.0;
+const BODY_SIZE: f32 = 16.0;
+const BODY_LINE: f32 = 22.4;
+const ROW_SIZE: f32 = 14.0;
 
 pub(super) struct Update {
     store: Entity<Store>,
@@ -125,9 +133,8 @@ impl Update {
                         Phase::Done
                     }
                     Err(error) => {
-                        let reason = error_chain(&error);
-                        update.log.push(reason.clone());
-                        Phase::Failed(reason.into())
+                        update.log.push(error_chain(&error));
+                        Phase::Failed(failure_text(&error).into())
                     }
                 };
                 cx.notify();
@@ -168,7 +175,7 @@ impl Update {
     fn keyboard_name(&self, cx: &Context<Self>) -> SharedString {
         self.store.read(cx).keyboard().map_or_else(
             || SharedString::from(self.plan.board.clone()),
-            |keyboard| keyboard.name.clone(),
+            Keyboard::display_name,
         )
     }
 
@@ -192,16 +199,27 @@ impl Update {
         if let Some(installed) = installed {
             rows.push(("Installed", installed));
         }
-        rows.push(("File", file_name(&self.plan)));
         rows.extend(plan_lines(&self.plan));
         let warning = if unsaved {
-            "Unsaved changes are lost; keep the keyboard plugged in until the update completes."
+            "Any unsaved changes will be lost."
         } else {
-            "Keep the keyboard plugged in until the update completes."
+            "Do not unplug your device."
         };
+        let file = file_name(&self.plan);
         v_flex()
             .gap_5()
-            .child(title("Install firmware from a file", cx))
+            .child(
+                v_flex()
+                    .gap_3()
+                    .child(title("Install firmware from a file", cx))
+                    .child(body(
+                        emphasised(
+                            format!("You are about to update firmware from the file {file}."),
+                            &[file.as_str()],
+                        ),
+                        cx,
+                    )),
+            )
             .child(
                 v_flex()
                     .gap_2()
@@ -213,15 +231,12 @@ impl Update {
                     .justify_end()
                     .gap_2()
                     .child(
-                        Button::new("cancel-install")
-                            .outline()
-                            .label("Cancel")
+                        ActionButton::new("cancel-install", "Cancel")
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
-                        Button::new("install-firmware")
+                        ActionButton::new("install-firmware", "Install firmware")
                             .primary()
-                            .label("Install firmware")
                             .on_click(cx.listener(|this, _, _, cx| this.install(cx))),
                     ),
             )
@@ -241,28 +256,31 @@ impl Update {
         let total = Stage::ALL.len();
         v_flex()
             .items_center()
-            .gap_8()
+            .gap(px(RUNNING_GAP))
             .py_2()
             .child(
                 v_flex()
                     .items_center()
-                    .gap_2()
+                    .gap_3()
                     .child(title(
                         format!("Updating your {}", self.keyboard_name(cx)),
                         cx,
                     ))
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(theme.muted_foreground)
-                            .child("It takes a moment. Do not unplug the keyboard."),
-                    ),
+                    .child(body(
+                        emphasised(
+                            "Do not unplug your device.",
+                            &["Do not unplug your device."],
+                        ),
+                        cx,
+                    )),
             )
             .child(
                 v_flex()
                     .w(px(PROGRESS_WIDTH))
                     .items_center()
-                    .gap_2()
+                    .gap(px(STAGE_GAP))
+                    .text_size(px(STAGE_SIZE))
+                    .line_height(px(STAGE_LINE))
                     .child(
                         div()
                             .font_weight(FontWeight::SEMIBOLD)
@@ -271,11 +289,11 @@ impl Update {
                     )
                     .child(
                         div()
-                            .text_color(theme.muted_foreground)
+                            .text_color(theme.group_box_foreground)
                             .child(self.stage.text()),
                     )
                     .child(
-                        div().w_full().pt_2().child(
+                        div().w_full().pt(px(PROGRESS_TOP)).child(
                             Progress::new("update-progress")
                                 .h(px(PROGRESS_HEIGHT))
                                 .value(self.overall_percent()),
@@ -284,9 +302,9 @@ impl Update {
                     .when(self.restart_failed, |this| {
                         this.child(
                             div()
-                                .text_xs()
-                                .text_color(theme.muted_foreground)
-                                .child("The restart command failed; waiting for the keyboard."),
+                                .text_size(px(ROW_SIZE))
+                                .text_color(theme.group_box_foreground)
+                                .child("Waiting for the keyboard after a failed restart."),
                         )
                     }),
             )
@@ -309,23 +327,26 @@ impl Update {
                     .text_color(theme.success),
             )
             .child(title(
-                format!("Your {} is updated", self.keyboard_name(cx)),
+                format!("Your {} is updated!", self.keyboard_name(cx)),
+                cx,
+            ))
+            .child(body(
+                version.map_or_else(
+                    || StyledText::new("Your device has successfully updated."),
+                    |version| {
+                        let version = format!("v{version}");
+                        emphasised(
+                            format!("Your device has successfully updated to {version}"),
+                            &[version.as_str()],
+                        )
+                    },
+                ),
                 cx,
             ))
             .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child(version.map_or_else(
-                        || SharedString::from("The keyboard started the new firmware."),
-                        |version| format!("It runs openwoot {version}.").into(),
-                    )),
-            )
-            .child(
                 h_flex().pt_2().child(
-                    Button::new("update-done")
+                    ActionButton::new("update-done", "Done")
                         .primary()
-                        .label("Done")
                         .on_click(|_, window, cx| window.close_dialog(cx)),
                 ),
             )
@@ -339,25 +360,23 @@ impl Update {
                 h_flex()
                     .gap_3()
                     .child(Icon::new(Catalog::CircleX).text_color(theme.danger))
-                    .child(title("The update did not complete", cx)),
+                    .child(title("An error occurred while completing the update", cx)),
             )
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child(format!(
-                        "Stopped at step {} of {}: {}.",
-                        self.stage.number(),
-                        Stage::ALL.len(),
-                        self.stage.text().to_lowercase()
-                    )),
-            )
+            .child(body(
+                format!(
+                    "Stopped at step {} of {}: {}.",
+                    self.stage.number(),
+                    Stage::ALL.len(),
+                    self.stage.text().to_lowercase()
+                ),
+                cx,
+            ))
             .child(
                 div()
                     .p_3()
                     .rounded(theme.radius)
-                    .bg(theme.group_box)
-                    .text_sm()
+                    .bg(theme.tab_active)
+                    .text_size(px(ROW_SIZE))
                     .text_color(theme.danger)
                     .child(reason.clone()),
             )
@@ -366,10 +385,9 @@ impl Update {
                     .justify_between()
                     .gap_2()
                     .child(
-                        Button::new("copy-update-details")
+                        ActionButton::new("copy-update-details", "Copy details")
                             .ghost()
                             .icon(Catalog::Copy)
-                            .label("Copy details")
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.copy_details(window, cx)),
                             ),
@@ -378,15 +396,12 @@ impl Update {
                         h_flex()
                             .gap_2()
                             .child(
-                                Button::new("close-update")
-                                    .outline()
-                                    .label("Close")
+                                ActionButton::new("close-update", "Close")
                                     .on_click(|_, window, cx| window.close_dialog(cx)),
                             )
                             .child(
-                                Button::new("retry-update")
+                                ActionButton::new("retry-update", "Restart update")
                                     .primary()
-                                    .label("Try again")
                                     .on_click(cx.listener(|this, _, _, cx| this.install(cx))),
                             ),
                     ),
@@ -405,7 +420,26 @@ impl Render for Update {
     }
 }
 
-pub(super) fn error_chain(error: &dyn Error) -> String {
+pub(super) const fn flash_text(error: &flash::Error) -> &'static str {
+    match error {
+        flash::Error::Read { .. } => "Could not read the file.",
+        flash::Error::Parse { .. } | flash::Error::NotAnImage { .. } => {
+            "This file is not an openwoot firmware image."
+        }
+        flash::Error::Unwritable(_) | flash::Error::NoUpdateMode { .. } => {
+            "This image cannot be installed through the factory bootloader."
+        }
+        flash::Error::Keyboard(_) => "Lost the connection to the keyboard.",
+        flash::Error::UpdateModeNotRequested(_) => "The keyboard did not restart into update mode.",
+        flash::Error::UpdateModeUnreachable(_) => "The keyboard did not show up in update mode.",
+        flash::Error::BootloaderUnanswered(_) => "The bootloader did not answer.",
+        flash::Error::ImageNotWritten(_) => {
+            "Writing failed while the keyboard waits in update mode."
+        }
+    }
+}
+
+fn error_chain(error: &dyn Error) -> String {
     let mut text = error.to_string();
     let mut source = error.source();
     while let Some(cause) = source {
@@ -414,6 +448,16 @@ pub(super) fn error_chain(error: &dyn Error) -> String {
         source = cause.source();
     }
     text
+}
+
+const fn failure_text(failure: &Failure) -> &'static str {
+    match failure {
+        Failure::Flash(error) => flash_text(error),
+        Failure::NotConnected => "No keyboard is connected.",
+        Failure::Stopped | Failure::Channel(_) | Failure::Rejected(_) => {
+            "Lost the connection to the keyboard."
+        }
+    }
 }
 
 impl Stage {
@@ -428,12 +472,12 @@ impl Stage {
 
     const fn text(self) -> &'static str {
         match self {
-            Self::Starting => "Initialising update",
-            Self::EnteringUpdateMode => "Resetting the keyboard to update mode",
-            Self::WaitingForUpdateMode => "Waiting for update mode",
-            Self::Writing => "Writing firmware",
-            Self::WaitingForKeyboard => "Waiting for the keyboard",
-            Self::Complete => "Update complete",
+            Self::Starting => "Initialising Update",
+            Self::EnteringUpdateMode => "Reset device to update mode",
+            Self::WaitingForUpdateMode => "Waiting for update mode to connect",
+            Self::Writing => "Flashing firmware to device",
+            Self::WaitingForKeyboard => "Waiting for device to be connected",
+            Self::Complete => "Update Complete",
         }
     }
 
@@ -490,10 +534,19 @@ impl Blocks {
 
 fn title(text: impl Into<SharedString>, cx: &Context<Update>) -> Div {
     div()
-        .text_xl()
-        .font_weight(FontWeight::SEMIBOLD)
+        .text_size(px(TITLE_SIZE))
+        .line_height(px(TITLE_LINE))
+        .font_weight(FontWeight::BOLD)
         .text_color(cx.theme().foreground)
         .child(text.into())
+}
+
+fn body(content: impl IntoElement, cx: &Context<Update>) -> Div {
+    div()
+        .text_size(px(BODY_SIZE))
+        .line_height(px(BODY_LINE))
+        .text_color(cx.theme().group_box_foreground)
+        .child(content)
 }
 
 fn row(label: &'static str, value: String, cx: &Context<Update>) -> Div {
@@ -502,12 +555,13 @@ fn row(label: &'static str, value: String, cx: &Context<Update>) -> Div {
         .w_full()
         .gap_4()
         .justify_between()
-        .text_sm()
-        .child(div().text_color(theme.muted_foreground).child(label))
+        .text_size(px(ROW_SIZE))
+        .child(div().text_color(theme.group_box_foreground).child(label))
         .child(
             div()
                 .min_w_0()
                 .truncate()
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.foreground)
                 .child(value),
         )

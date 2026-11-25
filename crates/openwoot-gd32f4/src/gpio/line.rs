@@ -6,11 +6,11 @@
 use super::{
     Level, OutputType, Pull, Speed,
     registers::{
-        self, LAST_PORT, MODE_ANALOG, MODE_OUTPUT, enable_clock, modify_output_type,
-        modify_two_bit_field, port_index, set_reset,
+        self, LAST_PORT, MODE_ALTERNATE, MODE_ANALOG, MODE_OUTPUT, alternate_field, enable_clock,
+        level_of, modify_output_type, modify_two_bit_field, port_index, set_reset,
     },
 };
-use crate::register::write_bits;
+use crate::register::{modify_bits, read_bits, write_bits};
 
 const PINS: u8 = 16;
 
@@ -43,17 +43,30 @@ impl Line {
     }
 
     pub(crate) fn into_output(self, level: Level) {
+        self.into_driven(OutputType::PushPull, level);
+    }
+
+    pub(crate) fn into_open_drain(self, level: Level) {
+        self.into_driven(OutputType::OpenDrain, level);
+    }
+
+    pub(crate) fn into_alternate_open_drain(self, function: u8) {
         enable_clock(self.port);
-        match level {
-            Level::High => self.set_high(),
-            Level::Low => self.set_low(),
-        }
         critical_section::with(|_| {
             let port = registers::port(self.port);
-            modify_output_type(port, self.pin, OutputType::PushPull);
+            if self.pin < 8 {
+                modify_bits(port.afsel0(), |bits| {
+                    alternate_field(bits, self.pin, function)
+                });
+            } else {
+                modify_bits(port.afsel1(), |bits| {
+                    alternate_field(bits, self.pin - 8, function)
+                });
+            }
+            modify_output_type(port, self.pin, OutputType::OpenDrain);
             modify_two_bit_field(port.ospd(), self.pin, Speed::High.field());
             modify_two_bit_field(port.pud(), self.pin, Pull::None.field());
-            modify_two_bit_field(port.ctl(), self.pin, MODE_OUTPUT);
+            modify_two_bit_field(port.ctl(), self.pin, MODE_ALTERNATE);
         });
     }
 
@@ -74,6 +87,25 @@ impl Line {
     #[inline(always)]
     pub(crate) fn set_low(self) {
         write_bits(registers::port(self.port).bc(), self.mask());
+    }
+
+    pub(crate) fn level(self) -> Level {
+        level_of(read_bits(registers::port(self.port).istat()), self.pin)
+    }
+
+    fn into_driven(self, output_type: OutputType, level: Level) {
+        enable_clock(self.port);
+        match level {
+            Level::High => self.set_high(),
+            Level::Low => self.set_low(),
+        }
+        critical_section::with(|_| {
+            let port = registers::port(self.port);
+            modify_output_type(port, self.pin, output_type);
+            modify_two_bit_field(port.ospd(), self.pin, Speed::High.field());
+            modify_two_bit_field(port.pud(), self.pin, Pull::None.field());
+            modify_two_bit_field(port.ctl(), self.pin, MODE_OUTPUT);
+        });
     }
 
     #[inline(always)]

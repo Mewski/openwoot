@@ -13,13 +13,20 @@ use super::{
     controls::{self, Controller},
     glyph::{self, Ink},
     output::{self, Axis, Stick},
+    system,
 };
 use crate::{panel, store::Keyboard, switch::Switch};
 
-const DISC: f32 = 140.0;
-const DISC_ICON: f32 = 34.0;
-const AXIS_ICON: f32 = 30.0;
-const BUTTON_ICON: f32 = 34.0;
+const DISC: f32 = 160.0;
+const DISC_ICON: f32 = 40.0;
+const DISC_DOT: f32 = 6.0;
+const AXIS_ICON: f32 = 28.0;
+const AXIS_GAP: f32 = 16.0;
+const AXIS_ITEM_GAP: f32 = 8.0;
+const BUTTON_ICON: f32 = 24.0;
+const BUTTON_GAP: f32 = 8.0;
+const STICKS_GAP: f32 = 32.0;
+const GROUP_GAP: f32 = 80.0;
 const BAR_HEIGHT: f32 = 12.0;
 const VALUE_WIDTH: f32 = 48.0;
 const SQUARE_RADIUS: f32 = 10.0;
@@ -45,14 +52,23 @@ struct SlotColors {
 
 impl GamepadPage {
     pub(super) fn tester_card(&mut self, keyboard: &Keyboard, cx: &mut Context<Self>) -> Div {
-        let card = panel::section(
-            "Test gamepad",
-            Some("Press mapped keys to see the controller the computer gets.".into()),
-            cx,
-        );
-        let Some(controller) = self.controller() else {
-            return card.child(panel::note("Enable the gamepad to use the tester.", cx));
+        let Some(controller) = self.running_controller() else {
+            let message = if self.controller().is_some() {
+                "Restart your device to use the Gamepad Tester."
+            } else {
+                "Please enable Gamepad for your device to use the Gamepad Tester."
+            };
+            return panel::section("Test Gamepad", Some(message.into()), cx);
         };
+        let warning = system::WITHOUT_XBOX_DRIVER
+            .filter(|_| controller == Controller::Xbox)
+            .map(|system| {
+                SharedString::from(format!(
+                    "{system} does not support Xbox Controller mode, you can use Classic \
+                     Controller mode instead."
+                ))
+            });
+        let card = panel::section("Test Gamepad", warning, cx);
         let output = self
             .controller_output(keyboard)
             .unwrap_or_else(|| output::rest(controller));
@@ -62,11 +78,11 @@ impl GamepadPage {
         let ink = Ink::of(cx);
         let theme = cx.theme();
         let tones = Tones {
-            rim: theme.border,
-            line: theme.border,
-            vector: theme.primary,
+            rim: theme.chart_grid,
+            line: theme.chart_grid,
+            vector: theme.chart_grid,
             track: theme.background,
-            fill: theme.primary,
+            fill: theme.chart_1,
             text: theme.muted_foreground,
         };
         let slot_colors = SlotColors {
@@ -78,7 +94,7 @@ impl GamepadPage {
         let [first, second] = output.sticks;
         let sticks = h_flex()
             .flex_none()
-            .gap_6()
+            .gap(px(STICKS_GAP))
             .child(disc(
                 first,
                 glyph::icon(Control::LeftStickPress, controller, ink, px(DISC_ICON)),
@@ -91,7 +107,7 @@ impl GamepadPage {
                 square,
                 tones,
             ));
-        let axes = v_flex().flex_1().min_w_0().gap_3().children(
+        let axes = v_flex().flex_1().min_w_0().gap(px(AXIS_GAP)).children(
             output
                 .axes
                 .iter()
@@ -100,23 +116,14 @@ impl GamepadPage {
         let buttons = h_flex()
             .min_h(px(BUTTON_ICON))
             .flex_wrap()
-            .gap_2()
+            .gap(px(BUTTON_GAP))
             .children(
                 output
                     .pressed
                     .iter()
                     .map(|control| glyph::icon(*control, controller, ink, px(BUTTON_ICON))),
             );
-        card.when(
-            cfg!(target_os = "macos") && controller == Controller::Xbox,
-            |this| {
-                this.child(panel::note(
-                    "macOS has no Xbox controller driver; switch to the Classic controller.",
-                    cx,
-                ))
-            },
-        )
-        .when_some(
+        card.when_some(
             self.gamepad_state
                 .filter(|_| controller == Controller::Xbox),
             |this, state| this.child(slot_row(state, slot_colors, cx)),
@@ -125,14 +132,14 @@ impl GamepadPage {
             h_flex()
                 .w_full()
                 .items_start()
-                .gap_8()
+                .gap(px(GROUP_GAP))
                 .child(sticks)
                 .child(axes),
         )
-        .child(panel::field("Buttons", buttons, cx))
-        .child(panel::toggle(
+        .child(buttons)
+        .child(panel::toggle_described(
             "Identify controller",
-            Some("Holds the sticks still so you can spot the keyboard among controllers.".into()),
+            "Holds the sticks still to find this controller.",
             Switch::new("gamepad-detection")
                 .checked(self.detecting)
                 .on_change(cx.listener(|this, checked: &bool, _, cx| {
@@ -145,9 +152,9 @@ impl GamepadPage {
 
 fn slot_row(state: gamepad::State, colors: SlotColors, cx: &App) -> Div {
     let help = match state.player {
-        Some(Player::One) => "The computer uses the keyboard as player 1.",
-        Some(_) => "Some games only read player 1; connect the keyboard before other controllers.",
-        None => "The computer has not given the keyboard a player yet.",
+        Some(Player::One) => "Your keyboard is in active slot 1.",
+        Some(_) => "Connect your keyboard before other USB devices to get the first slot.",
+        None => "Your keyboard has no active slot yet.",
     };
     let status = state.player.map_or_else(
         || "Not assigned".to_owned(),
@@ -171,7 +178,7 @@ fn slot_row(state: gamepad::State, colors: SlotColors, cx: &App) -> Div {
                 .when(active, |this| this.bg(color))
         }))
         .child(div().ml_2().text_sm().text_color(colors.text).child(status));
-    panel::row("Active slot", Some(help.into()), squares, cx)
+    panel::row("Active Slot", Some(help.into()), squares, cx)
 }
 
 fn disc(stick: Stick, icon: Div, square: bool, tones: Tones) -> Div {
@@ -207,6 +214,13 @@ fn disc(stick: Stick, icon: Div, square: bool, tones: Tones) -> Div {
                         centre.x + bounds.size.width * (x.clamp(-1.0, 1.0) / 2.0),
                         centre.y + bounds.size.height * (y.clamp(-1.0, 1.0) / 2.0),
                     );
+                    window.paint_quad(
+                        fill(
+                            gpui_kit::Bounds::centered_at(centre, size(px(DISC_DOT), px(DISC_DOT))),
+                            tones.line,
+                        )
+                        .corner_radii(px(DISC_DOT / 2.0)),
+                    );
                     let mut vector = PathBuilder::stroke(px(2.0));
                     vector.move_to(centre);
                     vector.line_to(tip);
@@ -240,7 +254,7 @@ fn bar(axis: Axis, controller: Controller, ink: Ink, tones: Tones) -> Div {
     let name: SharedString = controls::name(axis.control, controller).into();
     h_flex()
         .w_full()
-        .gap_3()
+        .gap(px(AXIS_ITEM_GAP))
         .items_center()
         .child(
             div()
@@ -259,7 +273,7 @@ fn bar(axis: Axis, controller: Controller, ink: Ink, tones: Tones) -> Div {
                 .h(px(BAR_HEIGHT))
                 .rounded_full()
                 .bg(tones.track)
-                .border_1()
+                .border_2()
                 .border_color(tones.rim)
                 .overflow_hidden()
                 .child(

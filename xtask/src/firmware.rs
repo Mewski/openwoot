@@ -1,16 +1,23 @@
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, ensure};
 use ihex::Record;
 
 use crate::{
+    call_graph::CallGraph,
     elf::{Elf, Segment},
+    entry_points::EntryPoints,
     process,
+    symbol_order::symbol_order,
     workspace::{Board, Workspace},
 };
 
 const HEX_RECORD_LEN: usize = 16;
 const ERASED_BYTE: u8 = 0xFF;
+const SYMBOL_ORDER_VARIABLE: &str = "OPENWOOT_SYMBOL_ORDER";
 
 pub(crate) struct Images {
     pub(crate) elf: PathBuf,
@@ -20,21 +27,25 @@ pub(crate) struct Images {
 
 pub(crate) fn build(workspace: &Workspace, board: &Board) -> Result<Images> {
     let root = &workspace.root;
-    process::execute(process::cargo(root).args([
-        "build",
-        "--release",
-        "--package",
-        &board.name,
-        "--bin",
-        &board.binary,
-        "--target",
-        &board.target,
-    ]))?;
-    let linked = workspace
+    let release = workspace
         .target_directory()
         .join(&board.target)
-        .join("release")
-        .join(&board.binary);
+        .join("release");
+    let linked = release.join(&board.binary);
+    let order = release.join(format!("{}.symbol-order", board.binary));
+    if !order.exists() {
+        fs::create_dir_all(&release)
+            .with_context(|| format!("could not create `{}`", release.display()))?;
+        write(&order, "")?;
+    }
+    link(root, board, &order)?;
+    let ordered = symbol_order_of(&linked)?;
+    let current = fs::read_to_string(&order)
+        .with_context(|| format!("could not read `{}`", order.display()))?;
+    if ordered != current {
+        write(&order, &ordered)?;
+        link(root, board, &order)?;
+    }
     let directory = root.join("build").join(&board.name);
     fs::create_dir_all(&directory)
         .with_context(|| format!("could not create `{}`", directory.display()))?;
@@ -55,6 +66,36 @@ pub(crate) fn build(workspace: &Workspace, board: &Board) -> Result<Images> {
     fs::write(&images.hex, intel_hex(&segments, elf.entry())?)
         .with_context(|| format!("could not write `{}`", images.hex.display()))?;
     Ok(images)
+}
+
+fn link(root: &Path, board: &Board, order: &Path) -> Result<()> {
+    process::execute(
+        process::cargo(root)
+            .env(SYMBOL_ORDER_VARIABLE, order)
+            .args([
+                "build",
+                "--release",
+                "--package",
+                &board.name,
+                "--bin",
+                &board.binary,
+                "--target",
+                &board.target,
+            ]),
+    )
+}
+
+fn symbol_order_of(linked: &Path) -> Result<String> {
+    let file =
+        fs::read(linked).with_context(|| format!("could not read `{}`", linked.display()))?;
+    let elf = Elf::parse(&file)?;
+    let graph = CallGraph::new(&elf)?;
+    let entry_points = EntryPoints::find(&elf, &graph)?;
+    Ok(symbol_order(&graph, &entry_points))
+}
+
+fn write(path: &Path, contents: &str) -> Result<()> {
+    fs::write(path, contents).with_context(|| format!("could not write `{}`", path.display()))
 }
 
 fn flatten(segments: &[Segment<'_>]) -> Result<Vec<u8>> {

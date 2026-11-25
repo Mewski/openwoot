@@ -206,7 +206,7 @@ fn hid_axis(value: f32) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use openwoot_protocol::gamepad::{Control, CurvePoint, Normalization};
+    use openwoot_protocol::gamepad::{Control, CurvePoint, Normalization, StickBias};
 
     use super::*;
     use crate::{hid::Hat, usb::Mode, xinput::Buttons};
@@ -232,7 +232,7 @@ mod tests {
         ],
         normalization: Normalization::Circular,
         single_direction_axes: true,
-        left_stick_up_bias: None,
+        left_stick_up_bias: StickBias::DISABLED,
     };
 
     fn applied(mode: Mode, bindings: &[(Control, u16, bool)]) -> GamepadInput {

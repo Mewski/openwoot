@@ -62,14 +62,14 @@ impl Category {
 
     pub(crate) const fn title(self) -> &'static str {
         match self {
-            Self::Basic => "Basic characters",
-            Self::Extended => "Extended characters",
+            Self::Basic => "Basic Characters",
+            Self::Extended => "Extended Characters",
             Self::Functions => "Functions",
             Self::Profiles => "Profiles",
-            Self::Media => "Media and audio",
+            Self::Media => "Media and Audio control",
             Self::Mouse => "Mouse",
             Self::Gamepad => "Gamepad",
-            Self::OtherKeys => "Other keys",
+            Self::OtherKeys => "Other Keys",
         }
     }
 }
@@ -168,33 +168,36 @@ pub(crate) fn search(entries: &[Entry], query: &str) -> Vec<Entry> {
 pub(crate) fn refusal(action: Action, layer: Layer) -> Option<String> {
     match action {
         Action::Layer(Layer::Base) => {
-            Some("The main layer can't be held like a Fn layer".to_owned())
+            Some("The Main Layer can't be held like a Fn layer".to_owned())
         }
         Action::Layer(opened) if opened == layer => Some(format!(
             "{} key can't be added to the same layer it activates",
             usage::legend(action)
         )),
-        Action::Function(Function::LayerLock) if layer == Layer::Base => {
-            Some("Fn lock key can't be added to the main layer".to_owned())
-        }
+        Action::Function(Function::LayerLock) if layer == Layer::Base => Some(format!(
+            "{} key can't be added to the first layer",
+            usage::legend(action)
+        )),
         _ => None,
     }
 }
 
 pub(crate) fn help(action: Action, profile_name: Option<&str>) -> Option<String> {
     Some(match action {
-        Action::Layer(layer) => format!("Fn layer {} while held", layer.number()),
+        Action::Layer(layer) => format!(
+            "While pressed, access Fn layer {} mapped keys.",
+            layer.number()
+        ),
         Action::Function(Function::LayerLock) => {
-            "Fn lock: keeps this Fn layer on until pressed again".to_owned()
+            "Keeps this Fn layer on until pressed again.".to_owned()
         }
         Action::Function(Function::ToggleKeyDisable) => {
-            "Key lock: turns the same key on the main layer off and on, e.g. the Windows key"
-                .to_owned()
+            "Place this in the Fn layer to disable the same key in the Main Layer.".to_owned()
         }
         Action::Function(Function::ToggleModeProfile) => {
-            "Mode: switches between the first profile and the last one used".to_owned()
+            "Toggle between the default profile and the last used onboard profile.".to_owned()
         }
-        Action::Function(Function::NextProfile) => "Cycle: switches to the next profile".to_owned(),
+        Action::Function(Function::NextProfile) => "Cycle through all active profiles.".to_owned(),
         Action::Function(Function::Profile(_)) => match profile_name {
             Some(name) => format!("{}: {name}", usage::name(action)),
             None => usage::name(action).into_owned(),
@@ -244,6 +247,7 @@ mod tests {
             key_rows: 1,
             key_columns: 1,
             profiles,
+            linked_profiles: 0,
             layouts: openwoot_protocol::heapless::Vec::new(),
             lightbar_leds: 0,
             host_signals: false,

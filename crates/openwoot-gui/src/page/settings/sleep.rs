@@ -1,13 +1,10 @@
 use std::rc::Rc;
 
 use gpui_kit::{
-    App, Div, Entity, FontWeight, InteractiveElement as _, ParentElement as _, SharedString,
+    App, AppContext as _, Context, Div, DragMoveEvent, Empty, FontWeight, InteractiveElement as _,
+    IntoElement, MouseButton, ParentElement as _, Pixels, Render, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window,
-    component::{
-        ActiveTheme as _,
-        slider::{Slider, SliderState},
-        v_flex,
-    },
+    component::{ActiveTheme as _, v_flex},
     div,
     prelude::FluentBuilder as _,
     px, relative,
@@ -25,15 +22,33 @@ const STOPS: [Option<u8>; 8] = [
     None,
 ];
 const NEVER: u8 = 7;
-const LABEL_WIDTH: f32 = 44.0;
-const TRACK_CENTRE: f32 = 12.0;
-const TICK: f32 = 4.0;
+const SMALL_SIZE: f32 = 14.0;
+const FIELD_LINE: f32 = 16.8;
+const FIELD_GAP: f32 = 8.0;
+const THUMB: f32 = 16.0;
+const TRACK: f32 = 4.0;
+const TICK: f32 = 2.0;
+const STOP_INSET: f32 = THUMB / 2.0;
+const STOP_LABEL_LINE: f32 = 14.0;
+const STOP_LABEL_GAP: f32 = 4.0;
+const STOP_LABEL_SLOT: f32 = 48.0;
+const CAPTION_LINE: f32 = 21.0;
+const CAPTION_GAP: f32 = 8.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Sleep {
     pub(super) dim: u8,
     pub(super) off: u8,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Step {
+    Move(u8),
+    Release,
+}
+
+#[derive(Clone, Copy)]
+struct StopDrag(&'static str);
 
 impl Sleep {
     pub(super) fn of(idle: Option<Idle>) -> Self {
@@ -81,109 +96,224 @@ impl Sleep {
     }
 }
 
-pub(super) fn slider_state() -> SliderState {
-    SliderState::new()
-        .min(0.0)
-        .max(f32::from(NEVER))
-        .step(1.0)
-        .default_value(f32::from(NEVER))
-}
-
-pub(super) fn stop_of(value: f32) -> u8 {
-    (0..=NEVER)
-        .min_by(|left, right| {
-            (value - f32::from(*left))
-                .abs()
-                .total_cmp(&(value - f32::from(*right)).abs())
-        })
-        .unwrap_or(NEVER)
-}
-
-pub(super) fn position(stop: u8) -> f32 {
-    f32::from(stop.min(NEVER))
-}
-
 pub(super) fn stepped(
     id: &'static str,
-    state: &Entity<SliderState>,
+    title: &'static str,
     current: u8,
     disabled: bool,
-    on_pick: impl Fn(&u8, &mut Window, &mut App) + 'static,
+    on_step: impl Fn(&Step, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> Div {
     let theme = cx.theme();
-    let on_pick = Rc::new(on_pick);
+    let on_step: OnStep = Rc::new(on_step);
+    v_flex()
+        .w_full()
+        .gap(px(FIELD_GAP))
+        .child(
+            div()
+                .text_size(px(SMALL_SIZE))
+                .line_height(px(FIELD_LINE))
+                .font_weight(FontWeight::BOLD)
+                .text_color(theme.group_box_foreground)
+                .child(title),
+        )
+        .child(
+            v_flex()
+                .w_full()
+                .child(track(id, current, disabled, &on_step, cx))
+                .child(
+                    div()
+                        .w_full()
+                        .mt(px(CAPTION_GAP))
+                        .text_center()
+                        .text_size(px(SMALL_SIZE))
+                        .line_height(px(CAPTION_LINE))
+                        .text_color(theme.group_box_foreground)
+                        .child("Minutes since last key press"),
+                ),
+        )
+}
+
+impl Render for StopDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
+
+type OnStep = Rc<dyn Fn(&Step, &mut Window, &mut App)>;
+
+fn track(id: &'static str, current: u8, disabled: bool, on_step: &OnStep, cx: &App) -> Div {
+    let theme = cx.theme();
     let last = f32::from(NEVER);
-    let ticks = (0..=NEVER).filter(|stop| *stop != current).map(|stop| {
+    let at = |stop: u8| relative(f32::from(stop.min(NEVER)) / last);
+    let ticks = (0..=NEVER).map(|stop| {
         div()
             .absolute()
-            .top(px(TRACK_CENTRE - TICK / 2.0))
-            .left(relative(f32::from(stop) / last))
+            .top(px((THUMB - TICK) / 2.0))
+            .left(at(stop))
             .ml(px(-TICK / 2.0))
             .size(px(TICK))
             .rounded_full()
-            .bg(if stop < current {
-                theme.background
-            } else {
-                theme.muted_foreground
-            })
+            .bg(theme.background)
     });
-    let labels = (0..=NEVER).map(|stop| {
-        let chosen = stop == current;
-        let on_pick = on_pick.clone();
-        let foreground = theme.foreground;
+    let zones = (0..=NEVER).filter(|_| !disabled).map(|stop| {
+        let on_step = on_step.clone();
         div()
             .id((id, usize::from(stop)))
             .absolute()
             .top_0()
-            .w(px(LABEL_WIDTH))
-            .flex()
-            .map(|this| match stop {
-                0 => this.left_0().justify_start(),
-                NEVER => this.right_0().justify_end(),
-                _ => this
-                    .left(relative(f32::from(stop) / last))
-                    .ml(px(-LABEL_WIDTH / 2.0))
-                    .justify_center(),
+            .h_full()
+            .left(relative((f32::from(stop) - 0.5) / last))
+            .w(relative(1.0 / last))
+            .cursor_pointer()
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                on_step(&Step::Move(stop), window, cx);
             })
-            .text_sm()
+    });
+    let rail = div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(px(STOP_INSET))
+        .right(px(STOP_INSET))
+        .child(
+            div()
+                .absolute()
+                .top(px((THUMB - TRACK) / 2.0))
+                .h(px(TRACK))
+                .left(px(-STOP_INSET))
+                .right(relative(1.0 - f32::from(current.min(NEVER)) / last))
+                .rounded_full()
+                .bg(theme.primary),
+        )
+        .children(ticks)
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left(at(current))
+                .ml(px(-THUMB / 2.0))
+                .size(px(THUMB))
+                .rounded_full()
+                .border_1()
+                .border_color(theme.primary)
+                .bg(theme.background),
+        )
+        .children(zones);
+    let release = on_step.clone();
+    let release_out = on_step.clone();
+    let moved = on_step.clone();
+    v_flex()
+        .w_full()
+        .child(
+            div()
+                .id(SharedString::from(format!("{id}-track")))
+                .relative()
+                .w_full()
+                .h(px(THUMB))
+                .child(
+                    div()
+                        .absolute()
+                        .top(px((THUMB - TRACK) / 2.0))
+                        .left_0()
+                        .right_0()
+                        .h(px(TRACK))
+                        .rounded_full()
+                        .bg(theme.secondary_active),
+                )
+                .child(rail)
+                .when(!disabled, |this| {
+                    this.on_drag(StopDrag(id), |drag, _, _, cx| cx.new(|_| *drag))
+                        .on_drag_move(move |event: &DragMoveEvent<StopDrag>, window, cx| {
+                            if event.drag(cx).0 == id {
+                                let offset = event.event.position.x - event.bounds.origin.x;
+                                moved(
+                                    &Step::Move(stop_at(offset, event.bounds.size.width)),
+                                    window,
+                                    cx,
+                                );
+                            }
+                        })
+                        .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+                            release(&Step::Release, window, cx);
+                        })
+                        .on_mouse_up_out(MouseButton::Left, move |_, window, cx| {
+                            release_out(&Step::Release, window, cx);
+                        })
+                }),
+        )
+        .child(stop_labels(id, current, disabled, on_step, cx))
+}
+
+fn stop_labels(id: &'static str, current: u8, disabled: bool, on_step: &OnStep, cx: &App) -> Div {
+    let theme = cx.theme();
+    let last = f32::from(NEVER);
+    let hover = theme.foreground;
+    let labels = (0..=NEVER).map(|stop| {
+        let on_step = on_step.clone();
+        let chosen = stop == current;
+        div()
+            .id(SharedString::from(format!("{id}-label-{stop}")))
+            .absolute()
+            .top_0()
+            .flex()
+            .map(|this| {
+                if stop == NEVER {
+                    this.right(px(-STOP_INSET)).justify_end()
+                } else {
+                    this.left(relative(f32::from(stop) / last))
+                        .ml(px(-STOP_LABEL_SLOT / 2.0))
+                        .w(px(STOP_LABEL_SLOT))
+                        .justify_center()
+                }
+            })
+            .text_size(px(SMALL_SIZE))
+            .line_height(px(STOP_LABEL_LINE))
             .text_color(if chosen {
                 theme.foreground
             } else {
-                theme.muted_foreground
+                theme.sidebar_foreground
             })
-            .when(chosen, |this| this.font_weight(FontWeight::SEMIBOLD))
             .when(!disabled && !chosen, |this| {
                 this.cursor_pointer()
-                    .hover(move |style| style.text_color(foreground))
-                    .on_click(move |_, window, cx| on_pick(&stop, window, cx))
+                    .hover(move |style| style.text_color(hover))
+                    .on_click(move |_, window, cx| {
+                        on_step(&Step::Move(stop), window, cx);
+                        on_step(&Step::Release, window, cx);
+                    })
             })
             .child(label(stop))
     });
-    v_flex()
+    div()
+        .relative()
         .w_full()
-        .gap_1()
+        .mt(px(STOP_LABEL_GAP))
+        .h(px(STOP_LABEL_LINE))
         .child(
             div()
-                .relative()
-                .w_full()
-                .child(
-                    Slider::new(state)
-                        .disabled(disabled)
-                        .text_color(theme.background),
-                )
-                .children(ticks),
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(STOP_INSET))
+                .right(px(STOP_INSET))
+                .children(labels),
         )
-        .child(div().relative().w_full().h_5().children(labels))
-        .child(
-            div()
-                .w_full()
-                .pt_1()
-                .text_center()
-                .text_xs()
-                .text_color(theme.muted_foreground)
-                .child("Minutes since last key press"),
-        )
+}
+
+fn stop_at(offset: Pixels, width: Pixels) -> u8 {
+    let span = f32::from(width) - THUMB;
+    let position = if span > 0.0 {
+        (f32::from(offset) - STOP_INSET) / span * f32::from(NEVER)
+    } else {
+        0.0
+    };
+    (0..=NEVER)
+        .min_by(|left, right| {
+            (position - f32::from(*left))
+                .abs()
+                .total_cmp(&(position - f32::from(*right)).abs())
+        })
+        .unwrap_or(NEVER)
 }
 
 fn label(stop: u8) -> SharedString {
@@ -255,11 +385,14 @@ mod tests {
     }
 
     #[test]
-    fn slider_values_round_to_a_stop() {
-        assert_eq!(stop_of(2.4), 2);
-        assert_eq!(stop_of(6.6), 7);
-        assert_eq!(stop_of(-3.0), 0);
-        assert_eq!(stop_of(12.0), 7);
+    fn track_positions_round_to_the_nearest_stop() {
+        let width = px(580.0);
+        assert_eq!(stop_at(px(8.0), width), 0);
+        assert_eq!(stop_at(px(-40.0), width), 0);
+        assert_eq!(stop_at(px(170.0), width), 2);
+        assert_eq!(stop_at(px(572.0), width), 7);
+        assert_eq!(stop_at(px(900.0), width), 7);
+        assert_eq!(stop_at(px(100.0), px(10.0)), 0);
     }
 
     #[test]

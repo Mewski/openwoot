@@ -313,7 +313,7 @@ fn shape(
     }
     let magnitude = respond(largest, settings);
     let up_bias = settings
-        .and_then(|settings| settings.left_stick_up_bias)
+        .and_then(|settings| settings.left_stick_up_bias.active())
         .filter(|_| left_stick && y < 0.0);
     let (weight_x, weight_y) = up_bias.map_or((EVEN_WEIGHT, EVEN_WEIGHT), |percent| {
         let weight_x = f32::from(percent) / PERCENT;
@@ -410,7 +410,7 @@ fn leader(positive: u16, negative: u16) -> Option<Side> {
 
 #[cfg(test)]
 mod tests {
-    use openwoot_protocol::gamepad::CurvePoint;
+    use openwoot_protocol::gamepad::{CurvePoint, StickBias};
 
     use super::*;
 
@@ -420,7 +420,10 @@ mod tests {
                 .map(|(travel, output)| CurvePoint { travel, output }),
             normalization,
             single_direction_axes: snappy,
-            left_stick_up_bias: bias,
+            left_stick_up_bias: bias.map_or(StickBias::DISABLED, |percent| StickBias {
+                enabled: true,
+                percent,
+            }),
         }
     }
 

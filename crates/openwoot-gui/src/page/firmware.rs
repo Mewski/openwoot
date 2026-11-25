@@ -1,19 +1,17 @@
+mod device_info;
+mod rename;
 mod restore;
 mod update;
 
 use std::path::{Path, PathBuf};
 
 use gpui_kit::{
-    AnyElement, AppContext as _, Context, Div, Entity, ExternalPaths, FontWeight,
+    AnyElement, App, AppContext as _, Context, Div, Entity, ExternalPaths, FontWeight,
     InteractiveElement as _, IntoElement, ParentElement as _, PathPromptOptions, Render,
     SharedString, Styled as _, Subscription, Window,
     assets::IconName as Catalog,
     component::{
-        ActiveTheme as _, Disableable as _, Icon, Sizable as _, WindowExt as _,
-        button::{Button, ButtonVariants as _},
-        h_flex,
-        spinner::Spinner,
-        tag::Tag,
+        ActiveTheme as _, Icon, Sizable as _, WindowExt as _, h_flex, spinner::Spinner, tag::Tag,
         v_flex,
     },
     div,
@@ -22,22 +20,45 @@ use gpui_kit::{
 };
 use openwoot_host::flash::{self, Plan};
 
-use self::update::{Update, error_chain};
+use self::{
+    device_info::open_device_info,
+    rename::Rename,
+    restore::restore_section,
+    update::{Update, flash_text},
+};
 use super::{
     Page,
-    diagnostics::open_device_info,
-    settings::{Tone, callout, entry, layout_name, sheet},
+    settings::{Tone, body_text, callout, heading, layout_name, sheet},
 };
 use crate::{
     dropdown::{Dropdown, Item},
-    panel,
+    panel::ActionButton,
     store::{Keyboard, Link, Store},
 };
 
 const UPDATE_DIALOG_WIDTH: f32 = 520.0;
 const MENU_WIDTH: f32 = 200.0;
+const RENAME_ITEM: usize = 1;
 const MENU_BUTTON: f32 = 32.0;
+const HEADING_GAP: f32 = 16.0;
+const DESCRIPTION_GAP: f32 = 24.0;
+const CARD_RADIUS: f32 = 6.0;
+const CARD_PADDING: f32 = 12.0;
+const CARD_GAP: f32 = 12.0;
+const IMAGE_WIDTH: f32 = 100.0;
+const IMAGE_HEIGHT: f32 = 83.0;
 const STATUS_DOT: f32 = 8.0;
+const STATUS_INSET: f32 = 4.0;
+const NAME_SIZE: f32 = 16.0;
+const NAME_LINE: f32 = 22.0;
+const NAME_GAP: f32 = 8.0;
+const INFO_SIZE: f32 = 14.0;
+const INFO_LINE: f32 = 18.0;
+const EMPTY_SIZE: f32 = 14.0;
+const EMPTY_LINE: f32 = 16.8;
+const DROP_PADDING: f32 = 32.0;
+const DROP_GAP: f32 = 12.0;
+const STATUS_GAP: f32 = 16.0;
 
 pub(crate) struct FirmwarePage {
     store: Entity<Store>,
@@ -78,11 +99,9 @@ impl FirmwarePage {
                         .ok();
                 }
             }
-            Ok(Err(error)) => {
+            Ok(Err(_)) => {
                 this.update(cx, |page, cx| {
-                    page.check = Some(Check::Rejected(
-                        format!("could not open the file dialog: {error:#}").into(),
-                    ));
+                    page.check = Some(Check::Rejected("Could not open the file dialog.".into()));
                     cx.notify();
                 })
                 .ok();
@@ -116,9 +135,9 @@ impl FirmwarePage {
                         None
                     }
                     Ok(plan) => Some(Check::Rejected(
-                        error_chain(&flash::Error::NoUpdateMode { board: plan.board }).into(),
+                        flash_text(&flash::Error::NoUpdateMode { board: plan.board }).into(),
                     )),
-                    Err(error) => Some(Check::Rejected(error_chain(&error).into())),
+                    Err(error) => Some(Check::Rejected(flash_text(&error).into())),
                 };
                 cx.notify();
             })
@@ -134,6 +153,7 @@ impl FirmwarePage {
             let closable = update.read(cx).closable();
             dialog
                 .w(px(UPDATE_DIALOG_WIDTH))
+                .centered()
                 .close_button(closable)
                 .overlay_closable(closable)
                 .keyboard(closable)
@@ -143,34 +163,33 @@ impl FirmwarePage {
 
     fn device_section(&self, cx: &Context<Self>) -> Div {
         let store = self.store.read(cx);
-        let section = entry(
-            "My keyboard",
-            Some("The keyboard connected to openwoot and the firmware it runs.".into()),
-            None,
+        let section = section(
+            "My devices",
+            "Manage your Wooting devices and keep them up to date.",
             cx,
         );
         match (store.keyboard(), store.link()) {
             (Some(keyboard), _) => section.child(device_card(keyboard, &self.store, cx)),
             (None, Link::Unreachable(reason)) => section
-                .child(panel::label("No keyboard", cx))
-                .child(panel::note(reason.clone(), cx)),
+                .child(no_devices(cx))
+                .child(body_text(reason.clone(), cx).mt(px(HEADING_GAP))),
             (None, Link::Searching | Link::Loading | Link::Connected) => {
-                section.child(panel::label("No keyboard", cx))
+                section.child(no_devices(cx))
             }
         }
     }
 
     fn file_section(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
-        let accent = theme.primary;
-        let raised = theme.tab_active;
+        let ring = theme.primary;
+        let raised = theme.secondary;
         let status = match &self.check {
             None => None,
             Some(Check::Checking(file)) => Some(
                 h_flex()
                     .gap_2()
-                    .text_sm()
-                    .text_color(theme.muted_foreground)
+                    .text_size(px(INFO_SIZE))
+                    .text_color(theme.group_box_foreground)
                     .child(Spinner::new().small())
                     .child(format!("Checking {file}"))
                     .into_any_element(),
@@ -179,14 +198,9 @@ impl FirmwarePage {
                 Some(callout(Tone::Danger, reason.clone(), cx).into_any_element())
             }
         };
-        entry(
+        section(
             "Install firmware from a file",
-            Some(
-                "Checks an openwoot image (.hex or .bin) and installs it through the factory \
-                 bootloader."
-                    .into(),
-            ),
-            None,
+            "Installs an openwoot image (.hex or .bin) through the factory bootloader.",
             cx,
         )
         .child(
@@ -194,15 +208,15 @@ impl FirmwarePage {
                 .id("firmware-drop")
                 .w_full()
                 .items_center()
-                .gap_3()
-                .py_8()
-                .rounded(theme.radius_lg)
+                .gap(px(DROP_GAP))
+                .py(px(DROP_PADDING))
+                .rounded(theme.radius)
                 .border_1()
                 .border_dashed()
                 .border_color(theme.border)
-                .bg(theme.group_box)
+                .bg(theme.accent)
                 .drag_over::<ExternalPaths>(move |style, _, _, _| {
-                    style.border_color(accent).bg(raised)
+                    style.border_color(ring).bg(raised)
                 })
                 .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                     this.drop_files(paths, window, cx);
@@ -210,23 +224,24 @@ impl FirmwarePage {
                 .child(
                     Icon::new(Catalog::FileUp)
                         .large()
-                        .text_color(theme.muted_foreground),
+                        .text_color(theme.sidebar_foreground),
                 )
                 .child(
                     div()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
+                        .text_size(px(INFO_SIZE))
+                        .text_color(theme.group_box_foreground)
                         .child("Drop a firmware file here"),
                 )
                 .child(
-                    Button::new("choose-file")
+                    ActionButton::new("choose-file", "Choose file")
                         .primary()
-                        .label("Choose file")
                         .disabled(self.checking())
                         .on_click(cx.listener(|_, _, window, cx| Self::choose_file(window, cx))),
                 ),
         )
-        .children(status)
+        .when_some(status, |this, status| {
+            this.child(div().w_full().mt(px(STATUS_GAP)).child(status))
+        })
     }
 }
 
@@ -235,10 +250,30 @@ impl Render for FirmwarePage {
         let sections = vec![
             self.device_section(cx),
             self.file_section(cx),
-            restore::section(cx),
+            restore_section(
+                self.checking(),
+                cx.listener(|_, _, window, cx| Self::choose_file(window, cx)),
+                cx,
+            ),
         ];
-        panel::page().child(sheet(Page::Firmware.title(), sections, cx))
+        sheet("firmware-sheet", Page::Firmware.title(), sections, cx)
     }
+}
+
+fn section(title: &'static str, description: &'static str, cx: &App) -> Div {
+    v_flex()
+        .w_full()
+        .child(heading(title, None, cx).mb(px(HEADING_GAP)))
+        .child(body_text(description, cx).mb(px(DESCRIPTION_GAP)))
+}
+
+fn no_devices(cx: &App) -> Div {
+    div()
+        .text_size(px(EMPTY_SIZE))
+        .line_height(px(EMPTY_LINE))
+        .font_weight(FontWeight::BOLD)
+        .text_color(cx.theme().sidebar_foreground)
+        .child("NO DEVICES")
 }
 
 fn device_card(keyboard: &Keyboard, store: &Entity<Store>, cx: &Context<FirmwarePage>) -> Div {
@@ -252,17 +287,21 @@ fn device_card(keyboard: &Keyboard, store: &Entity<Store>, cx: &Context<Firmware
         ),
     ];
     let store = store.clone();
+    let hover = theme.secondary;
     h_flex()
         .w_full()
-        .gap_4()
-        .p_3()
-        .rounded(theme.radius_lg)
-        .bg(theme.group_box)
+        .items_start()
+        .gap(px(CARD_GAP))
+        .p(px(CARD_PADDING))
+        .rounded(px(CARD_RADIUS))
+        .bg(theme.accent)
+        .hover(move |style| style.bg(hover))
         .child(
             div()
                 .relative()
                 .flex_none()
-                .size_16()
+                .w(px(IMAGE_WIDTH))
+                .h(px(IMAGE_HEIGHT))
                 .rounded(theme.radius)
                 .bg(theme.sidebar)
                 .flex()
@@ -271,13 +310,13 @@ fn device_card(keyboard: &Keyboard, store: &Entity<Store>, cx: &Context<Firmware
                 .child(
                     Icon::new(Catalog::Keyboard)
                         .large()
-                        .text_color(theme.muted_foreground),
+                        .text_color(theme.sidebar_foreground),
                 )
                 .child(
                     div()
                         .absolute()
-                        .top(px(6.0))
-                        .left(px(6.0))
+                        .top(px(STATUS_INSET))
+                        .left(px(STATUS_INSET))
                         .size(px(STATUS_DOT))
                         .rounded_full()
                         .bg(theme.success),
@@ -287,42 +326,30 @@ fn device_card(keyboard: &Keyboard, store: &Entity<Store>, cx: &Context<Firmware
             v_flex()
                 .flex_1()
                 .min_w_0()
-                .gap_1()
                 .child(
                     h_flex()
-                        .gap_2()
+                        .gap(px(NAME_GAP))
                         .child(
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_base()
-                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_size(px(NAME_SIZE))
+                                .line_height(px(NAME_LINE))
+                                .font_weight(FontWeight::BOLD)
                                 .text_color(theme.foreground)
-                                .child(keyboard.name.clone()),
+                                .child(keyboard.display_name()),
                         )
                         .child(Tag::success().small().child("CONNECTED")),
                 )
-                .child(
+                .children(details.into_iter().map(|(label, value)| {
                     h_flex()
-                        .flex_wrap()
-                        .gap_x_3()
-                        .text_sm()
-                        .children(details.into_iter().map(|(label, value)| {
-                            h_flex()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_color(theme.muted_foreground)
-                                        .child(format!("{label}:")),
-                                )
-                                .child(
-                                    div()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(theme.foreground)
-                                        .child(value),
-                                )
-                        })),
-                ),
+                        .gap_1()
+                        .text_size(px(INFO_SIZE))
+                        .line_height(px(INFO_LINE))
+                        .text_color(theme.sidebar_foreground)
+                        .child(format!("{label}:"))
+                        .child(div().font_weight(FontWeight::BOLD).child(value))
+                })),
         )
         .child(
             div().flex_none().w(px(MENU_BUTTON)).child(
@@ -330,10 +357,11 @@ fn device_card(keyboard: &Keyboard, store: &Entity<Store>, cx: &Context<Firmware
                     .menu_width(px(MENU_WIDTH))
                     .align_end()
                     .trigger(menu_button)
-                    .items([Item::new("View device info").icon(Catalog::Info)])
-                    .on_select(move |_, window, cx| {
-                        let keyboard = store.read(cx).keyboard().cloned();
-                        if let Some(keyboard) = keyboard {
+                    .items([Item::new("View device info"), Item::new("Rename device")])
+                    .on_select(move |index, window, cx| {
+                        if index == RENAME_ITEM {
+                            Rename::open(&store, window, cx);
+                        } else if let Some(keyboard) = store.read(cx).keyboard().cloned() {
                             open_device_info(&keyboard, window, cx);
                         }
                     }),
@@ -341,16 +369,16 @@ fn device_card(keyboard: &Keyboard, store: &Entity<Store>, cx: &Context<Firmware
         )
 }
 
-fn menu_button(open: bool, cx: &gpui_kit::App) -> AnyElement {
+fn menu_button(open: bool, cx: &App) -> AnyElement {
     let theme = cx.theme();
     let hover = theme.secondary;
     div()
         .size(px(MENU_BUTTON))
-        .rounded(theme.radius)
+        .rounded(px(CARD_RADIUS))
         .flex()
         .items_center()
         .justify_center()
-        .text_color(theme.muted_foreground)
+        .text_color(theme.sidebar_foreground)
         .when(open, |this| this.bg(theme.secondary))
         .hover(move |style| style.bg(hover))
         .child(Icon::new(Catalog::Ellipsis).small())

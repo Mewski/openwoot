@@ -20,6 +20,7 @@ keys and the light bar, switches profiles with the Mode key, and answers `openwo
 | --- | --- |
 | factory bootloader, never written | `0x0800_0000`-`0x0800_7fff` |
 | image (`FLASH` in `memory.x`): vector table, descriptor, code | `0x0800_8000`-`0x080f_dfff` |
+| zero-wait flash (`ZERO_WAIT` in `memory.x`): the interrupt vectors' and key task's code is linked here first | `0x0800_0000`-`0x0807_ffff` |
 | serial number mirror page, never linked | `0x080f_e000`-`0x080f_efff` |
 | completion marker of the bootloader, never linked | `0x080f_f000`-`0x080f_ffff` |
 | RAM, stack from the top | `0x2000_0000`-`0x2002_ffff` |

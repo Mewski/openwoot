@@ -3,19 +3,16 @@ use std::rc::Rc;
 use gpui_kit::{
     App, Context, Entity, FontWeight, IntoElement, ParentElement as _, Render, SharedString,
     Styled as _, Subscription, Window,
-    component::{
-        ActiveTheme as _, Disableable as _, Sizable as _,
-        button::{Button, ButtonVariants as _},
-        h_flex,
-        spinner::Spinner,
-        v_flex,
-    },
+    component::{ActiveTheme as _, Sizable as _, h_flex, spinner::Spinner, v_flex},
     div,
     prelude::FluentBuilder as _,
 };
 use openwoot_protocol::device::Layout;
 
-use crate::store::{Keyboard, Link, Store};
+use crate::{
+    panel::ActionButton,
+    store::{Keyboard, Link, Store},
+};
 
 type Navigate = Rc<dyn Fn(&mut Window, &mut App)>;
 
@@ -129,25 +126,23 @@ impl ConnectionPanel {
                     .justify_end()
                     .when(searching, |this| this.child(Spinner::new().small()))
                     .child(
-                        Button::new("open-firmware")
-                            .small()
-                            .outline()
-                            .label("Install firmware")
+                        ActionButton::new("open-firmware", "Install firmware")
                             .on_click(move |_, window, cx| open_firmware(window, cx)),
                     )
                     .child(
-                        Button::new("search-now")
-                            .small()
-                            .primary()
-                            .label(if searching {
+                        ActionButton::new(
+                            "search-now",
+                            if searching {
                                 "Searching"
                             } else {
                                 "Search again"
-                            })
-                            .disabled(searching)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.store.update(cx, Store::search);
-                            })),
+                            },
+                        )
+                        .primary()
+                        .disabled(searching)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.store.update(cx, Store::search);
+                        })),
                     ),
             )
     }

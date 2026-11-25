@@ -14,12 +14,13 @@ use openwoot_protocol::{
     configuration::{Capabilities, Invalid, Rejection},
     decode_response,
     device::Layout,
+    diagnostics::StorageUsage,
     encode_message, encode_request,
     endpoints::{
         ActivateProfile, GetCapabilities, GetDefaultKeymap, GetGamepadState, GetKeyGeometry,
-        GetKeymap, GetLayout, GetProfileInfo, GetProfiles, GetSwitchModels, GetSwitches,
-        GetVersion, MoveProfile, Revert, Save, SetGamepadDetection, SetKeyReports, SetKeymap,
-        SetLayout, SetLighting, SetSwitches, SwapProfiles,
+        GetKeymap, GetLayout, GetProfileInfo, GetProfiles, GetStorageUsage, GetSwitchModels,
+        GetSwitches, GetVersion, MoveProfile, Revert, Save, SetGamepadDetection, SetKeyReports,
+        SetKeymap, SetLayout, SetLighting, SetSwitches, SwapProfiles,
     },
     gamepad, geometry,
     heapless::Vec,
@@ -35,7 +36,7 @@ use crate::{
     profile::{
         ProfileModel, chosen, factory_switches, layouts, open, storage, switch_capabilities,
     },
-    storage::Nor,
+    storage::{Nor, SECTOR},
     support::stock_identity,
 };
 
@@ -62,6 +63,7 @@ impl Configuration for Memory {
             key_rows: 2,
             key_columns: 3,
             profiles: 4,
+            linked_profiles: 0,
             layouts: Vec::new(),
             lightbar_leds: 0,
             host_signals: false,
@@ -523,6 +525,8 @@ fn profiles_swap_and_move_through_the_profile_configurator_and_the_active_one_fo
     let summary = |active| Summary {
         count: 2,
         active: Slot::new(active),
+        linked: 0,
+        selected: None,
     };
     assert_eq!(ask!(handler, SwapProfiles, swap(0, 1)), Ok(Some(Ok(()))));
     assert_eq!(ask!(handler, GetProfiles, ()), Ok(Some(Ok(summary(1)))));
@@ -551,6 +555,43 @@ fn profiles_swap_and_move_through_the_profile_configurator_and_the_active_one_fo
         Ok(Some(Err(Rejection::Invalid(Invalid::ProfileOutsideRange(
             4
         )))))
+    );
+}
+
+#[test]
+fn the_storage_usage_reaches_the_host_and_is_unsupported_without_a_store() {
+    let keys = keys::Shared::new();
+    let shared = profile::Shared::new();
+    let mut settings = storage();
+    let model = Mutex::<CriticalSectionRawMutex, _>::new(open(&keys, &shared, Some(&mut settings)));
+    let mut handler = Handler::with_configuration(
+        VERSION,
+        stock_identity(None),
+        Configurator::new(&model, switch_capabilities()),
+    );
+    assert_eq!(
+        ask!(handler, GetStorageUsage, ()),
+        Ok(Some(Ok(StorageUsage {
+            capacity: 4 * SECTOR,
+            used: 12,
+            records: 1,
+            items: 1,
+        })))
+    );
+    let storeless = Mutex::<CriticalSectionRawMutex, _>::new(open(&keys, &shared, None));
+    let mut handler = Handler::with_configuration(
+        VERSION,
+        stock_identity(None),
+        Configurator::new(&storeless, switch_capabilities()),
+    );
+    assert_eq!(
+        ask!(handler, GetStorageUsage, ()),
+        Ok(Some(Err(Rejection::Unsupported)))
+    );
+    let mut bare = Handler::new(VERSION, stock_identity(None));
+    assert_eq!(
+        ask!(bare, GetStorageUsage, ()),
+        Ok(Some(Err(Rejection::Unsupported)))
     );
 }
 
@@ -588,7 +629,13 @@ fn the_profile_configurator_answers_every_keyboard_wide_endpoint() {
     answered("device", &device);
     answered(
         "device/set",
-        &block_on(configurator.set_device_settings(device.unwrap())),
+        &block_on(configurator.set_device_settings(device.unwrap().chosen)),
+    );
+    let name = block_on(configurator.device_name());
+    answered("device/name", &name);
+    answered(
+        "device/name/set",
+        &block_on(configurator.set_device_name(name.unwrap())),
     );
     let layout = block_on(configurator.layout());
     answered("layout", &layout);
@@ -632,7 +679,10 @@ fn the_profile_configurator_answers_every_keyboard_wide_endpoint() {
     );
     answered("switches/models", &block_on(configurator.switch_models()));
     answered("profiles", &block_on(configurator.profiles()));
-    answered("profiles/create", &block_on(configurator.create_profile()));
+    answered(
+        "profiles/create",
+        &block_on(configurator.create_profile(openwoot_protocol::profile::Namespace::Onboard)),
+    );
     answered(
         "profiles/delete",
         &block_on(configurator.delete_profile(Slot::new(2))),
@@ -652,6 +702,7 @@ fn the_profile_configurator_answers_every_keyboard_wide_endpoint() {
     answered("save", &block_on(configurator.save()));
     answered("revert", &block_on(configurator.revert()));
     answered("factory-reset", &block_on(configurator.factory_reset()));
+    answered("storage/usage", &block_on(configurator.storage_usage()));
 }
 
 #[test]

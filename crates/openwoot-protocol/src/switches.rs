@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::configuration::{Capabilities, Invalid, MAX_KEYS, Validate};
 
 pub const MAX_MODELS: usize = 64;
-pub const MAX_TUNED: usize = 16;
+pub const MAX_TUNED: usize = 30;
 
 pub type Models = Vec<Model, MAX_MODELS>;
 

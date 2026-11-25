@@ -1,7 +1,8 @@
 use gpui_kit::{AsyncApp, Entity};
 use openwoot_protocol::{
+    apps::Link,
     endpoints::{GetProfileInfo, MoveProfile, SetProfileInfo, SwapProfiles},
-    profile::{self, Change, Move, Slot, Swap},
+    profile::{self, Change, Move, Namespace, Selection, Slot, Swap},
 };
 
 use super::error_chain;
@@ -18,6 +19,7 @@ pub(super) struct Snapshot {
 
 pub(super) const SWAP_STEPS: usize = 2;
 pub(super) const REMOVE_STEPS: usize = 4;
+pub(super) const LINK_STEPS: usize = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Onboard {
@@ -127,17 +129,107 @@ async fn shift_out(
 pub(super) async fn insert(
     store: &Entity<Store>,
     snapshot: &Snapshot,
+    namespace: Namespace,
     cx: &mut AsyncApp,
     step: &mut impl FnMut(&mut AsyncApp),
 ) -> Result<Slot, String> {
     let slot = store
-        .update(cx, |store, cx| store.create_profile(cx))
+        .update(cx, |store, cx| store.create_profile(namespace, cx))
         .await
         .ok_or("the keyboard did not create a profile")?;
     step(cx);
     write(store, slot, snapshot, cx, step).await?;
     reload(store, cx, step).await;
     Ok(slot)
+}
+
+pub(super) async fn link_apps(
+    store: &Entity<Store>,
+    slot: Slot,
+    links: Vec<Link>,
+    cx: &mut AsyncApp,
+    step: &mut impl FnMut(&mut AsyncApp),
+) -> Result<(), String> {
+    store
+        .update(cx, |store, cx| store.write_app_links(slot, links, cx))
+        .await
+        .map_err(|error| error_chain(&error))?;
+    step(cx);
+    Ok(())
+}
+
+pub(super) const fn remove_linked_steps(lightbar: bool, shifted: usize) -> usize {
+    REMOVE_STEPS - 1 + shifted * (2 * Parts::steps(lightbar) + 2 + LINK_STEPS)
+}
+
+pub(super) async fn remove_linked(
+    store: &Entity<Store>,
+    slot: Slot,
+    lightbar: bool,
+    cx: &mut AsyncApp,
+    step: &mut impl FnMut(&mut AsyncApp),
+) -> Result<(), String> {
+    let (count, entered) = store
+        .read_with(cx, |store, _| {
+            store.keyboard().map(|keyboard| {
+                (
+                    keyboard.linked.len(),
+                    keyboard.active.is_linked() || keyboard.selected.is_some(),
+                )
+            })
+        })
+        .ok_or("the keyboard was disconnected")?;
+    let last = u8::try_from(count)
+        .ok()
+        .and_then(|count| count.checked_sub(1))
+        .filter(|last| slot.is_linked() && slot.index() <= *last)
+        .ok_or("the linked profile is no longer on the keyboard")?;
+    if entered {
+        let selection = Selection {
+            profile: None,
+            activate: false,
+        };
+        store
+            .update(cx, |store, cx| store.select_linked(selection, cx))
+            .await
+            .map_err(|error| error_chain(&error))?;
+    }
+    step(cx);
+    let shifted = Box::pin(shift_linked(store, slot.index(), last, lightbar, cx, step)).await;
+    forget_history(store, cx);
+    shifted?;
+    store
+        .update(cx, |store, cx| store.delete_profile(Slot::linked(last), cx))
+        .await;
+    step(cx);
+    reload(store, cx, step).await;
+    Ok(())
+}
+
+async fn shift_linked(
+    store: &Entity<Store>,
+    from: u8,
+    last: u8,
+    lightbar: bool,
+    cx: &mut AsyncApp,
+    step: &mut impl FnMut(&mut AsyncApp),
+) -> Result<(), String> {
+    for index in from..last {
+        let next = Slot::linked(index + 1);
+        let snapshot = read(store, next, lightbar, cx, step).await?;
+        let links = store
+            .read_with(cx, |store, _| {
+                store
+                    .keyboard()
+                    .and_then(|keyboard| keyboard.linked_profile(next))
+                    .map(|linked| linked.links.clone())
+            })
+            .unwrap_or_default();
+        let target = Slot::linked(index);
+        write(store, target, &snapshot, cx, step).await?;
+        link_apps(store, target, links, cx, step).await?;
+    }
+    Ok(())
 }
 
 pub(super) async fn replace(

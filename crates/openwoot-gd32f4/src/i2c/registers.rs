@@ -22,7 +22,8 @@ pub(super) const STAT1_I2CBSY: u32 = 1 << 1;
 
 pub(super) fn registers() -> &'static pac::i2c0::RegisterBlock {
     // SAFETY: an `I2c` owns the I2C0 peripheral; the interrupt handlers only clear its interrupt
-    // enable bits and wake the waiting transfer.
+    // enable bits and wake the waiting transfer, and `stop_for_reset` only ends the bus traffic
+    // right before the microcontroller resets, when no transfer runs on afterwards.
     unsafe { &*pac::I2c0::ptr() }
 }
 

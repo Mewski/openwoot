@@ -1,31 +1,46 @@
 use std::rc::Rc;
 
 use gpui_kit::{
-    App, BorderStyle, Bounds, CursorStyle, DispatchPhase, Div, Hitbox, HitboxBehavior, Hsla,
-    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
-    PathBuilder, Pixels, Point, SharedString, Styled as _, Window, canvas,
+    App, Bounds, BoxShadow, ContentMask, CursorStyle, DispatchPhase, Div, FontWeight, Hitbox,
+    HitboxBehavior, Hsla, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement as _, PathBuilder, Pixels, Point, SharedString, Styled as _, Window, canvas,
     component::{ActiveTheme as _, h_flex, v_flex},
-    div, fill, point,
+    div, fill, hsla, point,
     prelude::FluentBuilder as _,
-    px, quad, relative, size,
+    px, relative, size,
 };
 use openwoot_protocol::gamepad::CurvePoint;
 
 use super::curve::{self, Curve, POINT_SCALE};
+use crate::theme;
 
 const HANDLE: f32 = 12.0;
-const FOCUSED_HANDLE: f32 = 16.0;
 const MARKER: f32 = 8.0;
 const GRAB_DISTANCE: f32 = 20.0;
-const GRID_LINES: u8 = 3;
+const GRID_STEP_ACROSS: f32 = 96.0;
+const GRID_STEP_DOWN: f32 = 60.0;
 const SAMPLES: u16 = 255;
 const THUMBNAIL_SAMPLES: u16 = 64;
-const HEIGHT: f32 = 220.0;
-const AXIS_WIDTH: f32 = 40.0;
-const STRIPE_GAP: f32 = 9.0;
-const STRIPE_WIDTH: f32 = 3.0;
-const TIP_WIDTH: f32 = 140.0;
-const TIP_RISE: f32 = 40.0;
+const MAX_WIDTH: f32 = 332.0;
+const ASPECT_RATIO: f32 = 1.6;
+const RANGE_SIZE: f32 = 48.0;
+const METRIC_WIDTH: f32 = 64.0;
+const METRIC_ROW: f32 = 32.0;
+const METRIC_TOP: f32 = 12.0;
+const LABEL_TEXT: f32 = 12.0;
+const LABEL_LINE: f32 = 18.0;
+const BAND_LABEL_TEXT: f32 = 16.0;
+const BAND_LABEL_LINE: f32 = 24.0;
+const LINE_WIDTH: f32 = 2.5;
+const STRIPE: f32 = 10.0;
+const TIP_WIDTH: f32 = 200.0;
+const TIP_GAP: f32 = 14.0;
+const TIP_PADDING_ACROSS: f32 = 12.0;
+const TIP_PADDING_DOWN: f32 = 8.0;
+const TIP_RADIUS: f32 = 6.0;
+const TIP_TEXT: f32 = 14.0;
+const TIP_LINE: f32 = 21.0;
+const DISABLED: f32 = 0.5;
 const LABEL_MIN_WIDTH: f32 = 0.17;
 const LABEL_MIN_HEIGHT: f32 = 0.07;
 const THUMBNAIL_INSET: f32 = 6.0;
@@ -55,7 +70,7 @@ struct Colors {
     area: Hsla,
     grid: Hsla,
     stripe: Hsla,
-    handle: Hsla,
+    stripe_gap: Hsla,
     marker: Hsla,
 }
 
@@ -67,15 +82,15 @@ struct Plot {
 pub(super) fn chart(chart: Chart, cx: &App) -> Div {
     let theme = cx.theme();
     let colors = Colors {
-        line: theme.primary,
-        area: theme.primary.opacity(0.85),
-        grid: theme.border,
-        stripe: theme.secondary,
-        handle: theme.background,
+        line: theme.chart_2,
+        area: theme.chart_1,
+        grid: theme.chart_3,
+        stripe: theme.chart_4,
+        stripe_gap: theme.chart_5,
         marker: theme.foreground,
     };
-    let (muted, border, radius) = (theme.muted_foreground, theme.border, theme.radius);
-    let tip_colors = (theme.popover, theme.foreground, theme.border);
+    let axis = theme.chart_grid;
+    let tip_colors = (theme::palette().tooltip, theme.foreground, theme.border);
     let Chart {
         curve,
         travel_mm,
@@ -87,60 +102,120 @@ pub(super) fn chart(chart: Chart, cx: &App) -> Div {
     let tip = focused
         .and_then(|index| curve.get(index).copied())
         .map(|point| point_tip(point, travel_mm, tip_colors));
-    let axis_label = |text: SharedString| div().text_xs().text_color(muted).child(text);
-    v_flex()
+    let plot = div()
+        .relative()
+        .flex_1()
+        .min_h_0()
         .w_full()
-        .gap_1()
-        .when(!interactive, |this| this.opacity(0.5))
+        .border_1()
+        .border_color(axis)
+        .child(underlay(curve, colors))
+        .children(band_labels(curve, axis))
+        .child(overlay(curve, markers, handler, colors))
+        .children(tip);
+    h_flex()
+        .w_full()
+        .max_w(px(MAX_WIDTH))
+        .aspect_ratio(ASPECT_RATIO)
+        .items_start()
+        .when(!interactive, |this| this.opacity(DISABLED))
+        .child(ranges(axis))
         .child(
-            h_flex()
-                .pl(px(AXIS_WIDTH))
-                .child(axis_label("Analog value".into())),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .gap_2()
-                .child(
-                    v_flex()
-                        .w(px(AXIS_WIDTH - 8.0))
-                        .h(px(HEIGHT))
-                        .items_end()
-                        .justify_between()
-                        .child(axis_label("255".into()))
-                        .child(axis_label("0".into())),
-                )
-                .child(
-                    div()
-                        .relative()
-                        .flex_1()
-                        .h(px(HEIGHT))
-                        .rounded(radius)
-                        .border_1()
-                        .border_color(border)
-                        .child(drawing(curve, focused, markers, handler, colors))
-                        .children(band_labels(curve, muted))
-                        .children(tip),
-                ),
-        )
-        .child(
-            h_flex()
-                .pl(px(AXIS_WIDTH))
-                .gap_2()
-                .child(axis_label("0.0 mm".into()))
-                .child(
-                    div()
-                        .flex_1()
-                        .text_center()
-                        .child(axis_label("How deep a key is pressed".into())),
-                )
-                .child(axis_label(format!("{travel_mm:.1} mm").into())),
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .child(plot)
+                .child(metrics(travel_mm, axis)),
         )
 }
 
-fn drawing(
+fn axis_label(text: impl Into<SharedString>, color: Hsla) -> Div {
+    div()
+        .text_size(px(LABEL_TEXT))
+        .line_height(px(LABEL_LINE))
+        .text_color(color)
+        .child(text.into())
+}
+
+fn ranges(color: Hsla) -> Div {
+    v_flex()
+        .flex_none()
+        .w(px(RANGE_SIZE))
+        .h_full()
+        .child(
+            h_flex()
+                .flex_none()
+                .h(px(RANGE_SIZE))
+                .items_start()
+                .justify_center()
+                .child(axis_label("255", color)),
+        )
+        .child(
+            v_flex()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .justify_center()
+                .text_center()
+                .child(axis_label("Analog Value", color).w_full()),
+        )
+        .child(
+            h_flex()
+                .flex_none()
+                .h(px(RANGE_SIZE))
+                .items_end()
+                .justify_center()
+                .child(axis_label("0", color)),
+        )
+        .child(div().flex_none().h(px(METRIC_ROW)))
+}
+
+fn metrics(travel_mm: f32, color: Hsla) -> Div {
+    h_flex()
+        .flex_none()
+        .w_full()
+        .h(px(METRIC_ROW))
+        .pt(px(METRIC_TOP))
+        .items_start()
+        .child(
+            div()
+                .flex_none()
+                .w(px(METRIC_WIDTH))
+                .child(axis_label("0.00 mm", color)),
+        )
+        .child(
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .justify_center()
+                .child(axis_label("How Deep a Key is Pressed", color)),
+        )
+        .child(
+            h_flex()
+                .flex_none()
+                .w(px(METRIC_WIDTH))
+                .justify_end()
+                .child(axis_label(format!("{travel_mm:.2} mm"), color)),
+        )
+}
+
+fn underlay(curve: Curve, colors: Colors) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, (), window, _| {
+            let plot = Plot { area: bounds };
+            paint_grid(plot, colors, window);
+            paint_curve(plot, curve, colors, window);
+            paint_bands(plot, curve, colors, window);
+        },
+    )
+    .absolute()
+    .size_full()
+}
+
+fn overlay(
     curve: Curve,
-    focused: Option<usize>,
     markers: Vec<(f32, f32)>,
     handler: Option<Handler>,
     colors: Colors,
@@ -153,9 +228,6 @@ fn drawing(
         },
         move |bounds, hitbox: Option<Hitbox>, window, _| {
             let plot = Plot { area: bounds };
-            paint_bands(plot, curve, colors, window);
-            paint_grid(plot, colors, window);
-            paint_curve(plot, curve, colors, window);
             for (level, output) in &markers {
                 window.paint_quad(
                     fill(
@@ -168,17 +240,14 @@ fn drawing(
                     .corner_radii(px(MARKER / 2.0)),
                 );
             }
-            for (index, point) in curve.iter().enumerate() {
-                let chosen = focused == Some(index);
-                let diameter = if chosen { FOCUSED_HANDLE } else { HANDLE };
-                window.paint_quad(quad(
-                    Bounds::centered_at(plot.handle(*point), size(px(diameter), px(diameter))),
-                    px(diameter / 2.0),
-                    if chosen { colors.line } else { colors.handle },
-                    px(2.0),
-                    colors.line,
-                    BorderStyle::Solid,
-                ));
+            for point in curve {
+                window.paint_quad(
+                    fill(
+                        Bounds::centered_at(plot.handle(point), size(px(HANDLE), px(HANDLE))),
+                        colors.line,
+                    )
+                    .corner_radii(px(HANDLE / 2.0)),
+                );
             }
             if let (Some(hitbox), Some(handler)) = (hitbox, handler) {
                 listen(plot, curve, &hitbox, &handler, window);
@@ -189,31 +258,26 @@ fn drawing(
     .size_full()
 }
 
-fn band_labels(curve: Curve, muted: Hsla) -> Vec<Div> {
+fn band_labels(curve: Curve, color: Hsla) -> Vec<Div> {
     let [dead_zone, .., saturation] = curve;
     let start = fraction(dead_zone.travel);
     let end = fraction(saturation.travel);
     let floor = fraction(dead_zone.output);
     let label = |text: &'static str| {
-        div()
-            .absolute()
-            .flex()
-            .flex_col()
-            .justify_center()
-            .overflow_hidden()
-            .child(
-                div()
-                    .w_full()
-                    .text_xs()
-                    .text_center()
-                    .text_color(muted)
-                    .child(text),
-            )
+        div().absolute().flex().flex_col().justify_center().child(
+            div()
+                .w_full()
+                .text_size(px(BAND_LABEL_TEXT))
+                .line_height(px(BAND_LABEL_LINE))
+                .text_center()
+                .text_color(color)
+                .child(text),
+        )
     };
     let mut labels = Vec::new();
     if start >= LABEL_MIN_WIDTH {
         labels.push(
-            label("Key start deadzone")
+            label("Key Start Deadzone")
                 .left_0()
                 .top_0()
                 .w(relative(start))
@@ -222,7 +286,7 @@ fn band_labels(curve: Curve, muted: Hsla) -> Vec<Div> {
     }
     if 1.0 - end >= LABEL_MIN_WIDTH {
         labels.push(
-            label("Key end deadzone")
+            label("Key End Deadzone")
                 .right_0()
                 .top_0()
                 .w(relative(1.0 - end))
@@ -231,7 +295,9 @@ fn band_labels(curve: Curve, muted: Hsla) -> Vec<Div> {
     }
     if floor >= LABEL_MIN_HEIGHT && end > start {
         labels.push(
-            label("Anti-deadzone")
+            label("Anti-Deadzone")
+                .justify_start()
+                .overflow_hidden()
                 .left(relative(start))
                 .bottom_0()
                 .w(relative(end - start))
@@ -300,25 +366,40 @@ fn point_tip(
     div()
         .absolute()
         .left(relative(fraction(point.travel)))
-        .top(relative(1.0 - fraction(point.output)))
+        .bottom(relative(fraction(point.output)))
         .ml(px(-TIP_WIDTH / 2.0))
-        .mt(px(-TIP_RISE))
+        .mb(px(TIP_GAP))
         .w(px(TIP_WIDTH))
         .flex()
         .justify_center()
         .child(
             div()
-                .px_2()
-                .py_1()
-                .rounded(px(6.0))
+                .px(px(TIP_PADDING_ACROSS))
+                .py(px(TIP_PADDING_DOWN))
+                .rounded(px(TIP_RADIUS))
                 .bg(surface)
                 .border_1()
                 .border_color(border)
-                .shadow_md()
-                .text_xs()
+                .shadow(tip_shadow())
+                .text_size(px(TIP_TEXT))
+                .line_height(px(TIP_LINE))
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(text)
                 .child(label),
         )
+}
+
+fn tip_shadow() -> Vec<BoxShadow> {
+    [(0.1, 4.0, 6.0), (0.06, 2.0, 4.0)]
+        .into_iter()
+        .map(|(alpha, rise, blur)| BoxShadow {
+            color: hsla(0.0, 0.0, 0.0, alpha),
+            offset: point(px(0.0), px(rise)),
+            blur_radius: px(blur),
+            spread_radius: px(-1.0),
+            inset: false,
+        })
+        .collect()
 }
 
 fn fraction(value: u8) -> f32 {
@@ -365,81 +446,77 @@ fn paint_bands(plot: Plot, curve: Curve, colors: Colors, window: &mut Window) {
     ];
     for (across, up) in bands {
         if across.1 > across.0 && up.1 > up.0 {
-            hatch(plot.rectangle(across, up), colors.stripe, window);
+            hatch(plot.rectangle(across, up), colors, window);
         }
     }
 }
 
-fn hatch(band: Bounds<Pixels>, color: Hsla, window: &mut Window) {
+fn hatch(band: Bounds<Pixels>, colors: Colors, window: &mut Window) {
+    window.paint_quad(fill(band, colors.stripe_gap));
     let left = f32::from(band.origin.x);
     let top = f32::from(band.origin.y);
     let right = left + f32::from(band.size.width);
     let bottom = top + f32::from(band.size.height);
-    let mut offset = left - bottom;
-    while offset < right - top {
-        let from_x = left.max(top + offset);
-        let to_x = right.min(bottom + offset);
-        if from_x < to_x {
-            let mut stripe = PathBuilder::stroke(px(STRIPE_WIDTH));
-            stripe.move_to(point(px(from_x), px(from_x - offset)));
-            stripe.line_to(point(px(to_x), px(to_x - offset)));
+    let step = 2.0 * STRIPE * std::f32::consts::SQRT_2;
+    window.with_content_mask(Some(ContentMask { bounds: band }), |window| {
+        let mut offset = left - bottom - step;
+        while offset < right - top + step {
+            let mut stripe = PathBuilder::stroke(px(STRIPE));
+            stripe.move_to(point(px(top + offset - STRIPE), px(top - STRIPE)));
+            stripe.line_to(point(px(bottom + offset + STRIPE), px(bottom + STRIPE)));
             if let Ok(path) = stripe.build() {
-                window.paint_path(path, color);
+                window.paint_path(path, colors.stripe);
             }
+            offset += step;
         }
-        offset += STRIPE_GAP;
-    }
+    });
 }
 
 fn paint_grid(plot: Plot, colors: Colors, window: &mut Window) {
-    for line in 1..GRID_LINES {
-        let fraction = f32::from(line) / f32::from(GRID_LINES);
+    let area = plot.area;
+    let mut across = 0.0;
+    while across < f32::from(area.size.width) {
         window.paint_quad(fill(
             Bounds {
-                origin: plot.position(fraction, 1.0),
-                size: size(px(1.0), plot.area.size.height),
+                origin: area.origin + point(px(across), px(0.0)),
+                size: size(px(1.0), area.size.height),
             },
             colors.grid,
         ));
+        across += GRID_STEP_ACROSS;
+    }
+    let mut down = 0.0;
+    while down < f32::from(area.size.height) {
         window.paint_quad(fill(
             Bounds {
-                origin: plot.position(0.0, fraction),
-                size: size(plot.area.size.width, px(1.0)),
+                origin: area.origin + point(px(0.0), px(down)),
+                size: size(area.size.width, px(1.0)),
             },
             colors.grid,
         ));
+        down += GRID_STEP_DOWN;
     }
 }
 
 fn paint_curve(plot: Plot, curve: Curve, colors: Colors, window: &mut Window) {
-    let [dead_zone, .., saturation] = curve;
-    let start = fraction(dead_zone.travel);
-    let end = fraction(saturation.travel);
-    let floor = fraction(dead_zone.output);
-    let samples: Vec<(f32, Point<Pixels>)> = (0..=SAMPLES)
+    let samples: Vec<Point<Pixels>> = (0..=SAMPLES)
         .map(|step| {
             let level = f32::from(step) / f32::from(SAMPLES);
-            (level, plot.position(level, curve::output(curve, level)))
+            plot.position(level, curve::output(curve, level))
         })
         .collect();
-    if end > start {
-        let mut area = PathBuilder::fill();
-        area.move_to(plot.position(start, floor));
-        for (_, sample) in samples
-            .iter()
-            .filter(|(level, _)| *level > start && *level <= end)
-        {
-            area.line_to(*sample);
-        }
-        area.line_to(plot.position(end, curve::output(curve, end)));
-        area.line_to(plot.position(end, floor));
-        area.close();
-        if let Ok(path) = area.build() {
-            window.paint_path(path, colors.area);
-        }
+    let mut area = PathBuilder::fill();
+    area.move_to(plot.position(0.0, 0.0));
+    for sample in &samples {
+        area.line_to(*sample);
     }
-    let mut line = PathBuilder::stroke(px(2.0));
-    let mut points = samples.iter().map(|(_, sample)| *sample);
+    area.line_to(plot.position(1.0, 0.0));
+    area.close();
+    if let Ok(path) = area.build() {
+        window.paint_path(path, colors.area);
+    }
+    let mut line = PathBuilder::stroke(px(LINE_WIDTH));
+    let mut points = samples.iter().copied();
     if let Some(first) = points.next() {
         line.move_to(first);
     }

@@ -11,5 +11,9 @@ pub enum Reading {
     Travel,
     Value,
     RestLevel,
+    SingleRestLevel,
+    ParallelRestLevel,
     BottomLevel,
+    AboveRest,
+    ScanOrder,
 }

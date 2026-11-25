@@ -142,7 +142,7 @@ pub(super) const fn name(effect: &Effect) -> &'static str {
 pub(super) const fn description(effect: &Effect) -> &'static str {
     match effect {
         Effect::RainbowWave(_) => "A band of colours moves across the keys",
-        Effect::Scanner(_) => "A window sweeps across the keys; keys outside it dim",
+        Effect::Scanner(_) => "A bar of light sweeps across the keys",
         Effect::Breathing(_) => "All keys fade down and up",
         Effect::HueCycle(_) => "All keys change colour together",
         Effect::KeyRipple(_) => "Key presses send out ripples",
@@ -151,7 +151,7 @@ pub(super) const fn description(effect: &Effect) -> &'static str {
         Effect::AnalogSpotlight(_) => "Keys around a pressed key light up with its depth",
         Effect::AnalogGlow(_) => "Pressed keys and their neighbours glow with the depth",
         Effect::AnalogRgbFill(_) => "The three bottom-right keys mix red, green and blue",
-        Effect::KeyTest(_) => "Green while a key sends a press, red while held below actuation",
+        Effect::KeyTest(_) => "Shows the Rapid Trigger state of each key",
         Effect::SimplexNoise(_) => "Two colours drift across the keys like clouds",
         Effect::PolarGradient(_) => "Two colours swirl around the centre",
     }
@@ -407,13 +407,13 @@ impl Dial {
                 _,
             ) => "Speed",
             (Self::Width, _) => "Width",
-            (Self::SpreadSpeed, _) => "Spread speed",
-            (Self::FadeSpeed, _) => "Fade speed",
-            (Self::Level, Effect::Breathing(_)) => "Secondary brightness",
-            (Self::Level, _) => "Base brightness",
+            (Self::SpreadSpeed, _) => "Spread Speed",
+            (Self::FadeSpeed, _) => "Fade Speed",
+            (Self::Level, Effect::Breathing(_)) => "Secondary Brightness",
+            (Self::Level, _) => "Base Brightness",
             (Self::NoiseScale, _) => "Scale",
-            (Self::Spin, _) => "Spin speed",
-            (Self::Twist, _) => "Spiral speed",
+            (Self::Spin, _) => "Spin Speed",
+            (Self::Twist, _) => "Spiral Speed",
         }
     }
 
@@ -529,6 +529,7 @@ mod tests {
             key_rows: 6,
             key_columns: 17,
             profiles: 4,
+            linked_profiles: 0,
             layouts: Vec::new(),
             lightbar_leds: 10,
             host_signals: true,

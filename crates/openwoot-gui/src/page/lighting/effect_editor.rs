@@ -1,9 +1,8 @@
 use gpui_kit::{
-    AppContext as _, Context, Div, FontWeight, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, Stateful, StatefulInteractiveElement as _,
-    Styled as _, Window,
+    AppContext as _, Context, Div, InteractiveElement as _, IntoElement, ParentElement as _,
+    Render, SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Window,
     assets::IconName as Catalog,
-    component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex},
+    component::{ActiveTheme as _, h_flex, v_flex},
     div,
     prelude::FluentBuilder as _,
     px,
@@ -14,17 +13,19 @@ use openwoot_protocol::{
 };
 
 use super::{
-    LightingPage, add_button, banner,
+    LightingPage, add_button,
     effect::{self, BASE_KINDS, LAYER_KINDS, SCAN},
     palette::PRESETS,
-    pill, sunken, tile, wide_slider,
+    pill, remove_button, tile, tiles_box, wide_slider,
 };
 use crate::{
     dropdown::{Dropdown, Item},
     panel,
 };
 
-const LAYERS_WIDTH: f32 = 180.0;
+const BASE_COLUMN: f32 = 170.0;
+const SELECTION_COLUMN: f32 = 300.0;
+const BRIGHTNESS_WIDTH: f32 = 368.0;
 const WIDE_CARD: f32 = 760.0;
 const STATIC_DESCRIPTION: &str = "Keys show their own colours";
 
@@ -46,65 +47,73 @@ impl LightingPage {
         let settings = self.settings.as_ref()?;
         let brightness = self.brightness.read(cx).value().end();
         let main = self.layer == Layer::Base;
-        let card = panel::section("Effects", None, cx).child(
-            h_flex()
-                .w_full()
-                .gap_6()
-                .items_start()
-                .child(div().flex_1().min_w_0().child(panel::field(
-                    "Presets",
-                    Self::preset_menu(cx),
-                    cx,
-                )))
-                .child(div().flex_1().min_w_0().child(panel::field(
-                    "Global brightness",
-                    wide_slider(&self.brightness, format!("{brightness:.0} %"), cx),
-                    cx,
-                ))),
-        );
+        let top = h_flex()
+            .w_full()
+            .gap_6()
+            .items_start()
+            .child(div().flex_1().min_w_0().child(panel::field(
+                "Presets",
+                Self::preset_menu(cx),
+                cx,
+            )))
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(BRIGHTNESS_WIDTH))
+                    .child(panel::field(
+                        "Global Brightness",
+                        wide_slider(&self.brightness, format!("{brightness:.0} %"), false, cx),
+                        cx,
+                    )),
+            );
+        let notice = if main {
+            self.base()
+                .map(|_| "The colour of the base effect overrides the colour of the keys.")
+        } else {
+            Some("RGB effects are only displayed and adjustable on the Main Layer.")
+        };
+        let header = v_flex()
+            .w_full()
+            .gap_4()
+            .child(top)
+            .children(notice.map(|notice| panel::warning(notice, cx)));
+        let body = v_flex().w_full().gap_6().child(header);
+        let card = panel::section("Effects", None, cx).p(px(super::CARD_PADDING));
         if !main {
-            return Some(card.child(banner("Effects show on the main layer only", cx)));
+            return Some(card.child(body));
         }
         let wide = f32::from(panel::content_width(window)) - super::COLOURS_WIDTH >= WIDE_CARD;
         let layers = v_flex()
             .flex_none()
-            .w(px(LAYERS_WIDTH))
-            .gap_5()
-            .child(panel::field("Base layer", self.base_pill(cx), cx))
+            .w(px(BASE_COLUMN))
+            .gap_8()
+            .child(panel::field("Base Layer", self.base_pill(cx), cx))
             .child(panel::field(
-                "Effect layers",
+                "Effect Layers",
                 self.effect_layers(&settings.effects, cx),
                 cx,
             ));
-        let selection = panel::field("Effect selection", self.effect_tiles(cx), cx);
-        let parameters = panel::field("Effect parameters", self.effect_parameters(cx), cx);
+        let selection = panel::field("Effect Selection", self.effect_tiles(cx), cx);
+        let parameters = panel::field("Effect Parameters", self.effect_parameters(cx), cx);
         let editor = if wide {
             h_flex()
                 .w_full()
-                .gap_6()
+                .gap_4()
                 .items_start()
                 .child(layers)
-                .child(div().flex_1().min_w_0().child(selection))
+                .child(div().flex_none().w(px(SELECTION_COLUMN)).child(selection))
                 .child(div().flex_1().min_w_0().child(parameters))
         } else {
-            h_flex().w_full().gap_6().items_start().child(layers).child(
+            h_flex().w_full().gap_4().items_start().child(layers).child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .gap_5()
+                    .gap_6()
                     .child(selection)
                     .child(parameters),
             )
         };
-        Some(
-            card.when(self.base().is_some(), |this| {
-                this.child(banner(
-                    "The base effect's colours replace the key colours",
-                    cx,
-                ))
-            })
-            .child(editor),
-        )
+        Some(card.child(body.child(editor)))
     }
 
     pub(super) fn focused_index(&self) -> Option<usize> {
@@ -145,6 +154,7 @@ impl LightingPage {
     fn preset_menu(cx: &Context<Self>) -> impl IntoElement + use<> {
         let page = cx.entity().downgrade();
         Dropdown::new("color-presets")
+            .small()
             .placeholder("Pick a preset")
             .items(PRESETS.iter().map(|preset| Item::new(preset.name)))
             .on_select(move |index, window, cx| {
@@ -157,15 +167,8 @@ impl LightingPage {
         let (icon, name) = self.base().map_or((Catalog::Ban, "Static"), |effect| {
             (effect::icon(effect), effect::name(effect))
         });
-        pill(
-            "base-effect",
-            Some(icon),
-            name,
-            None,
-            self.focus == Focus::Base,
-            cx,
-        )
-        .on_click(cx.listener(|this, _, window, cx| this.focus_on(Focus::Base, window, cx)))
+        pill("base-effect", icon, name, self.focus == Focus::Base, cx)
+            .on_click(cx.listener(|this, _, window, cx| this.focus_on(Focus::Base, window, cx)))
     }
 
     fn effect_layers(&self, effects: &[Effect], cx: &Context<Self>) -> Div {
@@ -187,9 +190,8 @@ impl LightingPage {
                         };
                         pill(
                             SharedString::from(format!("effect-layer-{index}")),
-                            Some(effect::icon(effect)),
+                            effect::icon(effect),
                             effect::name(effect),
-                            None,
                             self.focus == Focus::Effect(index),
                             cx,
                         )
@@ -201,38 +203,26 @@ impl LightingPage {
                         .on_drop(cx.listener(move |this, drag: &EffectDrag, window, cx| {
                             this.move_effect(drag.index, index, window, cx);
                         }))
-                        .child(Self::remove_button(index, cx))
+                        .child(
+                            remove_button(format!("remove-effect-{index}")).on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.remove_effect(index, window, cx);
+                                },
+                            )),
+                        )
                     }),
             )
             .when(effects.len() < MAX_EFFECTS, |this| {
                 this.child(
-                    add_button("add-effect-layer", "Add RGB Fx layer", cx)
+                    add_button("add-effect-layer", "Add RGB Fx Layer", cx)
                         .on_click(cx.listener(|this, _, window, cx| this.add_layer(window, cx))),
                 )
             })
     }
 
-    fn remove_button(index: usize, cx: &Context<Self>) -> Stateful<Div> {
-        let theme = cx.theme();
-        div()
-            .id(SharedString::from(format!("remove-effect-{index}")))
-            .flex_none()
-            .size(px(26.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(6.0))
-            .text_color(theme.muted_foreground)
-            .hover(|style| style.bg(theme.secondary))
-            .child(Icon::new(IconName::Close).xsmall())
-            .on_click(cx.listener(move |this, _, window, cx| {
-                cx.stop_propagation();
-                this.remove_effect(index, window, cx);
-            }))
-    }
-
     fn effect_tiles(&self, cx: &Context<Self>) -> Div {
-        let grid = div().grid().grid_cols(2).gap_1();
+        let grid = div().grid().grid_cols(2).gap_2();
         let grid = match self.focus {
             Focus::Base => {
                 let current = self.base().copied();
@@ -289,7 +279,7 @@ impl LightingPage {
                 }))
             }
         };
-        sunken(cx).p_2().child(grid)
+        tiles_box(cx).child(grid)
     }
 
     fn focus_on(&mut self, focus: Focus, window: &mut Window, cx: &mut Context<Self>) {
@@ -423,22 +413,12 @@ impl LightingPage {
 
 impl Render for EffectDrag {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        h_flex()
-            .w(px(LAYERS_WIDTH))
-            .h(px(46.0))
-            .px_4()
-            .gap_3()
-            .items_center()
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.primary)
-            .bg(theme.background)
-            .shadow_lg()
-            .text_sm()
-            .font_weight(FontWeight::MEDIUM)
-            .text_color(theme.foreground)
-            .child(Icon::new(self.icon).small())
-            .child(self.name)
+        div().w(px(BASE_COLUMN)).shadow_lg().child(pill(
+            "effect-drag",
+            self.icon,
+            self.name,
+            true,
+            cx,
+        ))
     }
 }

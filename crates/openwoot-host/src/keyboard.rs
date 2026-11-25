@@ -84,12 +84,6 @@ pub async fn firmware_version(hid: &Hid) -> Result<(DeviceInfo, Version), Error>
     Ok((device, version))
 }
 
-pub async fn diagnostics(hid: &Hid) -> Result<(DeviceInfo, Report), Error> {
-    let (device, mut interface) = open_running(hid).await?;
-    let report = read_diagnostics(&mut interface).await?;
-    Ok((device, report))
-}
-
 pub async fn read_diagnostics(reports: &mut impl Reports) -> Result<Report, Error> {
     match channel::request::<GetDiagnostics>(reports, &()).await {
         Ok(report) => Ok(report),

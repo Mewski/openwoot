@@ -1,6 +1,6 @@
 use heapless::Vec;
 use openwoot_protocol::lightbar::{
-    Background, Effect, Entries, Entry, ProfileIndicator, Range, Settings,
+    Background, Effect, Entries, Entry, ProfileIndicator, Range, Settings, Title,
 };
 
 #[must_use]
@@ -16,6 +16,7 @@ pub const fn lightbar_profile(brightness: Option<u8>) -> Settings {
 #[must_use]
 pub const fn lightbar_indicator(leds: u8, background: Background, segments: u8) -> Entries {
     Vec::from_array([Entry {
+        title: Title::new(),
         condition: None,
         effect: Effect::ProfileIndicator(ProfileIndicator {
             range: Range {

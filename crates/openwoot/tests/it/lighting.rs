@@ -13,6 +13,7 @@ mod idle;
 mod indicators;
 mod lightbar;
 mod overlays;
+mod readback;
 mod support;
 mod task;
 

@@ -38,6 +38,7 @@ gd32f425-pac = { workspace = true, features = ["critical-section", "rt"] }
 
 [dev-dependencies]
 critical-section = { workspace = true, features = ["std"] }
+embassy-time = { workspace = true, features = ["generic-queue-8", "mock-driver"] }
 
 [lints]
 workspace = true

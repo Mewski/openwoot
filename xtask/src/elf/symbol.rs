@@ -9,6 +9,7 @@ pub(crate) enum SymbolKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Symbol {
     pub(crate) name: String,
+    pub(crate) link_name: String,
     pub(crate) address: u32,
     pub(crate) size: u32,
     pub(crate) kind: SymbolKind,

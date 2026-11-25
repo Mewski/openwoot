@@ -1,4 +1,5 @@
 mod actuation;
+mod cards;
 mod distance;
 mod edits;
 mod effective;
@@ -14,11 +15,12 @@ mod visibility;
 
 pub(super) use self::{
     actuation::ACTUATION_HELP,
-    distance::{Committed, DistanceField, Shown},
+    cards::{art_slot, card_row, tuning_card},
+    distance::{Committed, DistanceField, Shown, distance_block},
     feedback::{Pressed, meter, pressed_key},
     ranges::Span,
     rapid_trigger::{
-        RAPID_TRIGGER_HELP, sensitivity_parts, sensitivity_subscription, show_sensitivity,
+        RAPID_TRIGGER_HELP, sensitivity_group, sensitivity_subscription, show_sensitivity,
     },
     selecting::{actions, stage, tuning_actions, tuning_keyboard},
     switch_art::switch,

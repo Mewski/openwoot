@@ -129,6 +129,11 @@ impl<Noise: NoiseStatistics> Sensor<Noise> {
     }
 
     #[must_use]
+    pub const fn is_above_rest(&self) -> bool {
+        self.value > self.rest_threshold()
+    }
+
+    #[must_use]
     pub fn travel(&self) -> u16 {
         self.switch
             .travel(self.value, self.rest_level, self.bottom_level)

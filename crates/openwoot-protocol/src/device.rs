@@ -1,7 +1,12 @@
+use heapless::String;
 use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
 use crate::configuration::{Capabilities, Invalid, Validate};
+
+pub const NAME_LEN: usize = 40;
+
+pub type Name = String<NAME_LEN>;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
 pub struct Settings {
@@ -9,6 +14,13 @@ pub struct Settings {
     pub keyboard: KeyboardFormat,
     pub speed: Speed,
     pub gamepad_polling: PollingRate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+pub struct SettingsState {
+    pub active: Settings,
+    pub chosen: Settings,
+    pub negotiated: Option<Speed>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]

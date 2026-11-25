@@ -16,6 +16,7 @@ mod lightbar;
 mod matrix;
 mod output;
 mod overlay;
+mod readback;
 mod signals;
 mod truncate;
 

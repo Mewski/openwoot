@@ -1,7 +1,7 @@
 mod halves;
 mod thumb;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 
 use anyhow::{Context, Result, bail, ensure};
 use halves::Half;
@@ -11,14 +11,14 @@ use thumb::Instruction;
 use crate::elf::{Elf, RelocationKind, Symbol, SymbolKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Reference {
-    pub(super) at: u32,
-    pub(super) target: u32,
-    pub(super) node: usize,
-    pub(super) call: bool,
+pub(crate) struct Reference {
+    pub(crate) at: u32,
+    pub(crate) target: u32,
+    pub(crate) node: usize,
+    pub(crate) call: bool,
 }
 
-pub(super) struct CallGraph<'a> {
+pub(crate) struct CallGraph<'a> {
     elf: &'a Elf<'a>,
     nodes: Vec<Symbol>,
     markers: Vec<Symbol>,
@@ -26,11 +26,12 @@ pub(super) struct CallGraph<'a> {
 }
 
 impl<'a> CallGraph<'a> {
-    pub(super) fn new(elf: &'a Elf<'a>) -> Result<Self> {
+    pub(crate) fn new(elf: &'a Elf<'a>) -> Result<Self> {
         let (mut markers, mut nodes): (Vec<Symbol>, Vec<Symbol>) =
             elf.symbols()?.into_iter().partition(Symbol::is_marker);
         nodes.extend(elf.allocated_sections().iter().map(|section| Symbol {
             name: section.name.clone(),
+            link_name: section.name.clone(),
             address: section.address,
             size: 0,
             kind: SymbolKind::Object,
@@ -52,43 +53,43 @@ impl<'a> CallGraph<'a> {
         Ok(graph)
     }
 
-    pub(super) fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.nodes.len()
     }
 
-    pub(super) fn symbol(&self, node: usize) -> Option<&Symbol> {
+    pub(crate) fn symbol(&self, node: usize) -> Option<&Symbol> {
         self.nodes.get(node)
     }
 
-    pub(super) fn name(&self, node: usize) -> &str {
+    pub(crate) fn name(&self, node: usize) -> &str {
         self.nodes
             .get(node)
             .map_or("", |symbol| symbol.name.as_str())
     }
 
-    pub(super) fn references(&self, node: usize) -> &[Reference] {
+    pub(crate) fn references(&self, node: usize) -> &[Reference] {
         self.references.get(node).map_or(&[], Vec::as_slice)
     }
 
-    pub(super) fn nodes_named(&self, matches: impl Fn(&str) -> bool) -> Vec<usize> {
+    pub(crate) fn nodes_named(&self, matches: impl Fn(&str) -> bool) -> Vec<usize> {
         (0..self.nodes.len())
             .filter(|&node| matches(self.name(node)))
             .collect()
     }
 
-    pub(super) fn node_at(&self, address: u32) -> Option<usize> {
+    pub(crate) fn node_at(&self, address: u32) -> Option<usize> {
         self.elf.section_at(address)?;
         self.nodes
             .partition_point(|node| node.address <= address)
             .checked_sub(1)
     }
 
-    pub(super) fn is_function(&self, node: usize) -> bool {
+    pub(crate) fn is_function(&self, node: usize) -> bool {
         self.symbol(node)
             .is_some_and(|symbol| symbol.kind == SymbolKind::Function)
     }
 
-    pub(super) fn frame(&self, node: usize) -> Result<u32> {
+    pub(crate) fn frame(&self, node: usize) -> Result<u32> {
         let Some(symbol) = self.symbol(node).filter(|_| self.is_function(node)) else {
             return Ok(0);
         };
@@ -107,7 +108,7 @@ impl<'a> CallGraph<'a> {
         Ok(frame)
     }
 
-    pub(super) fn basepri_writes(&self, node: usize) -> Result<Vec<u32>> {
+    pub(crate) fn basepri_writes(&self, node: usize) -> Result<Vec<u32>> {
         let Some(symbol) = self.symbol(node).filter(|_| self.is_function(node)) else {
             return Ok(Vec::new());
         };
@@ -117,6 +118,15 @@ impl<'a> CallGraph<'a> {
             .filter(|(_, instruction)| instruction.writes_basepri())
             .map(|(address, _)| address)
             .collect())
+    }
+
+    pub(crate) fn reachable(&self, roots: impl IntoIterator<Item = usize>) -> Vec<usize> {
+        reachable(self.len(), roots, |node| {
+            self.references(node)
+                .iter()
+                .map(|reference| reference.node)
+                .collect()
+        })
     }
 
     fn instructions(&self, function: &Symbol) -> Result<Vec<(u32, Instruction)>> {
@@ -281,6 +291,25 @@ fn require_relocated_calls(calls: usize) -> Result<()> {
     Ok(())
 }
 
+fn reachable(
+    len: usize,
+    roots: impl IntoIterator<Item = usize>,
+    successors: impl Fn(usize) -> Vec<usize>,
+) -> Vec<usize> {
+    let mut seen = vec![false; len];
+    let mut queue: VecDeque<usize> = roots.into_iter().collect();
+    let mut nodes = Vec::new();
+    while let Some(node) = queue.pop_front() {
+        let Some(visited) = seen.get_mut(node).filter(|visited| !**visited) else {
+            continue;
+        };
+        *visited = true;
+        nodes.push(node);
+        queue.extend(successors(node));
+    }
+    nodes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,5 +321,16 @@ mod tests {
             "the image has no relocations of its calls; boards link with `--emit-relocs`"
         );
         assert!(require_relocated_calls(1).is_ok());
+    }
+
+    #[test]
+    fn every_node_the_roots_reach_is_visited_once() {
+        let edges: [&[usize]; 6] = [&[1, 2], &[2, 0], &[3], &[], &[0], &[4]];
+        let mut nodes = reachable(edges.len(), [0], |node| edges[node].to_vec());
+        nodes.sort_unstable();
+        assert_eq!(nodes, [0, 1, 2, 3]);
+        let mut nodes = reachable(edges.len(), [3, 5], |node| edges[node].to_vec());
+        nodes.sort_unstable();
+        assert_eq!(nodes, [0, 1, 2, 3, 4, 5]);
     }
 }

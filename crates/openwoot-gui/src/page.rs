@@ -1,5 +1,5 @@
 mod advanced;
-mod diagnostics;
+mod background;
 mod firmware;
 mod gamepad;
 mod lightbar;
@@ -32,7 +32,7 @@ pub(crate) enum Page {
     Settings,
     Switches,
     Firmware,
-    Diagnostics,
+    Background,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,37 +42,21 @@ pub(crate) enum Group {
 }
 
 impl Page {
-    pub(crate) const ALL: [Self; 13] = [
-        Self::Quick,
-        Self::Actuation,
-        Self::RapidTrigger,
-        Self::Remap,
-        Self::Advanced,
-        Self::Gamepad,
-        Self::Lighting,
-        Self::Lightbar,
-        Self::Profiles,
-        Self::Settings,
-        Self::Switches,
-        Self::Firmware,
-        Self::Diagnostics,
-    ];
-
     pub(crate) const fn title(self) -> &'static str {
         match self {
-            Self::Quick => "Quick settings",
-            Self::Actuation => "Actuation point",
+            Self::Quick => "Quick Settings",
+            Self::Actuation => "Actuation Point",
             Self::RapidTrigger => "Rapid Trigger",
             Self::Remap => "Remap",
-            Self::Advanced => "Advanced keys",
+            Self::Advanced => "Advanced Keys",
             Self::Gamepad => "Gamepad",
-            Self::Lighting => "Lighting",
-            Self::Lightbar => "Light bar",
-            Self::Profiles => "My profiles",
-            Self::Settings => "Keyboard settings",
-            Self::Switches => "Switch selector",
-            Self::Firmware => "Firmware",
-            Self::Diagnostics => "Diagnostics",
+            Self::Lighting => "RGB Settings",
+            Self::Lightbar => "Light Indicator",
+            Self::Profiles => "My Profiles",
+            Self::Settings => "Keyboard Settings",
+            Self::Switches => "Switch Selector",
+            Self::Firmware => "Updates",
+            Self::Background => "Background Service",
         }
     }
 
@@ -90,7 +74,7 @@ impl Page {
             Self::Settings => Catalog::Settings,
             Self::Switches => Catalog::ToggleRight,
             Self::Firmware => Catalog::Cpu,
-            Self::Diagnostics => Catalog::Activity,
+            Self::Background => Catalog::RefreshCw,
         })
     }
 
@@ -105,16 +89,12 @@ impl Page {
             | Self::Lighting
             | Self::Lightbar
             | Self::Profiles => Group::Keyboard,
-            Self::Settings | Self::Switches | Self::Firmware | Self::Diagnostics => Group::Device,
+            Self::Settings | Self::Switches | Self::Firmware | Self::Background => Group::Device,
         }
     }
 
-    pub(crate) const fn in_configuration(self) -> bool {
-        matches!(self.group(), Group::Keyboard) && !matches!(self, Self::Quick | Self::Profiles)
-    }
-
     pub(crate) const fn needs_keyboard(self) -> bool {
-        !matches!(self, Self::Firmware)
+        !matches!(self, Self::Firmware | Self::Background)
     }
 
     pub(crate) fn is_available(self, keyboard: Option<&Keyboard>) -> bool {
@@ -164,8 +144,8 @@ impl Page {
             Self::Firmware => cx
                 .new(|cx| firmware::FirmwarePage::new(store, window, cx))
                 .into(),
-            Self::Diagnostics => cx
-                .new(|cx| diagnostics::DiagnosticsPage::new(store, window, cx))
+            Self::Background => cx
+                .new(|cx| background::BackgroundPage::new(&store, cx))
                 .into(),
         }
     }

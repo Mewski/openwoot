@@ -233,7 +233,7 @@ fn host_id(signal: Signal) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use openwoot_protocol::lightbar::{Builtin, Comparator};
+    use openwoot_protocol::lightbar::{Builtin, Comparator, Title};
 
     use super::*;
     use crate::page::lightbar::entry::{Kind, Matrix, Timing, compare, single};
@@ -247,6 +247,7 @@ mod tests {
 
     fn conditional(term: Term) -> Entry {
         Entry {
+            title: Title::new(),
             condition: Some(single(term)),
             effect: Kind::Meter.effect(MATRIX),
         }

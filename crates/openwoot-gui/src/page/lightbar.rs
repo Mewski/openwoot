@@ -4,13 +4,17 @@ mod conditions;
 mod entry;
 mod host;
 mod led_range;
+mod live;
 mod number;
 mod parameters;
 mod preset;
 mod preview;
 mod swatch;
 
-use std::{mem, time::Duration};
+use std::{
+    mem,
+    time::{Duration, Instant},
+};
 
 use gpui_kit::{
     AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
@@ -44,9 +48,8 @@ use crate::{
 };
 
 const SEND_DELAY: Duration = Duration::from_millis(150);
-const PRESETS_WIDTH: f32 = 260.0;
-const ACTIVE_WIDTH: f32 = 280.0;
-const CREATOR_ACTIVE_WIDTH: f32 = 340.0;
+const PRESETS_WIDTH: f32 = 320.0;
+const ACTIVE_WIDTH: f32 = 400.0;
 const PERIOD_STEP_MS: f32 = 100.0;
 const PERIOD_MAX_MS: f32 = 10_000.0;
 const WHITE: Rgb = Rgb {
@@ -63,6 +66,7 @@ pub(crate) struct LightbarPage {
     sent: Sent,
     key_brightness: Option<u8>,
     chosen: Option<Chosen>,
+    renaming: Option<Chosen>,
     owner: Owner,
     tab: Tab,
     define: bool,
@@ -76,10 +80,14 @@ pub(crate) struct LightbarPage {
     brightness: Entity<SliderState>,
     period: Entity<SliderState>,
     search: Entity<InputState>,
+    rename: Entity<InputState>,
     pickers: Vec<(Swatch, Entity<ColorPicker>)>,
     fields: Vec<(Field, Entity<InputState>)>,
     generation: u64,
     pending: Pending,
+    live: Option<lightbar::Colors>,
+    rendered_at: Instant,
+    watch: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -130,6 +138,7 @@ impl LightbarPage {
                 .step(PERIOD_STEP_MS)
         });
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search effects"));
+        let rename = cx.new(|cx| InputState::new(window, cx));
         let pickers = Self::color_pickers(window, cx);
         let fields: Vec<(Field, Entity<InputState>)> = Field::all()
             .into_iter()
@@ -176,7 +185,9 @@ impl LightbarPage {
                 }
             }),
         ];
-        subscriptions.extend(Self::control_subscriptions(&pickers, &fields, window, cx));
+        subscriptions.extend(Self::control_subscriptions(
+            &pickers, &fields, &rename, window, cx,
+        ));
         let mut page = Self {
             store,
             profile: None,
@@ -185,6 +196,7 @@ impl LightbarPage {
             sent: Sent::default(),
             key_brightness: None,
             chosen: None,
+            renaming: None,
             owner: Owner::Profile,
             tab: Tab::Presets,
             define: true,
@@ -198,10 +210,14 @@ impl LightbarPage {
             brightness,
             period,
             search,
+            rename,
             pickers,
             fields,
             generation: 0,
             pending: Pending::default(),
+            live: None,
+            rendered_at: Instant::now(),
+            watch: None,
             _subscriptions: subscriptions,
         };
         page.load(window, cx);
@@ -231,25 +247,35 @@ impl LightbarPage {
     fn control_subscriptions(
         pickers: &[(Swatch, Entity<ColorPicker>)],
         fields: &[(Field, Entity<InputState>)],
+        rename: &Entity<InputState>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<Subscription> {
-        let mut subscriptions = Vec::new();
+        let mut subscriptions = vec![cx.subscribe_in(
+            rename,
+            window,
+            |this, state, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                    let text = state.read(cx).value();
+                    this.finish_rename(&text, window, cx);
+                }
+                InputEvent::Change | InputEvent::Focus => {}
+            },
+        )];
         for (swatch, picker) in pickers {
             let swatch = *swatch;
             subscriptions.push(cx.subscribe_in(
                 picker,
                 window,
                 move |this, _, event: &ColorPickerEvent, window, cx| {
-                    if let ColorPickerEvent::Change(color) = event {
-                        let color = *color;
-                        let (led, leds) = (this.led, this.leds(cx));
-                        this.edit_chosen(
-                            |entry| swatch.set(&mut entry.effect, led, leds, color),
-                            window,
-                            cx,
-                        );
-                    }
+                    let ColorPickerEvent::Change(color) = event;
+                    let color = *color;
+                    let (led, leds) = (this.led, this.leds(cx));
+                    this.edit_chosen(
+                        |entry| swatch.set(&mut entry.effect, led, leds, color),
+                        window,
+                        cx,
+                    );
                 },
             ));
         }
@@ -280,6 +306,7 @@ impl LightbarPage {
         let profile = self.store.read(cx).active().filter(|_| leds > 0);
         if profile != self.profile {
             self.chosen = None;
+            self.renaming = None;
         }
         self.profile = profile;
         self.problem = None;
@@ -288,6 +315,7 @@ impl LightbarPage {
             self.forget(cx);
             return;
         };
+        self.watch_bar(cx);
         let settings = self
             .store
             .update(cx, |store, cx| store.fetch::<GetLightbar, _>(profile, cx));
@@ -338,8 +366,10 @@ impl LightbarPage {
         self.global = None;
         self.sent = Sent::default();
         self.chosen = None;
+        self.renaming = None;
         self.host_ids = None;
         self.problem = None;
+        self.stop_watching();
         cx.notify();
     }
 
@@ -641,6 +671,7 @@ impl LightbarPage {
 
 impl Render for LightbarPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.rendered_at = Instant::now();
         let cards = match self.tab {
             Tab::Presets => h_flex()
                 .w_full()
@@ -666,25 +697,28 @@ impl Render for LightbarPage {
                 .child(
                     div()
                         .flex_none()
-                        .w(px(CREATOR_ACTIVE_WIDTH))
+                        .w(px(ACTIVE_WIDTH))
                         .children(self.active_card(cx)),
                 )
                 .child(div().flex_1().min_w_0().children(self.parameters_card(cx))),
         };
-        let stage = v_flex()
-            .gap_4()
-            .children(self.preview(window, cx))
-            .children(self.brightness_row(cx));
+        let stage = panel::Stage::element(
+            v_flex()
+                .items_center()
+                .gap_10()
+                .children(self.preview(window, cx))
+                .children(self.brightness_row(cx)),
+        )
+        .fit_content();
         let body = v_flex()
             .w_full()
-            .gap_5()
-            .children(self.heading(cx))
+            .gap_3()
             .when_some(self.problem.clone(), |this, problem| {
                 this.child(div().text_xs().text_color(cx.theme().danger).child(problem))
             })
             .when(self.settings.is_some(), |this| this.child(cards))
             .children(self.host_card(cx));
-        panel::page_with_stage("lightbar-body", stage, body)
+        panel::page_with_stage("lightbar-body", stage, self.heading(cx), body)
     }
 }
 

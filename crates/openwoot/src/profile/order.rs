@@ -1,4 +1,5 @@
 use heapless::Vec;
+use openwoot_protocol::profile::Slot;
 use serde::{Deserialize, Serialize};
 
 use crate::storage::{Record, Scope};
@@ -29,7 +30,12 @@ impl Order {
 
     #[must_use]
     pub fn scope(&self, slot: u8) -> Scope {
-        Scope::Profile(self.storage_slot(slot))
+        let profile = Slot::new(slot);
+        if profile.is_linked() {
+            Scope::Linked(profile.index())
+        } else {
+            Scope::Profile(self.storage_slot(slot))
+        }
     }
 
     #[must_use]

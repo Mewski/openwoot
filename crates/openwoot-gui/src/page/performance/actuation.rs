@@ -1,12 +1,14 @@
 use gpui_kit::{
-    App, AppContext as _, Axis, Context, Div, Entity, FontWeight, IntoElement, ParentElement as _,
-    Render, SharedString, Styled as _, Subscription, Window,
+    App, AppContext as _, Axis, Context, Div, Entity, FontWeight, Hsla, IntoElement,
+    ParentElement as _, Render, SharedString, Styled as _, Subscription, Window,
     component::{ActiveTheme as _, h_flex, v_flex},
     div,
     prelude::FluentBuilder as _,
+    px, relative,
 };
 
 use super::{
+    cards::{art_slot, card_row, tuning_card},
     distance::{Committed, DistanceField, Shown},
     effective, feedback,
     ranges::Span,
@@ -22,8 +24,12 @@ use crate::{
     usage,
 };
 
-const PROMPT: &str = "To adjust the actuation point, select one or more keys first";
-pub(crate) const ACTUATION_HELP: &str = "Actuation point is the distance a key must be pressed to register a keystroke. At 0.1 mm the key activates the moment you press it; at full travel it must be pressed all the way down.\n\nA lower actuation point responds faster in games but makes accidental keystrokes more likely.";
+const PROMPT: &str = "To adjust actuation point, please select one or more keys first";
+pub(crate) const ACTUATION_HELP: &str =
+    "Actuation point is the distance a key must be pressed to register a keystroke.";
+const COLUMN_WIDTH: f32 = 760.0;
+const CARD_MAX_WIDTH: f32 = 380.0;
+const VALUE_LINE_HEIGHT: f32 = 1.4;
 
 pub(crate) struct ActuationPage {
     store: Entity<Store>,
@@ -130,86 +136,83 @@ impl ActuationPage {
                     .span
                     .fraction(current.actuation.millimetres)
             });
-        panel::section(
-            "Set actuation point",
-            Some("Set the exact distance a key must be pressed before it registers.".into()),
-            cx,
-        )
-        .child(
-            v_flex()
-                .gap_1()
-                .child(panel::label("Changing actuation point for", cx))
-                .child(
-                    div()
-                        .text_base()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(cx.theme().primary)
-                        .child(keys_text(selected)),
+        tuning_card(
+            panel::section(
+                "Set Actuation Point",
+                Some(
+                    "Set the exact distance a key must be pressed before it registers a keypress."
+                        .into(),
                 ),
+                cx,
+            )
+            .child(
+                v_flex()
+                    .child(strong_label("Changing actuation point for", cx))
+                    .child(value(keys_text(selected), cx.theme().primary)),
+            )
+            .child(
+                h_flex()
+                    .gap_5()
+                    .items_center()
+                    .child(art_slot(switch_art::switch(depth, cx.theme().success, cx)))
+                    .child(self.field.clone()),
+            ),
+            selected > 0,
         )
-        .child(
-            h_flex()
-                .gap_6()
-                .items_center()
-                .child(switch_art::switch(depth, cx.theme().success, cx))
-                .child(self.field.clone()),
-        )
-        .when(selected == 0, |this| this.opacity(0.5))
     }
 
     fn feedback(&self, keyboard: &Keyboard, cx: &App) -> Div {
         let feed = self.feed.read(cx);
         if feed.is_unsupported() {
-            return panel::section(
-                "Visual feedback",
-                Some("This keyboard does not report key travel.".into()),
-                cx,
+            return tuning_card(
+                panel::section(
+                    "Visual Feedback",
+                    Some("This keyboard does not report key travel.".into()),
+                    cx,
+                ),
+                false,
             );
         }
         let theme = cx.theme();
         let pressed = feedback::pressed_key(feed, self.tuning.read(cx), keyboard);
         let pressed = pressed.as_ref();
-        panel::section(
-            "Visual feedback",
-            Some(
-                "Press a key to test the actuation point; the bar turns yellow when it activates."
-                    .into(),
-            ),
-            cx,
-        )
-        .child(
-            v_flex()
-                .gap_1()
-                .child(panel::label("Pressed key", cx))
-                .child(
-                    div()
-                        .text_base()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.foreground)
-                        .child(pressed.map_or_else(|| "–".into(), |pressed| pressed.name.clone())),
-                ),
-        )
-        .child(
-            h_flex()
-                .gap_6()
-                .items_center()
-                .child(switch_art::switch(
-                    pressed.map_or(0.0, |pressed| pressed.travel),
-                    feedback::meter_color(pressed, cx),
-                    cx,
-                ))
-                .child(feedback::meter(Axis::Vertical, pressed, cx))
-                .child(
-                    div().text_sm().text_color(theme.muted_foreground).child(
-                        pressed.map_or_else(|| "–".into(), |pressed| pressed.readout.clone()),
+        tuning_card(
+            panel::section(
+                "Visual Feedback",
+                Some("Press a key to test the actuation point.".into()),
+                cx,
+            )
+            .child(v_flex().child(strong_label("Pressed key", cx)).child(value(
+                pressed.map_or_else(|| "–".into(), |pressed| pressed.name.clone()),
+                theme.foreground,
+            )))
+            .child(
+                h_flex()
+                    .gap_5()
+                    .items_center()
+                    .child(art_slot(switch_art::switch(
+                        pressed.map_or(0.0, |pressed| pressed.travel),
+                        feedback::meter_color(pressed, cx),
+                        cx,
+                    )))
+                    .child(feedback::meter(Axis::Vertical, pressed, cx))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.group_box_foreground)
+                            .child(
+                                pressed
+                                    .map_or_else(|| "–".into(), |pressed| pressed.readout.clone()),
+                            ),
                     ),
-                ),
+            ),
+            true,
         )
     }
 }
 
 impl Render for ActuationPage {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.feed.update(cx, TravelFeed::keep_alive);
         let page = panel::page();
         let Some(keyboard) = self.store.read(cx).keyboard() else {
@@ -226,29 +229,34 @@ impl Render for ActuationPage {
             keyboard,
             &self.tuning,
             |key| self.face(keyboard, key, cx),
-            window,
             cx,
         );
         panel::page_with_stage(
             "actuation-page",
-            selecting::stage(view, selected, PROMPT, cx),
-            v_flex()
-                .w_full()
-                .gap_5()
-                .child(panel::heading(
-                    Page::Actuation.title(),
-                    Some(ACTUATION_HELP.into()),
-                    selecting::tuning_actions(&self.tuning, keyboard, cx),
-                    cx,
-                ))
-                .child(
-                    h_flex()
-                        .w_full()
-                        .items_stretch()
-                        .gap_4()
-                        .child(self.setter(keyboard, cx).flex_1().min_w_0())
-                        .child(self.feedback(keyboard, cx).flex_1().min_w_0()),
+            selecting::stage(view, selected, PROMPT),
+            h_flex().w_full().justify_center().child(
+                div().w_full().max_w(px(COLUMN_WIDTH)).child(
+                    panel::heading(Page::Actuation.title())
+                        .help(ACTUATION_HELP)
+                        .trailing(selecting::tuning_actions(&self.tuning, keyboard, cx)),
                 ),
+            ),
+            h_flex().w_full().justify_center().child(
+                card_row()
+                    .max_w(px(COLUMN_WIDTH))
+                    .child(
+                        self.setter(keyboard, cx)
+                            .flex_1()
+                            .min_w_0()
+                            .max_w(px(CARD_MAX_WIDTH)),
+                    )
+                    .child(
+                        self.feedback(keyboard, cx)
+                            .flex_1()
+                            .min_w_0()
+                            .max_w(px(CARD_MAX_WIDTH)),
+                    ),
+            ),
         )
     }
 }
@@ -259,6 +267,23 @@ fn keys_text(count: usize) -> SharedString {
     } else {
         format!("{count} keys").into()
     }
+}
+
+fn strong_label(text: &'static str, cx: &App) -> Div {
+    div()
+        .text_sm()
+        .font_weight(FontWeight::BOLD)
+        .text_color(cx.theme().foreground)
+        .child(SharedString::from(text.to_uppercase()))
+}
+
+fn value(text: SharedString, color: Hsla) -> Div {
+    div()
+        .text_base()
+        .line_height(relative(VALUE_LINE_HEIGHT))
+        .font_weight(FontWeight::BOLD)
+        .text_color(color)
+        .child(text)
 }
 
 #[cfg(test)]

@@ -1,38 +1,24 @@
 use gpui_kit::{
-    App, Div, Entity, FontWeight, ParentElement as _, SharedString, Styled as _, Window,
-    component::{ActiveTheme as _, Disableable as _, Sizable as _, button::Button, h_flex, v_flex},
-    div,
+    App, Div, Entity, ParentElement as _, SharedString, Styled as _, Window, component::h_flex,
 };
 
 use super::tuning::{Tuning, present};
 use crate::{
     keyboard::{KeyFace, KeyboardView},
-    panel,
+    panel::{ActionButton, Stage},
     store::Keyboard,
 };
 
-pub(crate) fn caption(selected: usize, prompt: &str, cx: &App) -> Div {
-    let theme = cx.theme();
-    let (text, color) = match selected {
-        0 => (prompt.to_uppercase(), theme.muted_foreground),
-        1 => ("1 KEY SELECTED".to_owned(), theme.primary),
-        count => (format!("{count} KEYS SELECTED"), theme.primary),
-    };
-    h_flex().w_full().justify_center().child(
-        div()
-            .text_xs()
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(color)
-            .child(SharedString::from(text)),
-    )
+pub(crate) fn stage(view: KeyboardView, selected: usize, prompt: &str) -> Stage {
+    Stage::new(view).caption(caption(selected, prompt), selected > 0)
 }
 
-pub(crate) fn stage(view: KeyboardView, selected: usize, prompt: &str, cx: &App) -> Div {
-    v_flex()
-        .w_full()
-        .gap_4()
-        .child(panel::stage(view))
-        .child(caption(selected, prompt, cx))
+fn caption(selected: usize, prompt: &str) -> SharedString {
+    match selected {
+        0 => SharedString::from(prompt.to_owned()),
+        1 => "1 key selected".into(),
+        count => format!("{count} keys selected").into(),
+    }
 }
 
 pub(crate) fn actions(
@@ -44,16 +30,12 @@ pub(crate) fn actions(
     h_flex()
         .gap_2()
         .child(
-            Button::new("select-all-keys")
-                .small()
-                .label("Select all keys")
+            ActionButton::new("select-all-keys", "Select all keys")
                 .disabled(selected >= total)
                 .on_click(move |_, window, cx| select_all(window, cx)),
         )
         .child(
-            Button::new("discard-selection")
-                .small()
-                .label("Discard selection")
+            ActionButton::new("discard-selection", "Discard selection")
                 .disabled(selected == 0)
                 .on_click(move |_, window, cx| discard(window, cx)),
         )
@@ -79,14 +61,12 @@ pub(crate) fn tuning_keyboard(
     keyboard: &Keyboard,
     tuning: &Entity<Tuning>,
     face: impl Fn(usize) -> KeyFace,
-    window: &Window,
     cx: &App,
 ) -> KeyboardView {
     let clicked = tuning.downgrade();
     let swept = tuning.downgrade();
     KeyboardView::new(id, keyboard, face)
         .selection(tuning.read(cx).selection())
-        .fit_width(panel::content_width(window))
         .on_key_click(move |key, _, _, cx| {
             clicked
                 .update(cx, |tuning, cx| tuning.toggle_key(key, cx))
@@ -97,4 +77,16 @@ pub(crate) fn tuning_keyboard(
                 .update(cx, |tuning, cx| tuning.sweep_key(key, cx))
                 .ok();
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn captions_prompt_until_keys_are_selected() {
+        assert_eq!(caption(0, "Select keys"), "Select keys");
+        assert_eq!(caption(1, "Select keys"), "1 key selected");
+        assert_eq!(caption(84, "Select keys"), "84 keys selected");
+    }
 }

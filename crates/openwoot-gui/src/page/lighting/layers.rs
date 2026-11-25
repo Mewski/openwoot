@@ -2,20 +2,24 @@ use gpui_kit::{
     Context, Div, FontWeight, InteractiveElement as _, IntoElement, ParentElement as _,
     SharedString, StatefulInteractiveElement as _, Styled as _,
     assets::IconName as Catalog,
-    component::{ActiveTheme as _, Icon, Sizable as _, h_flex, tooltip::Tooltip, v_flex},
+    component::{ActiveTheme as _, Icon, h_flex, tooltip::Tooltip, v_flex},
     div,
     prelude::FluentBuilder as _,
     px,
 };
 use openwoot_protocol::keys::Layer;
 
-use super::{LightingPage, controls::kebab};
-use crate::{
-    dropdown::{Dropdown, Item},
-    panel,
+use super::{
+    LightingPage,
+    controls::{ICON_SIZE, LABEL_TEXT, kebab},
 };
+use crate::dropdown::{Dropdown, Item};
 
-const PILL_HEIGHT: f32 = 40.0;
+const HEADER_TEXT: f32 = 16.0;
+const HEADER_LINE: f32 = 22.4;
+const PILL_HEIGHT: f32 = 38.0;
+const PILL_LINE: f32 = 21.0;
+const PILL_RADIUS: f32 = 6.0;
 const MENU_WIDTH: f32 = 220.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,32 +31,40 @@ enum Action {
 
 impl LightingPage {
     pub(super) fn layers_column(&self, cx: &Context<Self>) -> Div {
+        let theme = cx.theme();
         v_flex()
             .w_full()
-            .gap_2()
+            .gap_3()
             .child(
                 h_flex()
-                    .gap_1p5()
+                    .gap_2()
                     .items_center()
-                    .pb_1()
-                    .child(panel::label("Layers", cx))
+                    .child(
+                        div()
+                            .text_size(px(HEADER_TEXT))
+                            .line_height(px(HEADER_LINE))
+                            .text_color(theme.group_box_foreground)
+                            .child("LAYERS"),
+                    )
                     .child(
                         div()
                             .id("color-layers-help")
-                            .text_color(cx.theme().muted_foreground)
-                            .child(Icon::new(Catalog::CircleQuestionMark).xsmall())
+                            .text_color(theme.muted_foreground)
+                            .child(Icon::new(Catalog::CircleQuestionMark).size(px(ICON_SIZE)))
                             .tooltip(|window, cx| {
                                 Tooltip::new(
-                                    "An Fn layer shows its colours while it is held; without its own colours it shows the main layer's",
+                                    "Functional layers are active while you hold the Fn key.",
                                 )
                                 .build(window, cx)
                             }),
                     ),
             )
-            .children(
-                Layer::ALL
-                    .into_iter()
-                    .map(|layer| self.layer_pill(layer, cx)),
+            .child(
+                v_flex().w_full().gap_2().children(
+                    Layer::ALL
+                        .into_iter()
+                        .map(|layer| self.layer_pill(layer, cx)),
+                ),
             )
     }
 
@@ -70,20 +82,21 @@ impl LightingPage {
             .w_full()
             .h(px(PILL_HEIGHT))
             .pl_3()
-            .pr_1()
+            .pr(px(1.0))
             .gap_1()
             .items_center()
             .justify_between()
-            .rounded(theme.radius)
+            .rounded(px(PILL_RADIUS))
             .border_1()
             .border_color(if selected {
                 theme.primary
             } else {
-                theme.group_box
+                theme.transparent
             })
-            .bg(theme.group_box)
-            .text_sm()
-            .font_weight(FontWeight::MEDIUM)
+            .bg(theme.secondary)
+            .text_size(px(LABEL_TEXT))
+            .line_height(px(PILL_LINE))
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(if inherits {
                 theme.muted_foreground
             } else {
@@ -113,9 +126,14 @@ impl LightingPage {
                 Action::Paste => self.copied.is_some(),
                 Action::UseMain => own,
             };
-            Item::new(action.label())
+            let item = Item::new(action.label())
                 .disabled(!enabled)
-                .danger(*action == Action::UseMain)
+                .danger(*action == Action::UseMain);
+            if *action == Action::UseMain {
+                item.divider_before()
+            } else {
+                item
+            }
         });
         div().flex_none().child(
             Dropdown::new(SharedString::from(format!(
@@ -143,18 +161,18 @@ impl LightingPage {
 impl Action {
     const fn label(self) -> &'static str {
         match self {
-            Self::Copy => "Copy colours",
+            Self::Copy => "Copy",
             Self::Paste => "Paste and replace",
-            Self::UseMain => "Use main layer colours",
+            Self::UseMain => "Use Main Layer colours",
         }
     }
 }
 
 const fn layer_name(layer: Layer) -> &'static str {
     match layer {
-        Layer::Base => "Main layer",
-        Layer::One => "Fn layer 1",
-        Layer::Two => "Fn layer 2",
-        Layer::Three => "Fn layer 3",
+        Layer::Base => "Main Layer",
+        Layer::One => "Fn Layer 1",
+        Layer::Two => "Fn Layer 2",
+        Layer::Three => "Fn Layer 3",
     }
 }
