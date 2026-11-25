@@ -23,6 +23,7 @@ pub struct Summary {
 pub struct Info {
     pub name: String<NAME_LEN>,
     pub color: Rgb,
+    pub icon: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
@@ -42,6 +43,18 @@ pub struct LayerChange<T> {
     pub profile: Slot,
     pub layer: Layer,
     pub value: T,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+pub struct Swap {
+    pub first: Slot,
+    pub second: Slot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+pub struct Move {
+    pub from: Slot,
+    pub to: Slot,
 }
 
 impl Slot {
@@ -75,6 +88,20 @@ impl Validate for LayerRef {
 impl Validate for Info {
     fn validate(&self, _: &Capabilities) -> Result<(), Invalid> {
         Ok(())
+    }
+}
+
+impl Validate for Swap {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        self.first.validate(capabilities)?;
+        self.second.validate(capabilities)
+    }
+}
+
+impl Validate for Move {
+    fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid> {
+        self.from.validate(capabilities)?;
+        self.to.validate(capabilities)
     }
 }
 

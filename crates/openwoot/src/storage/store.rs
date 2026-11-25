@@ -18,6 +18,7 @@ pub struct Storage<'s, F: MultiwriteNorFlash> {
     pub opened: Result<Opened, Error>,
     pub device_info: Option<DeviceInfo>,
     pub layout_variant: u8,
+    pub factory_layout_variant: u8,
     pub nor_identity: Option<NorIdentity>,
 }
 
@@ -38,19 +39,21 @@ impl<'s, D: SpiDevice> Storage<'s, SpiNor<D>> {
             _ => None,
         };
         let device_info = device_info.read(&mut nor).await.ok();
-        let mut layout_variant = layout_variant.variant(device_info.as_ref());
+        let factory_layout_variant = layout_variant.variant(device_info.as_ref());
         let opened = cell
             .open(Partition::new(nor, settings), format_requested)
             .await;
         let mut settings = opened.is_ok().then_some(cell);
-        if let Some(stored) = settings.as_deref_mut() {
-            layout_variant = LayoutOverride::variant_or(stored, layout_variant).await;
-        }
+        let layout_variant = match settings.as_deref_mut() {
+            Some(stored) => LayoutOverride::variant_or(stored, factory_layout_variant).await,
+            None => factory_layout_variant,
+        };
         Self {
             settings,
             opened,
             device_info,
             layout_variant,
+            factory_layout_variant,
             nor_identity,
         }
     }

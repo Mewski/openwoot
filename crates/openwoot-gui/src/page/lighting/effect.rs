@@ -1,31 +1,25 @@
 use std::mem;
 
 use gpui_kit::assets::IconName as Catalog;
-use openwoot_protocol::lighting::{
-    AnalogLevel, AnalogRgbFill, Breathing, Color, Effect, HueCycle, HueRange, KeyRipple, KeyTest,
-    LevelMeter, PolarGradient, RainbowWave, ReactiveColoring, ReactiveFade, Scanner,
-    ScannerDirection, SimplexNoise,
+use openwoot_protocol::{
+    configuration::Capabilities,
+    lighting::{
+        AnalogLevel, AnalogRgbFill, Breathing, Color, Effect, HueCycle, HueRange, KeyRipple,
+        KeyTest, LevelMeter, PolarGradient, RainbowWave, ReactiveColoring, ReactiveFade, Scanner,
+        ScannerDirection, SimplexNoise,
+    },
 };
 
-pub(super) const CATALOGUE: [Effect; 13] = [
-    Effect::RainbowWave(RainbowWave {
-        hues: HueRange::FullCircle,
-        period: 16,
-        forward: false,
+pub(super) const BASE_KINDS: [Effect; 4] = [WAVE, CYCLE, NOISE, SPIRAL];
+pub(super) const LAYER_KINDS: [Effect; 9] = [
+    Effect::AnalogSpotlight(AnalogLevel {
+        base_level: 30,
+        gamepad_curve: false,
     }),
-    Effect::Scanner(Scanner {
-        width: 1,
-        steps_per_second: 15,
-        outside_level: 30,
-        direction: ScannerDirection::Left,
-    }),
+    SCAN,
     Effect::Breathing(Breathing {
         step_ms: 15,
         min_level: 0,
-    }),
-    Effect::HueCycle(HueCycle {
-        hues: HueRange::FullCircle,
-        period: 48,
     }),
     Effect::KeyRipple(KeyRipple {
         palette: false,
@@ -34,17 +28,7 @@ pub(super) const CATALOGUE: [Effect; 13] = [
         decay_step_ms: 30,
         base_level: 30,
     }),
-    Effect::ReactiveFade(ReactiveFade {
-        base_level: 30,
-        step_ms: 4,
-        coloring: ReactiveColoring::KeyColor,
-        inverted: false,
-    }),
     Effect::LevelMeter(LevelMeter {
-        base_level: 30,
-        gamepad_curve: false,
-    }),
-    Effect::AnalogSpotlight(AnalogLevel {
         base_level: 30,
         gamepad_curve: false,
     }),
@@ -55,50 +39,71 @@ pub(super) const CATALOGUE: [Effect; 13] = [
     Effect::AnalogRgbFill(AnalogRgbFill {
         gamepad_curve: false,
     }),
+    Effect::ReactiveFade(ReactiveFade {
+        base_level: 30,
+        step_ms: 4,
+        coloring: ReactiveColoring::KeyColor,
+        inverted: false,
+    }),
     Effect::KeyTest(KeyTest { base_level: 140 }),
-    Effect::SimplexNoise(SimplexNoise {
-        from: color(30, 0, 255),
-        to: color(0, 255, 10),
-        speed: 50,
-        scale: 25,
-    }),
-    Effect::PolarGradient(PolarGradient {
-        from: color(255, 0, 255),
-        to: color(0, 255, 255),
-        speed: 50,
-        twist: -70,
-    }),
 ];
-
+pub(super) const SCAN: Effect = Effect::Scanner(Scanner {
+    width: 1,
+    steps_per_second: 15,
+    outside_level: 30,
+    direction: ScannerDirection::Left,
+});
 pub(super) const HUE_RANGES: [(HueRange, &str); 6] = [
     (HueRange::FullCircle, "Rainbow"),
     (HueRange::From110To184, "Ocean"),
     (HueRange::From2To39, "Inferno"),
     (HueRange::From64To114, "Spring"),
-    (HueRange::From214To254, "Pink"),
+    (HueRange::From214To254, "Pink!"),
     (HueRange::From113To204, "Blue Spectrum"),
 ];
 
-const MS_PER_PERIOD: f32 = 250.0;
-const STEPS_PER_BREATH: f32 = 252.0;
-const LEVELS_PER_FADE: f32 = 250.0;
-const LEVELS_PER_RIPPLE_FADE: f32 = 15.0;
-const MS_PER_SECOND: f32 = 1000.0;
+const WAVE: Effect = Effect::RainbowWave(RainbowWave {
+    hues: HueRange::FullCircle,
+    period: 16,
+    forward: false,
+});
+const CYCLE: Effect = Effect::HueCycle(HueCycle {
+    hues: HueRange::FullCircle,
+    period: 48,
+});
+const NOISE: Effect = Effect::SimplexNoise(SimplexNoise {
+    from: color(30, 0, 255),
+    to: color(0, 255, 10),
+    speed: 50,
+    scale: 25,
+});
+const SPIRAL: Effect = Effect::PolarGradient(PolarGradient {
+    from: color(255, 0, 255),
+    to: color(0, 255, 255),
+    speed: 50,
+    twist: -70,
+});
+const PERIOD_SECONDS: f32 = 0.25;
+const BREATH_STEP_SECONDS: f32 = 0.252;
+const FADE_STEP_SECONDS: f32 = 0.015;
+const TRAIL_STEP_SECONDS: f32 = 0.25;
 const LEVEL_MAX: f32 = 255.0;
 const PERCENT_MAX: f32 = 100.0;
-const STEP_MS_MAX: u8 = 40;
+const SIGNED_MAX: f32 = 127.0;
+const STEP_MS_MAX: f32 = 40.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Dial {
-    Cycle,
-    Steps,
-    Spread,
+    Period,
+    Width,
+    ScanSpeed,
+    BreathSpeed,
+    SpreadSpeed,
+    FadeSpeed,
+    TrailSpeed,
     Level,
-    Breath,
-    Fade,
-    Decay,
-    Drift,
-    Scale,
+    NoiseSpeed,
+    NoiseScale,
     Spin,
     Twist,
 }
@@ -108,6 +113,12 @@ pub(super) enum Paint {
     KeyColor,
     Palette,
     Fixed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Turn {
+    Spin,
+    Twist,
 }
 
 pub(super) const fn name(effect: &Effect) -> &'static str {
@@ -130,38 +141,48 @@ pub(super) const fn name(effect: &Effect) -> &'static str {
 
 pub(super) const fn description(effect: &Effect) -> &'static str {
     match effect {
-        Effect::RainbowWave(_) => "A band of colours moves across the keys.",
-        Effect::Scanner(_) => "A window sweeps across the keys; keys outside it dim.",
-        Effect::Breathing(_) => "All keys fade down and up.",
-        Effect::HueCycle(_) => "All keys change colour together.",
-        Effect::KeyRipple(_) => "Key presses send out ripples.",
-        Effect::ReactiveFade(_) => "Pressed keys light up and fade out.",
-        Effect::LevelMeter(_) => "The number row shows how deep the deepest key is.",
-        Effect::AnalogSpotlight(_) => "Keys around a pressed key light up with its depth.",
-        Effect::AnalogGlow(_) => "Pressed keys and their neighbours glow with the depth.",
-        Effect::AnalogRgbFill(_) => "The three bottom-right keys mix red, green and blue.",
-        Effect::KeyTest(_) => "Green while a key sends a press, red while held below actuation.",
-        Effect::SimplexNoise(_) => "Two colours drift across the keys like clouds.",
-        Effect::PolarGradient(_) => "Two colours swirl around the centre.",
+        Effect::RainbowWave(_) => "A band of colours moves across the keys",
+        Effect::Scanner(_) => "A window sweeps across the keys; keys outside it dim",
+        Effect::Breathing(_) => "All keys fade down and up",
+        Effect::HueCycle(_) => "All keys change colour together",
+        Effect::KeyRipple(_) => "Key presses send out ripples",
+        Effect::ReactiveFade(_) => "Pressed keys light up and fade out",
+        Effect::LevelMeter(_) => "The number row shows how deep the deepest key is",
+        Effect::AnalogSpotlight(_) => "Keys around a pressed key light up with its depth",
+        Effect::AnalogGlow(_) => "Pressed keys and their neighbours glow with the depth",
+        Effect::AnalogRgbFill(_) => "The three bottom-right keys mix red, green and blue",
+        Effect::KeyTest(_) => "Green while a key sends a press, red while held below actuation",
+        Effect::SimplexNoise(_) => "Two colours drift across the keys like clouds",
+        Effect::PolarGradient(_) => "Two colours swirl around the centre",
     }
 }
 
 pub(super) const fn icon(effect: &Effect) -> Catalog {
     match effect {
-        Effect::RainbowWave(_) => Catalog::Rainbow,
+        Effect::RainbowWave(_) => Catalog::WavesHorizontal,
         Effect::Scanner(_) => Catalog::ScanLine,
-        Effect::Breathing(_) => Catalog::SunDim,
+        Effect::Breathing(_) => Catalog::Wind,
         Effect::HueCycle(_) => Catalog::RefreshCw,
-        Effect::KeyRipple(_) => Catalog::Radio,
-        Effect::ReactiveFade(_) => Catalog::Sparkles,
-        Effect::LevelMeter(_) => Catalog::Gauge,
-        Effect::AnalogSpotlight(_) => Catalog::Droplet,
-        Effect::AnalogGlow(_) => Catalog::Crosshair,
-        Effect::AnalogRgbFill(_) => Catalog::Blend,
+        Effect::KeyRipple(_) => Catalog::Grip,
+        Effect::ReactiveFade(_) => Catalog::Footprints,
+        Effect::LevelMeter(_) => Catalog::Ellipsis,
+        Effect::AnalogSpotlight(_) => Catalog::Atom,
+        Effect::AnalogGlow(_) => Catalog::Radar,
+        Effect::AnalogRgbFill(_) => Catalog::SlidersVertical,
         Effect::KeyTest(_) => Catalog::Zap,
-        Effect::SimplexNoise(_) => Catalog::Activity,
-        Effect::PolarGradient(_) => Catalog::LoaderCircle,
+        Effect::SimplexNoise(_) => Catalog::AudioLines,
+        Effect::PolarGradient(_) => Catalog::Shell,
     }
+}
+
+pub(super) const fn is_base(effect: &Effect) -> bool {
+    matches!(
+        effect,
+        Effect::RainbowWave(_)
+            | Effect::HueCycle(_)
+            | Effect::SimplexNoise(_)
+            | Effect::PolarGradient(_)
+    )
 }
 
 pub(super) fn same_kind(effect: &Effect, other: &Effect) -> bool {
@@ -176,11 +197,12 @@ pub(super) const fn hue_range(effect: &Effect) -> Option<HueRange> {
     }
 }
 
-pub(super) fn hue_name(hues: HueRange) -> String {
-    HUE_RANGES
-        .iter()
-        .find(|(range, _)| *range == hues)
-        .map_or_else(String::new, |(_, label)| (*label).to_owned())
+pub(super) const fn set_hues(effect: &mut Effect, hues: HueRange) {
+    match effect {
+        Effect::RainbowWave(wave) => wave.hues = hues,
+        Effect::HueCycle(cycle) => cycle.hues = hues,
+        _ => {}
+    }
 }
 
 pub(super) const fn colors(effect: &Effect) -> (Option<Color>, Option<Color>) {
@@ -240,6 +262,27 @@ pub(super) const fn paint_of(coloring: ReactiveColoring) -> Paint {
     }
 }
 
+pub(super) const fn clockwise(effect: &Effect, turn: Turn) -> Option<bool> {
+    match (effect, turn) {
+        (Effect::PolarGradient(gradient), Turn::Spin) => Some(gradient.speed < 0),
+        (Effect::PolarGradient(gradient), Turn::Twist) => Some(gradient.twist < 0),
+        _ => None,
+    }
+}
+
+pub(super) fn set_clockwise(effect: &mut Effect, turn: Turn, clockwise: bool) {
+    let Effect::PolarGradient(gradient) = effect else {
+        return;
+    };
+    let value = match turn {
+        Turn::Spin => &mut gradient.speed,
+        Turn::Twist => &mut gradient.twist,
+    };
+    let magnitude = value.unsigned_abs().clamp(1, i8::MAX.unsigned_abs());
+    let magnitude = i8::try_from(magnitude).unwrap_or(i8::MAX);
+    *value = if clockwise { -magnitude } else { magnitude };
+}
+
 pub(crate) fn level_of(percent: f32) -> u8 {
     byte(percent * LEVEL_MAX / PERCENT_MAX, 0, u8::MAX)
 }
@@ -249,147 +292,172 @@ pub(crate) fn percent_of(level: u8) -> f32 {
 }
 
 impl Dial {
-    pub(super) const ALL: [Self; 11] = [
-        Self::Cycle,
-        Self::Steps,
-        Self::Spread,
+    pub(super) const ALL: [Self; 12] = [
+        Self::Period,
+        Self::Width,
+        Self::ScanSpeed,
+        Self::BreathSpeed,
+        Self::SpreadSpeed,
+        Self::FadeSpeed,
+        Self::TrailSpeed,
         Self::Level,
-        Self::Breath,
-        Self::Fade,
-        Self::Decay,
-        Self::Drift,
-        Self::Scale,
+        Self::NoiseSpeed,
+        Self::NoiseScale,
         Self::Spin,
         Self::Twist,
     ];
 
-    pub(super) const fn bounds(self) -> (f32, f32) {
+    pub(super) fn bounds(self, capabilities: &Capabilities) -> (f32, f32) {
         match self {
-            Self::Cycle | Self::Decay => (1.0, 255.0),
-            Self::Steps => (1.0, 60.0),
-            Self::Spread => (1.0, 50.0),
-            Self::Level => (0.0, PERCENT_MAX),
-            Self::Breath | Self::Fade => (1.0, 40.0),
-            Self::Drift | Self::Scale => (0.0, 255.0),
-            Self::Spin | Self::Twist => (-128.0, 127.0),
+            Self::Period | Self::FadeSpeed => (1.0, LEVEL_MAX),
+            Self::Width => (
+                1.0,
+                f32::from(capabilities.key_columns.max(capabilities.key_rows).max(1)),
+            ),
+            Self::ScanSpeed => (1.0, 60.0),
+            Self::BreathSpeed | Self::TrailSpeed => (1.0, STEP_MS_MAX),
+            Self::SpreadSpeed => (1.0, 50.0),
+            Self::Level | Self::NoiseSpeed | Self::NoiseScale => (0.0, LEVEL_MAX),
+            Self::Spin | Self::Twist => (0.0, SIGNED_MAX),
         }
     }
 
     pub(super) const fn of(effect: &Effect) -> &'static [Self] {
         match effect {
-            Effect::RainbowWave(_) | Effect::HueCycle(_) => &[Self::Cycle],
-            Effect::Scanner(_) => &[Self::Steps, Self::Level],
-            Effect::Breathing(_) => &[Self::Breath, Self::Level],
-            Effect::KeyRipple(_) => &[Self::Spread, Self::Decay, Self::Level],
-            Effect::ReactiveFade(_) => &[Self::Fade, Self::Level],
+            Effect::RainbowWave(_) | Effect::HueCycle(_) => &[Self::Period],
+            Effect::Scanner(_) => &[Self::Width, Self::ScanSpeed, Self::Level],
+            Effect::Breathing(_) => &[Self::BreathSpeed, Self::Level],
+            Effect::KeyRipple(_) => &[Self::SpreadSpeed, Self::FadeSpeed, Self::Level],
+            Effect::ReactiveFade(_) => &[Self::TrailSpeed, Self::Level],
             Effect::LevelMeter(_)
             | Effect::AnalogSpotlight(_)
             | Effect::AnalogGlow(_)
             | Effect::KeyTest(_) => &[Self::Level],
             Effect::AnalogRgbFill(_) => &[],
-            Effect::SimplexNoise(_) => &[Self::Drift, Self::Scale],
+            Effect::SimplexNoise(_) => &[Self::NoiseSpeed, Self::NoiseScale],
             Effect::PolarGradient(_) => &[Self::Spin, Self::Twist],
         }
     }
 
-    pub(super) fn position(self, effect: &Effect) -> Option<f32> {
-        match (self, effect) {
+    pub(super) fn raw(self, effect: &Effect) -> Option<f32> {
+        let raw = match (self, effect) {
             (
-                Self::Cycle,
+                Self::Period,
                 Effect::RainbowWave(RainbowWave { period, .. })
                 | Effect::HueCycle(HueCycle { period, .. }),
-            ) => Some(f32::from(u8::MAX - *period) + 1.0),
-            (Self::Steps, Effect::Scanner(scanner)) => Some(f32::from(scanner.steps_per_second)),
-            (Self::Spread, Effect::KeyRipple(ripple)) => Some(f32::from(ripple.steps_per_second)),
-            (Self::Level, _) => level(effect).map(percent_of),
-            (Self::Breath, Effect::Breathing(Breathing { step_ms, .. }))
-            | (Self::Fade, Effect::ReactiveFade(ReactiveFade { step_ms, .. })) => {
-                Some(f32::from(STEP_MS_MAX.saturating_sub(*step_ms)) + 1.0)
-            }
-            (Self::Decay, Effect::KeyRipple(ripple)) => {
-                Some(f32::from(u8::MAX - ripple.decay_step_ms) + 1.0)
-            }
-            (Self::Drift, Effect::SimplexNoise(noise)) => Some(f32::from(noise.speed)),
-            (Self::Scale, Effect::SimplexNoise(noise)) => Some(f32::from(noise.scale)),
-            (Self::Spin, Effect::PolarGradient(gradient)) => Some(f32::from(gradient.speed)),
-            (Self::Twist, Effect::PolarGradient(gradient)) => Some(f32::from(gradient.twist)),
-            _ => None,
-        }
+            ) => *period,
+            (Self::Width, Effect::Scanner(scanner)) => scanner.width,
+            (Self::ScanSpeed, Effect::Scanner(scanner)) => scanner.steps_per_second,
+            (Self::BreathSpeed, Effect::Breathing(breathing)) => breathing.step_ms,
+            (Self::SpreadSpeed, Effect::KeyRipple(ripple)) => ripple.steps_per_second,
+            (Self::FadeSpeed, Effect::KeyRipple(ripple)) => ripple.decay_step_ms,
+            (Self::TrailSpeed, Effect::ReactiveFade(fade)) => fade.step_ms,
+            (Self::Level, _) => level(effect)?,
+            (Self::NoiseSpeed, Effect::SimplexNoise(noise)) => noise.speed,
+            (Self::NoiseScale, Effect::SimplexNoise(noise)) => noise.scale,
+            (Self::Spin, Effect::PolarGradient(gradient)) => gradient.speed.unsigned_abs(),
+            (Self::Twist, Effect::PolarGradient(gradient)) => gradient.twist.unsigned_abs(),
+            _ => return None,
+        };
+        Some(f32::from(raw))
     }
 
-    pub(super) fn apply(self, effect: &mut Effect, position: f32) {
-        let (min, max) = self.bounds();
-        let position = position.clamp(min, max);
+    pub(super) fn apply(self, effect: &mut Effect, raw: f32) {
         match (self, effect) {
             (
-                Self::Cycle,
+                Self::Period,
                 Effect::RainbowWave(RainbowWave { period, .. })
                 | Effect::HueCycle(HueCycle { period, .. }),
-            ) => {
-                *period = u8::MAX - byte(position, 1, u8::MAX) + 1;
+            ) => *period = byte(raw, 1, u8::MAX),
+            (Self::Width, Effect::Scanner(scanner)) => scanner.width = byte(raw, 1, u8::MAX),
+            (Self::ScanSpeed, Effect::Scanner(scanner)) => {
+                scanner.steps_per_second = byte(raw, 1, 60);
             }
-            (Self::Steps, Effect::Scanner(scanner)) => {
-                scanner.steps_per_second = byte(position, 1, 60);
+            (Self::BreathSpeed, Effect::Breathing(breathing)) => {
+                breathing.step_ms = byte(raw, 1, 40);
             }
-            (Self::Spread, Effect::KeyRipple(ripple)) => {
-                ripple.steps_per_second = byte(position, 1, 50);
+            (Self::SpreadSpeed, Effect::KeyRipple(ripple)) => {
+                ripple.steps_per_second = byte(raw, 1, 50);
             }
-            (Self::Level, effect) => set_level(effect, level_of(position)),
-            (Self::Breath, Effect::Breathing(Breathing { step_ms, .. }))
-            | (Self::Fade, Effect::ReactiveFade(ReactiveFade { step_ms, .. })) => {
-                *step_ms = STEP_MS_MAX - byte(position, 1, STEP_MS_MAX) + 1;
+            (Self::FadeSpeed, Effect::KeyRipple(ripple)) => {
+                ripple.decay_step_ms = byte(raw, 1, u8::MAX);
             }
-            (Self::Decay, Effect::KeyRipple(ripple)) => {
-                ripple.decay_step_ms = u8::MAX - byte(position, 1, u8::MAX) + 1;
+            (Self::TrailSpeed, Effect::ReactiveFade(fade)) => fade.step_ms = byte(raw, 1, 40),
+            (Self::Level, effect) => set_level(effect, byte(raw, 0, u8::MAX)),
+            (Self::NoiseSpeed, Effect::SimplexNoise(noise)) => noise.speed = byte(raw, 0, u8::MAX),
+            (Self::NoiseScale, Effect::SimplexNoise(noise)) => noise.scale = byte(raw, 0, u8::MAX),
+            (Self::Spin, Effect::PolarGradient(gradient)) => {
+                gradient.speed = signed(raw, gradient.speed < 0);
             }
-            (Self::Drift, Effect::SimplexNoise(noise)) => noise.speed = byte(position, 0, u8::MAX),
-            (Self::Scale, Effect::SimplexNoise(noise)) => noise.scale = byte(position, 0, u8::MAX),
-            (Self::Spin, Effect::PolarGradient(gradient)) => gradient.speed = signed(position),
-            (Self::Twist, Effect::PolarGradient(gradient)) => gradient.twist = signed(position),
+            (Self::Twist, Effect::PolarGradient(gradient)) => {
+                gradient.twist = signed(raw, gradient.twist < 0);
+            }
             _ => {}
         }
     }
 
     pub(super) const fn label(self, effect: &Effect) -> &'static str {
         match (self, effect) {
-            (Self::Cycle | Self::Steps | Self::Breath | Self::Drift, _) => "Speed",
-            (Self::Spread, _) => "Spread",
-            (Self::Level, Effect::Breathing(_)) => "Minimum brightness",
-            (Self::Level, Effect::Scanner(_)) => "Outside brightness",
+            (
+                Self::Period
+                | Self::ScanSpeed
+                | Self::BreathSpeed
+                | Self::TrailSpeed
+                | Self::NoiseSpeed,
+                _,
+            ) => "Speed",
+            (Self::Width, _) => "Width",
+            (Self::SpreadSpeed, _) => "Spread speed",
+            (Self::FadeSpeed, _) => "Fade speed",
+            (Self::Level, Effect::Breathing(_)) => "Secondary brightness",
             (Self::Level, _) => "Base brightness",
-            (Self::Fade | Self::Decay, _) => "Fade",
-            (Self::Scale, _) => "Scale",
-            (Self::Spin, _) => "Spin",
-            (Self::Twist, _) => "Twist",
+            (Self::NoiseScale, _) => "Scale",
+            (Self::Spin, _) => "Spin speed",
+            (Self::Twist, _) => "Spiral speed",
         }
     }
 
-    pub(super) fn reading(self, effect: &Effect) -> Option<String> {
-        let reading = match (self, effect) {
-            (
-                Self::Cycle,
-                Effect::RainbowWave(RainbowWave { period, .. })
-                | Effect::HueCycle(HueCycle { period, .. }),
-            ) => seconds(f32::from(*period) * MS_PER_PERIOD),
-            (Self::Steps, Effect::Scanner(scanner)) => format!("{}/s", scanner.steps_per_second),
-            (Self::Spread, Effect::KeyRipple(ripple)) => format!("{}/s", ripple.steps_per_second),
-            (Self::Level, _) => format!("{} %", percent_of(level(effect)?)),
-            (Self::Breath, Effect::Breathing(breathing)) => {
-                seconds(f32::from(breathing.step_ms) * STEPS_PER_BREATH)
+    pub(super) const fn unit(self) -> &'static str {
+        match self {
+            Self::Period | Self::BreathSpeed | Self::FadeSpeed | Self::TrailSpeed => "s",
+            Self::Width => "keys",
+            Self::ScanSpeed | Self::SpreadSpeed => "keys/s",
+            Self::Level | Self::NoiseSpeed | Self::NoiseScale | Self::Spin | Self::Twist => "%",
+        }
+    }
+
+    pub(super) fn text(self, raw: f32) -> String {
+        let shown = raw * self.factor();
+        match self {
+            Self::Period | Self::BreathSpeed | Self::FadeSpeed | Self::TrailSpeed => {
+                format!("{shown:.2}")
             }
-            (Self::Fade, Effect::ReactiveFade(fade)) => {
-                seconds(f32::from(fade.step_ms) * LEVELS_PER_FADE)
-            }
-            (Self::Decay, Effect::KeyRipple(ripple)) => {
-                seconds(f32::from(ripple.decay_step_ms) * LEVELS_PER_RIPPLE_FADE)
-            }
-            (Self::Drift, Effect::SimplexNoise(noise)) => noise.speed.to_string(),
-            (Self::Scale, Effect::SimplexNoise(noise)) => noise.scale.to_string(),
-            (Self::Spin, Effect::PolarGradient(gradient)) => gradient.speed.to_string(),
-            (Self::Twist, Effect::PolarGradient(gradient)) => gradient.twist.to_string(),
-            _ => return None,
-        };
-        Some(reading)
+            Self::Width
+            | Self::ScanSpeed
+            | Self::SpreadSpeed
+            | Self::Level
+            | Self::NoiseSpeed
+            | Self::NoiseScale
+            | Self::Spin
+            | Self::Twist => format!("{shown:.0}"),
+        }
+    }
+
+    pub(super) fn raw_of(self, shown: f32, capabilities: &Capabilities) -> f32 {
+        let (min, max) = self.bounds(capabilities);
+        (shown / self.factor()).round().clamp(min, max)
+    }
+
+    const fn factor(self) -> f32 {
+        match self {
+            Self::Period => PERIOD_SECONDS,
+            Self::BreathSpeed => BREATH_STEP_SECONDS,
+            Self::FadeSpeed => FADE_STEP_SECONDS,
+            Self::TrailSpeed => TRAIL_STEP_SECONDS,
+            Self::Width | Self::ScanSpeed | Self::SpreadSpeed => 1.0,
+            Self::Level | Self::NoiseSpeed | Self::NoiseScale => PERCENT_MAX / LEVEL_MAX,
+            Self::Spin | Self::Twist => PERCENT_MAX / SIGNED_MAX,
+        }
     }
 }
 
@@ -421,17 +489,6 @@ const fn set_level(effect: &mut Effect, value: u8) {
     }
 }
 
-fn seconds(milliseconds: f32) -> String {
-    let seconds = milliseconds / MS_PER_SECOND;
-    if seconds < 1.0 {
-        format!("{seconds:.2} s")
-    } else if seconds < 10.0 {
-        format!("{seconds:.1} s")
-    } else {
-        format!("{seconds:.0} s")
-    }
-}
-
 const fn color(red: u8, green: u8, blue: u8) -> Color {
     Color {
         red,
@@ -441,8 +498,8 @@ const fn color(red: u8, green: u8, blue: u8) -> Color {
     }
 }
 
-fn byte(position: f32, min: u8, max: u8) -> u8 {
-    let clamped = position.round().clamp(f32::from(min), f32::from(max));
+fn byte(value: f32, min: u8, max: u8) -> u8 {
+    let clamped = value.round().clamp(f32::from(min), f32::from(max));
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -452,16 +509,10 @@ fn byte(position: f32, min: u8, max: u8) -> u8 {
     value
 }
 
-fn signed(position: f32) -> i8 {
-    let clamped = position
-        .round()
-        .clamp(f32::from(i8::MIN), f32::from(i8::MAX));
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "the value is rounded and clamped to the signed byte range"
-    )]
-    let value = clamped as i8;
-    value
+fn signed(magnitude: f32, negative: bool) -> i8 {
+    let magnitude = byte(magnitude, 0, i8::MAX.unsigned_abs());
+    let magnitude = i8::try_from(magnitude).unwrap_or(i8::MAX);
+    if negative { -magnitude } else { magnitude }
 }
 
 #[cfg(test)]
@@ -486,79 +537,79 @@ mod tests {
         }
     }
 
+    fn catalogue() -> impl Iterator<Item = Effect> {
+        BASE_KINDS.into_iter().chain(LAYER_KINDS)
+    }
+
     #[test]
-    fn every_catalogue_effect_is_valid_and_named_once() {
+    fn every_effect_is_valid_named_once_and_in_one_grid() {
         let capabilities = capabilities();
-        for effect in &CATALOGUE {
-            assert_eq!(effect.validate(&capabilities), Ok(()), "{}", name(effect));
-            let twins = CATALOGUE
-                .iter()
-                .filter(|other| same_kind(effect, other) || name(other) == name(effect))
+        for effect in catalogue() {
+            assert_eq!(effect.validate(&capabilities), Ok(()), "{}", name(&effect));
+            let twins = catalogue()
+                .filter(|other| same_kind(&effect, other) || name(other) == name(&effect))
                 .count();
-            assert_eq!(twins, 1, "{}", name(effect));
+            assert_eq!(twins, 1, "{}", name(&effect));
         }
+        assert!(BASE_KINDS.iter().all(is_base));
+        assert!(!LAYER_KINDS.iter().any(is_base));
     }
 
     #[test]
-    fn every_dial_of_an_effect_reads_and_writes_it() {
-        for effect in &CATALOGUE {
-            for dial in Dial::of(effect) {
-                let position = dial
-                    .position(effect)
-                    .unwrap_or_else(|| panic!("{dial:?} of {}", name(effect)));
-                let mut changed = *effect;
-                dial.apply(&mut changed, position);
-                assert_eq!(dial.position(&changed), Some(position), "{dial:?}");
-                assert!(dial.reading(effect).is_some(), "{dial:?}");
-                let (min, max) = dial.bounds();
-                assert!((min..=max).contains(&position), "{dial:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn dial_extremes_stay_within_the_firmware_ranges() {
+    fn every_dial_reads_what_it_writes_within_its_bounds() {
         let capabilities = capabilities();
-        for effect in &CATALOGUE {
-            for dial in Dial::of(effect) {
-                let (min, max) = dial.bounds();
-                for position in [min - 10.0, min, max, max + 10.0] {
-                    let mut changed = *effect;
+        for effect in catalogue() {
+            for dial in Dial::of(&effect) {
+                let raw = dial
+                    .raw(&effect)
+                    .unwrap_or_else(|| panic!("{dial:?} of {}", name(&effect)));
+                let (min, max) = dial.bounds(&capabilities);
+                assert!((min..=max).contains(&raw), "{dial:?}");
+                for position in [min, max, raw] {
+                    let mut changed = effect;
                     dial.apply(&mut changed, position);
-                    assert_eq!(
-                        changed.validate(&capabilities),
-                        Ok(()),
-                        "{dial:?} {position}"
-                    );
+                    assert_eq!(dial.raw(&changed), Some(position), "{dial:?} {position}");
+                    assert_eq!(changed.validate(&capabilities), Ok(()), "{dial:?}");
                 }
             }
         }
     }
 
     #[test]
-    fn faster_speeds_shorten_the_cycle() {
-        let mut wave = CATALOGUE[0];
-        Dial::Cycle.apply(&mut wave, 255.0);
+    fn typed_values_convert_to_the_firmware_units() {
+        let capabilities = capabilities();
+        assert_eq!(Dial::Period.text(16.0), "4.00");
+        assert!((Dial::Period.raw_of(4.0, &capabilities) - 16.0).abs() < f32::EPSILON);
+        assert!((Dial::Period.raw_of(1000.0, &capabilities) - 255.0).abs() < f32::EPSILON);
+        assert_eq!(Dial::FadeSpeed.text(30.0), "0.45");
+        assert_eq!(Dial::TrailSpeed.text(4.0), "1.00");
+        assert_eq!(Dial::Level.text(30.0), "12");
+        assert!((Dial::Level.raw_of(100.0, &capabilities) - 255.0).abs() < f32::EPSILON);
+        assert_eq!(Dial::Spin.text(50.0), "39");
+        assert_eq!(Dial::Twist.text(70.0), "55");
+        assert!((Dial::Width.raw_of(40.0, &capabilities) - 17.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_spiral_keeps_its_turning_direction_when_its_speed_changes() {
+        let mut spiral = SPIRAL;
+        assert_eq!(clockwise(&spiral, Turn::Spin), Some(false));
+        assert_eq!(clockwise(&spiral, Turn::Twist), Some(true));
+        Dial::Twist.apply(&mut spiral, 20.0);
         assert!(matches!(
-            wave,
-            Effect::RainbowWave(RainbowWave { period: 1, .. })
+            spiral,
+            Effect::PolarGradient(PolarGradient { twist: -20, .. })
         ));
-        Dial::Cycle.apply(&mut wave, 1.0);
+        set_clockwise(&mut spiral, Turn::Spin, true);
         assert!(matches!(
-            wave,
-            Effect::RainbowWave(RainbowWave { period: 255, .. })
+            spiral,
+            Effect::PolarGradient(PolarGradient { speed: -50, .. })
         ));
-        assert_eq!(Dial::Cycle.reading(&wave).as_deref(), Some("64 s"));
-        let mut breath = CATALOGUE[2];
-        Dial::Breath.apply(&mut breath, 40.0);
+        Dial::Spin.apply(&mut spiral, 0.0);
+        set_clockwise(&mut spiral, Turn::Spin, false);
         assert!(matches!(
-            breath,
-            Effect::Breathing(Breathing { step_ms: 1, .. })
-        ));
-        Dial::Breath.apply(&mut breath, 1.0);
-        assert!(matches!(
-            breath,
-            Effect::Breathing(Breathing { step_ms: 40, .. })
+            spiral,
+            Effect::PolarGradient(PolarGradient { speed: 1, .. })
         ));
     }
 
@@ -577,26 +628,16 @@ mod tests {
 
     #[test]
     fn the_trail_colour_is_its_fixed_colour() {
-        let mut trail = CATALOGUE[5];
+        let mut trail = LAYER_KINDS[7];
         assert_eq!(colors(&trail), (None, None));
         set_first_color(&mut trail, color(1, 2, 3));
         assert_eq!(colors(&trail), (Some(color(1, 2, 3)), None));
-        assert!(matches!(
-            trail,
-            Effect::ReactiveFade(ReactiveFade {
-                coloring: ReactiveColoring::Fixed(_),
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn readings_are_compact() {
-        assert_eq!(Dial::Cycle.reading(&CATALOGUE[0]).as_deref(), Some("4.0 s"));
-        assert_eq!(Dial::Steps.reading(&CATALOGUE[1]).as_deref(), Some("15/s"));
         assert_eq!(
-            Dial::Decay.reading(&CATALOGUE[4]).as_deref(),
-            Some("0.45 s")
+            paint_of(match trail {
+                Effect::ReactiveFade(fade) => fade.coloring,
+                _ => ReactiveColoring::KeyColor,
+            }),
+            Paint::Fixed
         );
     }
 }

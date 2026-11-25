@@ -1,107 +1,45 @@
 use gpui_kit::{
-    Context, Div, ParentElement as _, SharedString, Styled as _, Window,
-    component::{h_flex, switch::Switch},
+    Context, Div, InteractiveElement as _, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window,
+    assets::IconName as Catalog,
+    component::{
+        ActiveTheme as _, Icon, Sizable as _, h_flex, slider::Slider, tooltip::Tooltip, v_flex,
+    },
     div,
     prelude::FluentBuilder as _,
     px,
 };
 use openwoot_protocol::{
-    lightbar::{self, Entries, Entry},
+    lightbar::{Entries, Entry},
     lighting::Rgb,
     profile::Slot,
 };
 
 use super::{
-    Chosen, LightbarPage, Owner,
+    Chosen, LightbarPage, Owner, Tab,
     preview::{self, Profile},
 };
 use crate::{
-    page::lighting::{hsla_of, level_of, wide_slider},
-    panel, theme,
+    color_picker::hsla_of,
+    page::{
+        Page,
+        lighting::{Choice, choices, level_of},
+    },
+    panel,
+    switch::Switch,
+    theme,
 };
 
-const LED_WIDTH: f32 = 72.0;
-const LED_HEIGHT: f32 = 12.0;
-const LED_GAP: f32 = 8.0;
-const CASE_RADIUS: f32 = 16.0;
-const CASE_LIP: f32 = 10.0;
-const CASE_INSET: f32 = 40.0;
+const BAR_HEIGHT: f32 = 56.0;
+const BAR_WIDTH: f32 = 760.0;
+const LED_GAP: f32 = 6.0;
+const BRIGHTNESS_WIDTH: f32 = 400.0;
+const LINK_SIZE: f32 = 32.0;
 
 impl LightbarPage {
-    pub(super) fn bar_card(&self, cx: &Context<Self>) -> Option<Div> {
-        let settings = self.settings.as_ref()?;
-        let following = settings.brightness.is_none();
-        let brightness = self.brightness.read(cx).value().end();
-        Some(
-            panel::section("Light bar", None, cx)
-                .child(Self::toggle_row(
-                    "lightbar-enabled",
-                    "Enabled",
-                    None,
-                    settings.enabled,
-                    |settings, enabled| settings.enabled = enabled,
-                    cx,
-                ))
-                .child(Self::toggle_row(
-                    "lightbar-use-global",
-                    "Global effects",
-                    Some("Show the global effects below this profile's own."),
-                    settings.use_global,
-                    |settings, enabled| settings.use_global = enabled,
-                    cx,
-                ))
-                .child(panel::toggle(
-                    "Follow keys",
-                    Some("Use the key brightness.".into()),
-                    Switch::new("lightbar-follow-keys")
-                        .checked(following)
-                        .on_change(cx.listener(|this, following: &bool, window, cx| {
-                            let level = if *following {
-                                None
-                            } else {
-                                Some(level_of(this.brightness.read(cx).value().end()))
-                            };
-                            this.edit_settings(|settings| settings.brightness = level, window, cx);
-                        })),
-                    cx,
-                ))
-                .when(!following, |this| {
-                    this.child(panel::field(
-                        "Brightness",
-                        wide_slider(&self.brightness, format!("{brightness:.0} %"), cx),
-                        cx,
-                    ))
-                }),
-        )
-    }
-
-    fn toggle_row(
-        id: &'static str,
-        label: &'static str,
-        help: Option<&'static str>,
-        checked: bool,
-        change: fn(&mut lightbar::Settings, bool),
-        cx: &Context<Self>,
-    ) -> Div {
-        panel::toggle(
-            label,
-            help.map(SharedString::from),
-            Switch::new(id).checked(checked).on_change(cx.listener(
-                move |this, enabled: &bool, window, cx| {
-                    let enabled = *enabled;
-                    this.edit_settings(|settings| change(settings, enabled), window, cx);
-                },
-            )),
-            cx,
-        )
-    }
-
     pub(super) fn preview(&self, window: &Window, cx: &Context<Self>) -> Option<Div> {
         let settings = self.settings.as_ref()?;
         let leds = self.leds(cx);
-        let count = f32::from(leds.max(1));
-        let room = f32::from(panel::content_width(window)) - CASE_INSET - LED_GAP * (count - 1.0);
-        let led_width = (room / count).min(LED_WIDTH);
         let profile = self.preview_profile(cx);
         let mut drawn = Vec::new();
         if settings.use_global
@@ -116,34 +54,180 @@ impl LightbarPage {
             vec![Rgb::default(); usize::from(leds)]
         };
         let caps = theme::keycaps();
-        let leds = h_flex()
+        let width = (f32::from(panel::content_width(window)) * 0.8).min(BAR_WIDTH);
+        let segments = h_flex()
+            .size_full()
             .gap(px(LED_GAP))
+            .px_4()
+            .py_2()
+            .rounded_full()
+            .bg(caps.case)
             .children(colors.into_iter().map(|color| {
+                let lit = color != Rgb::default();
                 div()
-                    .w(px(led_width))
-                    .h(px(LED_HEIGHT))
-                    .rounded(px(3.0))
-                    .bg(if color == Rgb::default() {
-                        caps.top
-                    } else {
-                        hsla_of(color)
-                    })
+                    .flex_1()
+                    .h_full()
+                    .rounded(px(8.0))
+                    .bg(if lit { hsla_of(color) } else { caps.top })
+                    .when(lit, gpui_kit::Styled::shadow_md)
             }));
-        let case = div()
-            .rounded(px(CASE_RADIUS))
-            .bg(caps.side)
-            .pb(px(CASE_LIP))
-            .shadow_lg()
-            .child(
-                div()
-                    .p_4()
-                    .rounded(px(CASE_RADIUS))
-                    .bg(caps.case)
-                    .border_1()
-                    .border_color(caps.plate)
-                    .child(leds),
-            );
-        Some(panel::stage(case))
+        Some(panel::stage(
+            div()
+                .w(px(width))
+                .h(px(BAR_HEIGHT))
+                .p_1()
+                .rounded_full()
+                .bg(caps.side)
+                .border_1()
+                .border_color(caps.plate)
+                .shadow_lg()
+                .child(segments),
+        ))
+    }
+
+    pub(super) fn brightness_row(&self, cx: &Context<Self>) -> Option<Div> {
+        let settings = self.settings.as_ref()?;
+        let theme = cx.theme();
+        let linked = settings.brightness.is_none();
+        let value = self.brightness.read(cx).value().end();
+        let tooltip = if linked {
+            "Linked with the global brightness; click to set its own"
+        } else {
+            "Link with the global brightness"
+        };
+        Some(panel::stage(
+            v_flex()
+                .w(px(BRIGHTNESS_WIDTH))
+                .gap_2()
+                .child(panel::label("Brightness", cx))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .gap_3()
+                        .items_center()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .when(linked, |this| this.opacity(0.45))
+                                .child(Slider::new(&self.brightness).disabled(linked)),
+                        )
+                        .child(
+                            div()
+                                .w(px(48.0))
+                                .text_sm()
+                                .text_color(if linked {
+                                    theme.muted_foreground
+                                } else {
+                                    theme.foreground
+                                })
+                                .child(format!("{value:.0} %")),
+                        )
+                        .child(
+                            div()
+                                .id("lightbar-link")
+                                .size(px(LINK_SIZE))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(6.0))
+                                .cursor_pointer()
+                                .bg(if linked {
+                                    theme.secondary
+                                } else {
+                                    theme.transparent
+                                })
+                                .border_1()
+                                .border_color(theme.border)
+                                .text_color(if linked {
+                                    theme.primary
+                                } else {
+                                    theme.muted_foreground
+                                })
+                                .hover(|style| style.bg(theme.secondary_hover))
+                                .child(
+                                    Icon::new(if linked {
+                                        Catalog::Link
+                                    } else {
+                                        Catalog::Unlink
+                                    })
+                                    .small(),
+                                )
+                                .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.toggle_link(window, cx)),
+                                ),
+                        ),
+                ),
+        ))
+    }
+
+    pub(super) fn heading(&self, cx: &Context<Self>) -> Option<Div> {
+        let settings = self.settings.as_ref()?;
+        let tabs = choices(
+            "lightbar-tabs",
+            ["Effect presets", "Effect creator"],
+            Some(usize::from(self.tab == Tab::Creator)),
+            Choice::Outlined,
+            cx.listener(|this, index: &usize, _, cx| {
+                this.tab = if *index == 1 {
+                    Tab::Creator
+                } else {
+                    Tab::Presets
+                };
+                cx.notify();
+            }),
+            cx,
+        );
+        Some(panel::heading(
+            Page::Lightbar.title(),
+            Some(SharedString::from(
+                "Effects on the LED strip: the active profile's own, plus the global ones",
+            )),
+            h_flex()
+                .gap_6()
+                .items_center()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Enabled"),
+                        )
+                        .child(
+                            Switch::new("lightbar-enabled")
+                                .checked(settings.enabled)
+                                .on_change(cx.listener(|this, enabled: &bool, window, cx| {
+                                    let enabled = *enabled;
+                                    this.edit_settings(
+                                        |settings| settings.enabled = enabled,
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        ),
+                )
+                .child(tabs),
+            cx,
+        ))
+    }
+
+    fn toggle_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let level = level_of(self.brightness.read(cx).value().end());
+        self.edit_settings(
+            |settings| {
+                settings.brightness = match settings.brightness {
+                    Some(_) => None,
+                    None => Some(level),
+                };
+            },
+            window,
+            cx,
+        );
+        self.sync_controls(window, cx);
     }
 
     fn preview_profile(&self, cx: &Context<Self>) -> Profile {

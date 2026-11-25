@@ -59,9 +59,65 @@ enum Template {
 
 pub(crate) const PRESETS: &[Preset] = &[
     Preset {
+        kind: Kind::DepthPriority,
+        title: "Instant strafe switching",
+        description: "Switch between A and D at once, without the usual input delay",
+        parts: &[pair(
+            KEY_A,
+            KEY_D,
+            Template::DepthPriority(Resolution::Both),
+        )],
+    },
+    Preset {
+        kind: Kind::DepthPriority,
+        title: "Instant arrow switching",
+        description: "Switch between left and right at once, without the usual input delay",
+        parts: &[pair(LEFT, RIGHT, Template::DepthPriority(Resolution::Both))],
+    },
+    Preset {
+        kind: Kind::DepthPriority,
+        title: "Reduce accidental Alt + Tab",
+        description: "Alt + Tab triggers only when both keys are fully pressed",
+        parts: &[pair(
+            TAB,
+            LEFT_ALT,
+            Template::DepthPriority(Resolution::Both),
+        )],
+    },
+    Preset {
+        kind: Kind::Socd,
+        title: "Instant strafe switching",
+        description: "Switch between A and D at once, without the usual input delay",
+        parts: &[pair(
+            KEY_A,
+            KEY_D,
+            Template::Socd(Resolution::LastPressed, false),
+        )],
+    },
+    Preset {
+        kind: Kind::Socd,
+        title: "Instant arrow switching",
+        description: "Switch between left and right at once, without the usual input delay",
+        parts: &[pair(
+            LEFT,
+            RIGHT,
+            Template::Socd(Resolution::LastPressed, false),
+        )],
+    },
+    Preset {
+        kind: Kind::Socd,
+        title: "Reduce accidental Alt + Tab",
+        description: "Alt + Tab triggers only when both keys are fully pressed",
+        parts: &[pair(
+            TAB,
+            LEFT_ALT,
+            Template::Socd(Resolution::Neither, true),
+        )],
+    },
+    Preset {
         kind: Kind::DynamicKeystroke,
-        title: "Running (W, A, S, D)",
-        description: "Shift at the full press of W, A, S and D, for running in games",
+        title: "Key response for running in games",
+        description: "Shift at the full press of W, A, S and D, for running",
         parts: &[
             running(KEY_W),
             running(KEY_A),
@@ -71,14 +127,14 @@ pub(crate) const PRESETS: &[Preset] = &[
     },
     Preset {
         kind: Kind::DynamicKeystroke,
-        title: "Running (W)",
-        description: "Shift at the full press of W, for running in games",
+        title: "Key response for running in games",
+        description: "Shift at the full press of W, for running",
         parts: &[running(KEY_W)],
     },
     Preset {
         kind: Kind::ModTap,
-        title: "Arrow keys",
-        description: "Tap the lower right modifiers for arrows, hold them as before",
+        title: "Mod Tap arrow keys",
+        description: "Tap the lower right keys for arrows, hold them as before",
         parts: &[
             mod_tap(MENU, LEFT, MENU),
             mod_tap(RIGHT_SHIFT, UP, RIGHT_SHIFT),
@@ -88,81 +144,38 @@ pub(crate) const PRESETS: &[Preset] = &[
     },
     Preset {
         kind: Kind::ModTap,
-        title: "Fn 2 on Caps Lock",
-        description: "Hold Caps Lock for Fn 2, tap it for Caps Lock",
+        title: "Mod Tap Fn 2 on Caps Lock",
+        description: "Hold Caps Lock for Fn layer 2, tap it for Caps Lock",
         parts: &[mod_tap(CAPS_LOCK, CAPS_LOCK, FN_2)],
     },
     Preset {
         kind: Kind::Toggle,
-        title: "Toggle Fn 1",
-        description: "Tap Fn to keep Fn 1 on without holding it",
+        title: "Toggle Fn layer 1",
+        description: "Tap Fn to keep Fn layer 1 on without holding the key",
         parts: &[single(FN_1, Template::Toggle(FN_1))],
     },
     Preset {
         kind: Kind::Toggle,
-        title: "Toggle Fn 2 on Caps Lock",
-        description: "Tap Caps Lock to switch Fn 2 on or off",
+        title: "Toggle Fn layer 2 on Caps Lock",
+        description: "Tap Caps Lock to switch Fn layer 2 on or off",
         parts: &[single(CAPS_LOCK, Template::Toggle(FN_2))],
-    },
-    Preset {
-        kind: Kind::DepthPriority,
-        title: "Instant strafe (A, D)",
-        description: "Switch between A and D without the usual input delay",
-        parts: &[pair(
-            KEY_A,
-            KEY_D,
-            Template::DepthPriority(Resolution::Both),
-        )],
-    },
-    Preset {
-        kind: Kind::DepthPriority,
-        title: "Instant strafe (←, →)",
-        description: "Switch between left and right without the usual input delay",
-        parts: &[pair(LEFT, RIGHT, Template::DepthPriority(Resolution::Both))],
-    },
-    Preset {
-        kind: Kind::DepthPriority,
-        title: "Reduce accidental Alt+Tab",
-        description: "Alt+Tab triggers only when both keys are fully pressed",
-        parts: &[pair(
-            TAB,
-            LEFT_ALT,
-            Template::DepthPriority(Resolution::Both),
-        )],
-    },
-    Preset {
-        kind: Kind::Socd,
-        title: "Instant strafe (A, D)",
-        description: "Switch between A and D without the usual input delay",
-        parts: &[pair(
-            KEY_A,
-            KEY_D,
-            Template::Socd(Resolution::LastPressed, false),
-        )],
-    },
-    Preset {
-        kind: Kind::Socd,
-        title: "Instant strafe (←, →)",
-        description: "Switch between left and right without the usual input delay",
-        parts: &[pair(
-            LEFT,
-            RIGHT,
-            Template::Socd(Resolution::LastPressed, false),
-        )],
-    },
-    Preset {
-        kind: Kind::Socd,
-        title: "Reduce accidental Alt+Tab",
-        description: "Alt+Tab triggers only when both keys are fully pressed",
-        parts: &[pair(
-            TAB,
-            LEFT_ALT,
-            Template::Socd(Resolution::Neither, true),
-        )],
     },
 ];
 
 impl Preset {
+    pub(crate) fn chips(&self) -> Vec<Action> {
+        self.parts
+            .iter()
+            .flat_map(|part| match part.template {
+                Template::ModTap(mod_tap) => vec![mod_tap.tap],
+                Template::Toggle(action) => vec![action],
+                Template::Keystroke(_) | Template::DepthPriority(_) | Template::Socd(..) => {
+                    core::iter::once(part.key).chain(part.other).collect()
+                }
+            })
+            .collect()
+    }
+
     pub(crate) fn entries(&self, base: &Keymap) -> Result<Vec<advanced::Key>, Vec<Action>> {
         let mut missing = Vec::new();
         let mut entries = Vec::with_capacity(self.parts.len());
@@ -370,7 +383,10 @@ mod tests {
     #[test]
     fn mod_tap_arrows_keep_the_modifier_on_hold() {
         let base = base();
-        let Some(preset) = PRESETS.iter().find(|preset| preset.title == "Arrow keys") else {
+        let Some(preset) = PRESETS
+            .iter()
+            .find(|preset| preset.title == "Mod Tap arrow keys")
+        else {
             unreachable!("the arrow preset is listed");
         };
         let entries = preset.entries(&base).unwrap_or_default();
@@ -397,10 +413,32 @@ mod tests {
         }
         let socd = PRESETS
             .iter()
-            .find(|preset| preset.kind == Kind::Socd && preset.title == "Instant strafe (A, D)");
+            .find(|preset| preset.kind == Kind::Socd && preset.title == "Instant strafe switching");
         assert_eq!(
             socd.map(|preset| preset.entries(&base)),
             Some(Err(vec![KEY_D]))
+        );
+    }
+
+    #[test]
+    fn preset_cards_show_the_keys_or_actions_they_bind() {
+        let chips = |title: &str, kind: Kind| {
+            PRESETS
+                .iter()
+                .find(|preset| preset.title == title && preset.kind == kind)
+                .map(Preset::chips)
+        };
+        assert_eq!(
+            chips("Instant strafe switching", Kind::Socd),
+            Some(vec![KEY_A, KEY_D])
+        );
+        assert_eq!(
+            chips("Mod Tap arrow keys", Kind::ModTap),
+            Some(vec![LEFT, UP, RIGHT, DOWN])
+        );
+        assert_eq!(
+            chips("Toggle Fn layer 2 on Caps Lock", Kind::Toggle),
+            Some(vec![FN_2])
         );
     }
 

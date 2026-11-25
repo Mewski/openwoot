@@ -20,30 +20,30 @@ use crate::{
     store::{Scope, Store},
 };
 
-pub(super) const STEPS_WITHOUT_LIGHTBAR: usize = 6 + 2 * LAYERS;
+const STEPS_WITHOUT_LIGHTBAR: usize = 6 + 2 * LAYERS;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(super) struct Parts {
-    pub(super) key_settings: keys::Settings,
-    pub(super) keymaps: [keys::Keymap; LAYERS],
-    pub(super) overrides: keys::Overrides,
-    pub(super) advanced_keys: advanced::Keys,
-    pub(super) gamepad_mapping: gamepad::Mapping,
-    pub(super) gamepad_settings: gamepad::Settings,
-    pub(super) lighting: lighting::Settings,
-    pub(super) key_colors: [Option<lighting::KeyColors>; LAYERS],
-    pub(super) lightbar: Option<lightbar::Settings>,
+pub(crate) struct Parts {
+    pub(crate) key_settings: keys::Settings,
+    pub(crate) keymaps: [keys::Keymap; LAYERS],
+    pub(crate) overrides: keys::Overrides,
+    pub(crate) advanced_keys: advanced::Keys,
+    pub(crate) gamepad_mapping: gamepad::Mapping,
+    pub(crate) gamepad_settings: gamepad::Settings,
+    pub(crate) lighting: lighting::Settings,
+    pub(crate) key_colors: [Option<lighting::KeyColors>; LAYERS],
+    pub(crate) lightbar: Option<lightbar::Settings>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("could not take over the {part}: {reason}")]
-pub(super) struct Mismatch {
+pub(crate) struct Mismatch {
     part: &'static str,
     reason: Invalid,
 }
 
 impl Parts {
-    pub(super) const fn steps(lightbar: bool) -> usize {
+    pub(crate) const fn steps(lightbar: bool) -> usize {
         if lightbar {
             STEPS_WITHOUT_LIGHTBAR + 1
         } else {
@@ -51,7 +51,7 @@ impl Parts {
         }
     }
 
-    pub(super) async fn read(
+    pub(crate) async fn read(
         store: &Entity<Store>,
         profile: Slot,
         lightbar: bool,
@@ -100,7 +100,7 @@ impl Parts {
         })
     }
 
-    pub(super) async fn write(
+    pub(crate) async fn write(
         &self,
         store: &Entity<Store>,
         profile: Slot,
@@ -173,7 +173,7 @@ impl Parts {
         Ok(())
     }
 
-    pub(super) fn check(&self, capabilities: &Capabilities) -> Result<(), Mismatch> {
+    pub(crate) fn check(&self, capabilities: &Capabilities) -> Result<(), Mismatch> {
         fits("key settings", &self.key_settings, capabilities)?;
         self.keymaps
             .iter()
@@ -190,7 +190,7 @@ impl Parts {
     }
 }
 
-pub(super) async fn fetch<E, T>(
+pub(crate) async fn fetch<E, T>(
     store: &Entity<Store>,
     request: E::Request,
     cx: &mut AsyncApp,
@@ -205,7 +205,7 @@ where
         .await
 }
 
-pub(super) async fn apply<E>(
+pub(crate) async fn apply<E>(
     store: &Entity<Store>,
     request: E::Request,
     scope: Scope,

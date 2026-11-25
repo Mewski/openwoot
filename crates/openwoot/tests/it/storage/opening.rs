@@ -96,6 +96,7 @@ fn a_flash_that_cannot_be_read_leaves_the_keyboard_without_stored_settings() {
     assert_eq!(storage.device_info, None);
     assert_eq!(storage.nor_identity, None);
     assert_eq!(storage.layout_variant, 0);
+    assert_eq!(storage.factory_layout_variant, 0);
 }
 
 #[test]
@@ -111,4 +112,5 @@ fn a_flash_that_always_reads_busy_lets_the_start_up_finish_without_stored_settin
     assert_eq!(storage.device_info, None);
     assert_eq!(storage.nor_identity, None);
     assert_eq!(storage.layout_variant, 0);
+    assert_eq!(storage.factory_layout_variant, 0);
 }

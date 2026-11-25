@@ -6,7 +6,8 @@ use embedded_storage_async::nor_flash::MultiwriteNorFlash;
 use openwoot_protocol::{
     advanced,
     configuration::{Capabilities, Invalid, Rejection},
-    device, gamepad, geometry, global,
+    device::{self, LayoutState},
+    gamepad, geometry, global,
     keys::{self, Keymap, Layer, Overrides},
     lightbar,
     lighting::{self, KeyColors},
@@ -88,6 +89,15 @@ where
             Err(Rejection::Unsupported)
         }
     }
+
+    fn layout_of(&self, variant: u8) -> Result<device::Layout, Rejection> {
+        let layouts = &self.capabilities.layouts;
+        layouts
+            .get(usize::from(variant))
+            .or(layouts.first())
+            .copied()
+            .ok_or(Rejection::Unsupported)
+    }
 }
 
 impl<M, F, const ROWS: usize, const COLUMNS: usize> Configuration
@@ -109,14 +119,15 @@ where
         Ok(())
     }
 
-    async fn layout(&mut self) -> Result<device::Layout, Rejection> {
-        let variant = usize::from(self.model.lock().await.variant());
-        let layouts = &self.capabilities.layouts;
-        layouts
-            .get(variant)
-            .or(layouts.first())
-            .copied()
-            .ok_or(Rejection::Unsupported)
+    async fn layout(&mut self) -> Result<LayoutState, Rejection> {
+        let (active, chosen) = {
+            let model = self.model.lock().await;
+            (model.variant(), model.chosen_variant())
+        };
+        Ok(LayoutState {
+            active: self.layout_of(active)?,
+            chosen: self.layout_of(chosen)?,
+        })
     }
 
     async fn set_layout(&mut self, layout: device::Layout) -> Result<(), Rejection> {
@@ -143,6 +154,11 @@ where
             .map_err(|_| Rejection::Unsupported)
     }
 
+    async fn default_keymap(&mut self, layer: Layer, keymap: &mut Keymap) -> Result<(), Rejection> {
+        self.model.lock().await.default_keymap(layer, keymap);
+        Ok(())
+    }
+
     async fn global_settings(&mut self) -> Result<global::Settings, Rejection> {
         Ok(self.model.lock().await.global_settings())
     }
@@ -166,6 +182,14 @@ where
 
     async fn activate_profile(&mut self, profile: Slot) -> Result<(), Rejection> {
         self.model.lock().await.activate(profile).await
+    }
+
+    async fn swap_profiles(&mut self, first: Slot, second: Slot) -> Result<(), Rejection> {
+        self.model.lock().await.swap(first, second).await
+    }
+
+    async fn move_profile(&mut self, from: Slot, to: Slot) -> Result<(), Rejection> {
+        self.model.lock().await.shift(from, to).await
     }
 
     async fn profile_info(&mut self, profile: Slot) -> Result<Info, Rejection> {

@@ -44,11 +44,11 @@ impl LightbarPage {
         Some(
             panel::section(
                 "Host signals",
-                Some("Values programs send by id; cleared on restart.".into()),
+                Some("Values programs send by id; cleared on restart".into()),
                 cx,
             )
             .child(panel::toggle(
-                "Bound",
+                "Used by effects",
                 None,
                 h_flex()
                     .gap_2()
@@ -67,17 +67,20 @@ impl LightbarPage {
                 cx,
             ))
             .child(panel::field(
-                "Set value",
+                "Send a value",
                 h_flex()
                     .gap_2()
                     .items_center()
-                    .child(self.number(Field::HostId, ""))
-                    .child(self.number(Field::HostValue, ""))
-                    .child(Button::new("host-send").label("Send").on_click(cx.listener(
-                        |this, _, window, cx| {
-                            this.send_host_value(window, cx);
-                        },
-                    ))),
+                    .child(self.number(Field::HostId, cx))
+                    .child(self.number(Field::HostValue, cx))
+                    .child(
+                        Button::new("host-send")
+                            .label("Send")
+                            .small()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.send_host_value(window, cx);
+                            })),
+                    ),
                 cx,
             ))
             .when(!sent.is_empty(), |this| {

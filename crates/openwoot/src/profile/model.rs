@@ -17,7 +17,9 @@ use openwoot_protocol::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 
-use super::{Appearance, Changes, Colors, Count, Factory, KeyPart, Preset, Revision, Shared};
+use super::{
+    Appearance, Changes, Colors, Count, Factory, KeyPart, Order, Preset, Revision, Shared,
+};
 use crate::{
     keys::{ActiveProfile, Keymaps, Parts, Profile, default_gamepad_settings},
     layout::LAYERS,
@@ -31,8 +33,10 @@ pub struct Model<'a, M: RawMutex, F: MultiwriteNorFlash, const ROWS: usize, cons
     storage: Option<&'a mut Settings<F>>,
     factory: &'static Factory<ROWS, COLUMNS>,
     variant: u8,
+    factory_variant: u8,
     capacity: u8,
     count: u8,
+    order: Order,
     active: u8,
     info: Info,
     global: global::Settings,
@@ -63,15 +67,17 @@ where
                 "the key matrix holds more keys than a profile part"
             );
         }
-        let capacity = capacity.max(1);
+        let capacity = capacity.clamp(1, Order::SLOTS);
         Self {
             keys,
             shared,
             storage,
             factory,
             variant,
+            factory_variant: variant,
             capacity,
             count: factory.created.clamp(1, capacity),
+            order: Order::identity(capacity),
             active: 0,
             info: factory.preset(0).info(),
             global: factory.global,
@@ -83,6 +89,12 @@ where
         }
     }
 
+    #[must_use]
+    pub const fn with_factory_variant(mut self, variant: u8) -> Self {
+        self.factory_variant = variant;
+        self
+    }
+
     pub async fn load(&mut self) {
         self.load_device_wide().await;
         let stored = load(&mut self.storage, Scope::Global, |active: ActiveProfile| {
@@ -90,7 +102,11 @@ where
         })
         .await
         .unwrap_or(0);
-        self.active = if stored < self.count { stored } else { 0 };
+        self.active = self
+            .order
+            .slot_of(stored)
+            .filter(|slot| *slot < self.count)
+            .unwrap_or(0);
         self.publish().await;
     }
 
@@ -107,6 +123,11 @@ where
     #[must_use]
     pub const fn variant(&self) -> u8 {
         self.variant
+    }
+
+    #[must_use]
+    pub fn chosen_variant(&self) -> u8 {
+        self.layout.unwrap_or(self.factory_variant)
     }
 
     #[must_use]
@@ -133,7 +154,7 @@ where
         let stored = store(
             &mut self.storage,
             Scope::Global,
-            &ActiveProfile(self.active),
+            &ActiveProfile(self.order.storage_slot(self.active)),
         )
         .await;
         saved.and(stored)
@@ -176,6 +197,22 @@ where
         removed.and(handed_over)
     }
 
+    pub async fn swap(&mut self, first: Slot, second: Slot) -> Result<(), Rejection> {
+        self.check(first)?;
+        self.check(second)?;
+        let mut order = self.order.clone();
+        order.swap(first.get(), second.get());
+        self.reorder(order).await
+    }
+
+    pub async fn shift(&mut self, from: Slot, to: Slot) -> Result<(), Rejection> {
+        self.check(from)?;
+        self.check(to)?;
+        let mut order = self.order.clone();
+        order.shift(from.get(), to.get());
+        self.reorder(order).await
+    }
+
     pub async fn save(&mut self) -> Result<(), Rejection> {
         let keys = self.unsaved_keys;
         let unsaved = self.unsaved;
@@ -216,7 +253,7 @@ where
         }
         if unsaved.contains(Changes::COLORS) {
             let shared = self.shared;
-            store_with::<_, Colors>(&mut self.storage, Scope::Profile(self.active), |body| {
+            store_with::<_, Colors>(&mut self.storage, self.order.scope(self.active), |body| {
                 encode_colors(shared, body)
             })
             .await?;
@@ -226,7 +263,7 @@ where
                 .await?;
         }
         if unsaved.contains(Changes::INFO) {
-            store(&mut self.storage, Scope::Profile(self.active), &self.info).await?;
+            store(&mut self.storage, self.order.scope(self.active), &self.info).await?;
         }
         if unsaved.contains(Changes::GLOBAL) {
             store(&mut self.storage, Scope::Global, &self.global).await?;
@@ -281,17 +318,17 @@ where
         let limits = self.limits();
         let stored = load_valid(
             &mut self.storage,
-            Scope::Profile(slot),
+            self.order.scope(slot),
             &limits,
             |settings: lighting::Settings| settings,
         )
         .await;
-        let mut settings = stored.unwrap_or_else(|| self.factory.preset(slot).lighting.clone());
+        let mut settings = stored.unwrap_or_else(|| self.preset(slot).lighting.clone());
         if settings.brightness == level {
             return Ok(());
         }
         settings.brightness = level;
-        store(&mut self.storage, Scope::Profile(slot), &settings).await?;
+        store(&mut self.storage, self.order.scope(slot), &settings).await?;
         self.bump_revision(slot).await
     }
 
@@ -355,7 +392,7 @@ where
         self.check(profile)?;
         Ok(load(
             &mut self.storage,
-            Scope::Profile(profile.get()),
+            self.order.scope(profile.get()),
             |revision: Revision| revision.0,
         )
         .await
@@ -370,12 +407,12 @@ where
         let limits = self.limits();
         let stored = load_valid(
             &mut self.storage,
-            Scope::Profile(profile.get()),
+            self.order.scope(profile.get()),
             &limits,
             |settings: lighting::Settings| settings,
         )
         .await;
-        Ok(stored.unwrap_or_else(|| self.factory.preset(profile.get()).lighting.clone()))
+        Ok(stored.unwrap_or_else(|| self.preset(profile.get()).lighting.clone()))
     }
 
     pub async fn set_lighting(
@@ -416,7 +453,7 @@ where
         let mut fitting = false;
         let found = load_stored::<_, Colors, _>(
             &mut self.storage,
-            Scope::Profile(profile.get()),
+            self.order.scope(profile.get()),
             |stored| {
                 decode_sequence(
                     stored,
@@ -433,7 +470,6 @@ where
         .await;
         if found != Some(true) || !fitting {
             *colors = self
-                .factory
                 .preset(profile.get())
                 .colors
                 .get(index)
@@ -461,11 +497,11 @@ where
             return Ok(());
         }
         let slot = profile.get();
-        let preset = self.factory.preset(slot);
+        let preset = self.preset(slot);
         let key_count = ROWS * COLUMNS;
         let mut fitting = [false; LAYERS];
         let mut stored = Colors::default();
-        let found = load_stored::<_, Colors, _>(&mut self.storage, Scope::Profile(slot), |raw| {
+        let found = load_stored::<_, Colors, _>(&mut self.storage, self.order.scope(slot), |raw| {
             decode_sequence(
                 raw,
                 Colors::VERSION,
@@ -509,13 +545,13 @@ where
         let limits = self.limits();
         let found = load_valid(
             &mut self.storage,
-            Scope::Profile(profile.get()),
+            self.order.scope(profile.get()),
             &limits,
             |stored: lightbar::Settings| *settings = stored,
         )
         .await;
         if found.is_none() {
-            *settings = self.factory.preset(profile.get()).lightbar();
+            *settings = self.preset(profile.get()).lightbar();
         }
         Ok(())
     }
@@ -550,7 +586,7 @@ where
     }
 
     pub async fn settings(&mut self, profile: Slot) -> Result<keys::Settings, Rejection> {
-        let mut settings = self.factory.preset(profile.get()).keys;
+        let mut settings = self.preset(profile.get()).keys;
         self.fill(
             profile,
             &mut settings,
@@ -599,7 +635,7 @@ where
         let mut fitting = false;
         let found = load_stored::<_, Keymaps, _>(
             &mut self.storage,
-            Scope::Profile(profile.get()),
+            self.order.scope(profile.get()),
             |stored| {
                 decode_sequence(
                     stored,
@@ -644,7 +680,7 @@ where
         let mut fitting = [false; LAYERS];
         let mut keymaps = Keymaps::default();
         let found =
-            load_stored::<_, Keymaps, _>(&mut self.storage, Scope::Profile(slot), |stored| {
+            load_stored::<_, Keymaps, _>(&mut self.storage, self.order.scope(slot), |stored| {
                 decode_sequence(
                     stored,
                     Keymaps::VERSION,
@@ -683,7 +719,7 @@ where
         profile: Slot,
         overrides: &mut Overrides,
     ) -> Result<(), Rejection> {
-        let preset = self.factory.preset(profile.get());
+        let preset = self.preset(profile.get());
         self.fill(
             profile,
             overrides,
@@ -710,7 +746,7 @@ where
         profile: Slot,
         keys: &mut advanced::Keys,
     ) -> Result<(), Rejection> {
-        let preset = self.factory.preset(profile.get());
+        let preset = self.preset(profile.get());
         self.fill(
             profile,
             keys,
@@ -801,7 +837,7 @@ where
     }
 
     async fn load_key_parts(&mut self, slot: u8) -> bool {
-        let scope = Scope::Profile(slot);
+        let scope = self.order.scope(slot);
         let keys = self.keys;
         let limits = self.limits();
         load_valid(
@@ -868,7 +904,7 @@ where
     }
 
     async fn load_appearance(&mut self, slot: u8) {
-        let scope = Scope::Profile(slot);
+        let scope = self.order.scope(slot);
         let shared = self.shared;
         let key_count = ROWS * COLUMNS;
         let limits = self.limits();
@@ -917,7 +953,7 @@ where
     }
 
     fn reset_keys(&self, slot: u8) {
-        let preset = self.factory.preset(slot);
+        let preset = self.preset(slot);
         let key_count = ROWS * COLUMNS;
         self.keys.edit(|profile| {
             profile.settings = preset.keys;
@@ -948,7 +984,7 @@ where
     }
 
     fn reset_appearance(&self, slot: u8) {
-        let preset = self.factory.preset(slot);
+        let preset = self.preset(slot);
         self.shared.edit(|appearance| {
             appearance.settings.clone_from(&preset.lighting);
             for (target, colors) in appearance.colors.0.iter_mut().zip(preset.colors) {
@@ -983,6 +1019,12 @@ where
         {
             self.count = count;
         }
+        self.order = load(&mut self.storage, Scope::Global, |order: Order| {
+            order.is_permutation_of(capacity).then_some(order)
+        })
+        .await
+        .flatten()
+        .unwrap_or_else(|| Order::identity(capacity));
         if let Some(global) = load_valid(
             &mut self.storage,
             Scope::Global,
@@ -1014,7 +1056,10 @@ where
         )
         .await;
         self.load_switches(&limits).await;
-        self.layout = None;
+        self.layout = match self.storage.as_deref_mut() {
+            Some(storage) => LayoutOverride::stored(storage).await,
+            None => None,
+        };
         self.unsaved = Changes::NONE;
         self.apply_global();
         self.shared.set_global_lightbar(&self.global_lightbar);
@@ -1046,9 +1091,9 @@ where
     }
 
     async fn info_of(&mut self, slot: u8) -> Info {
-        match load(&mut self.storage, Scope::Profile(slot), |info: Info| info).await {
+        match load(&mut self.storage, self.order.scope(slot), |info: Info| info).await {
             Some(info) => info,
-            None => self.factory.preset(slot).info(),
+            None => self.preset(slot).info(),
         }
     }
 
@@ -1069,7 +1114,7 @@ where
         let limits = self.limits();
         let found = load_valid(
             &mut self.storage,
-            Scope::Profile(profile.get()),
+            self.order.scope(profile.get()),
             &limits,
             |stored: T| from_stored(stored, part),
         )
@@ -1098,7 +1143,7 @@ where
         Ok(())
     }
 
-    fn default_keymap(&self, layer: Layer, keymap: &mut Keymap) {
+    pub fn default_keymap(&self, layer: Layer, keymap: &mut Keymap) {
         keymap.clear();
         for action in self.factory.keymap.actions(layer, self.variant) {
             if keymap.push(action).is_err() {
@@ -1109,7 +1154,7 @@ where
 
     async fn store_keys<T: KeyPart>(&mut self) -> Result<(), Rejection> {
         let keys = self.keys;
-        store_with::<_, T>(&mut self.storage, Scope::Profile(self.active), |body| {
+        store_with::<_, T>(&mut self.storage, self.order.scope(self.active), |body| {
             T::encode(keys, body)
         })
         .await
@@ -1120,7 +1165,7 @@ where
         part: impl Fn(&Appearance) -> &T,
     ) -> Result<(), Rejection> {
         let shared = self.shared;
-        store_with::<_, T>(&mut self.storage, Scope::Profile(self.active), |body| {
+        store_with::<_, T>(&mut self.storage, self.order.scope(self.active), |body| {
             shared.edit(|appearance| encode(part(appearance), body))
         })
         .await
@@ -1132,6 +1177,10 @@ where
         } else {
             Err(Rejection::ProfileMissing(profile.get()))
         }
+    }
+
+    fn preset(&self, slot: u8) -> &'static Preset {
+        self.factory.preset(self.order.storage_slot(slot))
     }
 
     fn limits(&self) -> Capabilities {
@@ -1148,12 +1197,12 @@ where
     }
 
     async fn store_part<T: Record>(&mut self, slot: u8, value: &T) -> Result<(), Rejection> {
-        store(&mut self.storage, Scope::Profile(slot), value).await?;
+        store(&mut self.storage, self.order.scope(slot), value).await?;
         self.bump_revision(slot).await
     }
 
     async fn bump_revision(&mut self, slot: u8) -> Result<(), Rejection> {
-        let scope = Scope::Profile(slot);
+        let scope = self.order.scope(slot);
         let revision = load(&mut self.storage, scope, |revision: Revision| revision.0)
             .await
             .unwrap_or_default();
@@ -1165,11 +1214,24 @@ where
         .await
     }
 
+    async fn reorder(&mut self, order: Order) -> Result<(), Rejection> {
+        if order == self.order {
+            return Ok(());
+        }
+        store(&mut self.storage, Scope::Global, &order).await?;
+        let active = self.order.storage_slot(self.active);
+        self.order = order;
+        self.active = self.order.slot_of(active).unwrap_or(self.active);
+        self.keys.set_profiles(self.count, self.active);
+        self.publish_profile_state();
+        Ok(())
+    }
+
     async fn remove_profile(&mut self, slot: u8) -> Result<(), Rejection> {
+        let scope = self.order.scope(slot);
         let Some(storage) = self.storage.as_mut() else {
             return Err(Rejection::StorageInaccessible);
         };
-        let scope = Scope::Profile(slot);
         for key in [
             RecordKey::of::<keys::Settings>(scope),
             RecordKey::of::<Keymaps>(scope),

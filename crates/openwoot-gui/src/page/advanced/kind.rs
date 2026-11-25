@@ -1,3 +1,6 @@
+use gpui_kit::{
+    AnyElement, FontWeight, Hsla, IntoElement, ParentElement as _, Pixels, Styled as _, div,
+};
 use openwoot_protocol::{
     advanced::{
         Behaviour, DepthPriority, DynamicKeystroke, Interrupt, ModTap, Resolution, STROKES, Socd,
@@ -6,6 +9,8 @@ use openwoot_protocol::{
     gamepad::Control,
     keys::{Action, Index},
 };
+
+use crate::{keyboard::Glyph, theme};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Kind {
@@ -30,24 +35,8 @@ pub(crate) struct Choice<T> {
     pub(crate) description: String,
 }
 
-pub(crate) const STROKE_EVENTS: [StrokeEvent; 4] = [
-    StrokeEvent::Nothing,
-    StrokeEvent::Press,
-    StrokeEvent::Release,
-    StrokeEvent::Tap,
-];
-
 impl Point {
     pub(crate) const ALL: [Self; 4] = [Self::Press, Self::BottomOut, Self::Lift, Self::Release];
-
-    pub(crate) const fn title(self) -> &'static str {
-        match self {
-            Self::Press => "Press",
-            Self::BottomOut => "Bottom",
-            Self::Lift => "Lift",
-            Self::Release => "Release",
-        }
-    }
 
     pub(crate) const fn help(self) -> &'static str {
         match self {
@@ -78,14 +67,6 @@ impl Point {
 }
 
 impl Kind {
-    pub(crate) const ALL: [Self; 5] = [
-        Self::DynamicKeystroke,
-        Self::ModTap,
-        Self::Toggle,
-        Self::DepthPriority,
-        Self::Socd,
-    ];
-
     pub(crate) const fn of(behaviour: &Behaviour) -> Self {
         match behaviour {
             Behaviour::DynamicKeystroke(_) => Self::DynamicKeystroke,
@@ -98,9 +79,19 @@ impl Kind {
 
     pub(crate) const fn title(self) -> &'static str {
         match self {
+            Self::DynamicKeystroke => "Dynamic Keystroke (DKS)",
+            Self::ModTap => "Mod Tap",
+            Self::Toggle => "Toggle Key",
+            Self::DepthPriority => "Rappy Snappy",
+            Self::Socd => "Snappy Tappy (SOCD)",
+        }
+    }
+
+    pub(crate) const fn short_title(self) -> &'static str {
+        match self {
             Self::DynamicKeystroke => "Dynamic Keystroke",
-            Self::ModTap => "Mod-Tap",
-            Self::Toggle => "Toggle",
+            Self::ModTap => "Mod Tap",
+            Self::Toggle => "Toggle Key",
             Self::DepthPriority => "Rappy Snappy",
             Self::Socd => "Snappy Tappy",
         }
@@ -118,12 +109,32 @@ impl Kind {
 
     pub(crate) const fn help(self) -> &'static str {
         match self {
-            Self::DynamicKeystroke => "Up to four actions at four points of one key press",
-            Self::ModTap => "One action on tap, another on hold",
-            Self::Toggle => "Tap to latch the action, hold for normal behaviour",
-            Self::DepthPriority => "Of two keys, the one pressed further registers",
-            Self::Socd => "Decides which of two keys registers when both are pressed",
+            Self::DynamicKeystroke => "Up to 4 actions on 4 parts of one key press",
+            Self::ModTap => "One action when the key is held, another when it is tapped",
+            Self::Toggle => "Tap to lock an action on or off, hold for the normal behaviour",
+            Self::DepthPriority => "Of 2 keys, the one pressed further down activates",
+            Self::Socd => "Of 2 keys pressed together, your setting decides which activates",
         }
+    }
+
+    pub(crate) fn glyph(self, ink: Hsla) -> Glyph {
+        Glyph::new(move |height| self.mark(height, ink))
+    }
+
+    pub(crate) fn mark(self, height: Pixels, ink: Hsla) -> AnyElement {
+        div()
+            .h(height * 0.44)
+            .px(height * 0.1)
+            .flex()
+            .items_center()
+            .rounded(height * 0.08)
+            .bg(ink)
+            .text_color(theme::keycaps().top)
+            .text_size(height * if self.badge().len() > 3 { 0.2 } else { 0.26 })
+            .font_weight(FontWeight::EXTRA_BOLD)
+            .italic()
+            .child(self.badge())
+            .into_any_element()
     }
 
     pub(crate) const fn key_count(self) -> usize {
@@ -181,33 +192,6 @@ pub(crate) const fn held_through(action: Action) -> DynamicKeystroke {
     }
 }
 
-pub(crate) const fn event_label(event: StrokeEvent) -> &'static str {
-    match event {
-        StrokeEvent::Nothing => "·",
-        StrokeEvent::Press => "Press",
-        StrokeEvent::Release => "Release",
-        StrokeEvent::Tap => "Tap",
-    }
-}
-
-pub(crate) const fn event_name(event: StrokeEvent) -> &'static str {
-    match event {
-        StrokeEvent::Nothing => "None",
-        StrokeEvent::Press => "Press",
-        StrokeEvent::Release => "Release",
-        StrokeEvent::Tap => "Tap",
-    }
-}
-
-pub(crate) const fn event_help(event: StrokeEvent) -> &'static str {
-    match event {
-        StrokeEvent::Nothing => "Does nothing",
-        StrokeEvent::Press => "Holds the action down until a Release",
-        StrokeEvent::Release => "Lets go of the action",
-        StrokeEvent::Tap => "Presses and releases the action once",
-    }
-}
-
 pub(crate) const fn follows_travel(action: Action) -> bool {
     matches!(
         action,
@@ -234,45 +218,80 @@ pub(crate) const fn follows_travel(action: Action) -> bool {
 }
 
 pub(crate) fn interrupts() -> [Choice<Interrupt>; 4] {
-    let choice = |value, title: &str, description: &str| Choice {
-        value,
-        title: title.to_owned(),
-        description: description.to_owned(),
-    };
     [
         choice(
             Interrupt::Auto,
-            "Modifier",
-            "Hold when the hold action is a modifier or Fn layer",
+            "Hold key, if it is a modifier",
+            "Uses the hold action when it is a modifier like Shift, Ctrl or Alt",
         ),
         choice(
             Interrupt::Tap,
-            "Tap",
-            "Always tap; suits home row modifiers",
+            "Tap key",
+            "Always uses the tap action; suits home row modifiers",
         ),
-        choice(Interrupt::Hold, "Hold", "Always hold"),
-        choice(Interrupt::Ignore, "Never", "Wait for the full hold time"),
+        choice(Interrupt::Hold, "Hold key", "Always uses the hold action"),
+        choice(
+            Interrupt::Ignore,
+            "Never",
+            "Turns just-in-time off; the key waits for the full hold duration",
+        ),
     ]
 }
 
-pub(crate) fn socd_resolutions(first: &str, second: &str) -> [(Resolution, String); 5] {
+pub(crate) fn socd_resolutions(first: &str, second: &str) -> [Choice<Resolution>; 5] {
     [
-        (Resolution::LastPressed, "Last input priority".to_owned()),
-        (Resolution::First, format!("{first} priority")),
-        (Resolution::Second, format!("{second} priority")),
-        (Resolution::Neither, "Neutral".to_owned()),
-        (Resolution::Both, "No cleaning".to_owned()),
+        choice(
+            Resolution::LastPressed,
+            "Last input priority",
+            "The key pressed last overrides the other",
+        ),
+        choice(
+            Resolution::First,
+            &format!("Absolute priority ({first})"),
+            &format!("{first} always takes priority over {second}"),
+        ),
+        choice(
+            Resolution::Second,
+            &format!("Absolute priority ({second})"),
+            &format!("{second} always takes priority over {first}"),
+        ),
+        choice(
+            Resolution::Neither,
+            "Neutral",
+            "When both keys are pressed, neither registers",
+        ),
+        choice(
+            Resolution::Both,
+            "No cleaning",
+            "Both keys register, as without Snappy Tappy",
+        ),
     ]
 }
 
-pub(crate) fn bottomed_out_resolutions(first: &str, second: &str) -> [(Resolution, String); 5] {
+pub(crate) fn bottomed_out_resolutions(first: &str, second: &str) -> [Choice<Resolution>; 5] {
     [
-        (Resolution::Both, "Both".to_owned()),
-        (Resolution::Neither, "Neither".to_owned()),
-        (Resolution::First, first.to_owned()),
-        (Resolution::Second, second.to_owned()),
-        (Resolution::LastPressed, "Last pressed".to_owned()),
+        choice(Resolution::Both, "Both", "Both keys register"),
+        choice(Resolution::Neither, "Neither", "Neither key registers"),
+        choice(Resolution::First, first, &format!("Only {first} registers")),
+        choice(
+            Resolution::Second,
+            second,
+            &format!("Only {second} registers"),
+        ),
+        choice(
+            Resolution::LastPressed,
+            "Last pressed",
+            "The key pressed last registers",
+        ),
     ]
+}
+
+fn choice<T>(value: T, title: &str, description: &str) -> Choice<T> {
+    Choice {
+        value,
+        title: title.to_owned(),
+        description: description.to_owned(),
+    }
 }
 
 #[cfg(test)]
@@ -331,7 +350,13 @@ mod tests {
     #[test]
     fn every_kind_round_trips_through_its_behaviour() {
         let keys = [Index::new(1), Index::new(2)];
-        for kind in Kind::ALL {
+        for kind in [
+            Kind::DynamicKeystroke,
+            Kind::ModTap,
+            Kind::Toggle,
+            Kind::DepthPriority,
+            Kind::Socd,
+        ] {
             let behaviour = kind.behaviour(Action::Keyboard(0x04), &keys);
             assert_eq!(behaviour.as_ref().map(Kind::of), Some(kind));
         }

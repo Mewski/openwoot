@@ -773,3 +773,36 @@ fn per_key_lists_host_colours_and_profile_changes_check_the_keyboard() {
     capabilities.host_signals = false;
     assert_eq!(signals.validate(&capabilities), Err(Invalid::NoHostSignals));
 }
+
+#[test]
+fn both_profiles_of_a_swap_or_a_move_must_be_slots_of_the_keyboard() {
+    use openwoot_protocol::profile::{Move, Swap};
+
+    let capabilities = capabilities();
+    let swap = |first, second| Swap {
+        first: Slot::new(first),
+        second: Slot::new(second),
+    };
+    let shift = |from, to| Move {
+        from: Slot::new(from),
+        to: Slot::new(to),
+    };
+    assert_eq!(swap(0, 3).validate(&capabilities), Ok(()));
+    assert_eq!(shift(3, 0).validate(&capabilities), Ok(()));
+    assert_eq!(
+        swap(4, 0).validate(&capabilities),
+        Err(Invalid::ProfileOutsideRange(4))
+    );
+    assert_eq!(
+        swap(0, u8::MAX).validate(&capabilities),
+        Err(Invalid::ProfileOutsideRange(u8::MAX))
+    );
+    assert_eq!(
+        shift(5, 1).validate(&capabilities),
+        Err(Invalid::ProfileOutsideRange(5))
+    );
+    assert_eq!(
+        shift(1, 4).validate(&capabilities),
+        Err(Invalid::ProfileOutsideRange(4))
+    );
+}

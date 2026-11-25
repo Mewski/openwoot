@@ -1,16 +1,18 @@
+use std::collections::BTreeSet;
+
 use gpui_kit::{
-    AppContext as _, Context, Div, Entity, EventEmitter, FocusHandle, FontWeight,
+    AppContext as _, Context, Div, ElementId, Entity, EventEmitter, FocusHandle, FontWeight,
     InteractiveElement as _, IntoElement, KeyDownEvent, Modifiers, ModifiersChangedEvent,
     ParentElement as _, Render, SharedString, Stateful, StatefulInteractiveElement as _,
     Styled as _, Subscription, Window,
     assets::IconName as Catalog,
     component::{
-        ActiveTheme as _, Disableable as _, Icon, IconName, Selectable as _, Sizable as _,
-        WindowExt as _,
-        button::{Button, ButtonVariants as _},
+        ActiveTheme as _, Disableable as _, Icon, Sizable as _, WindowExt as _,
+        button::Button,
         h_flex,
         input::{Input, InputEvent, InputState},
         notification::Notification,
+        tooltip::Tooltip,
         v_flex,
     },
     div,
@@ -19,34 +21,33 @@ use gpui_kit::{
 };
 use openwoot_protocol::{
     configuration::{Capabilities, Validate as _},
-    keys::{Action, Function, Layer},
+    keys::{Action, Layer},
 };
 
 use super::{
     catalog::{self, Category, Entry},
+    keycap::{self, Look},
     quick_bind,
 };
-use crate::{store::Keyboard, usage};
+use crate::{keyboard::Dragged, store::Keyboard, theme, usage};
 
-const TILE_SIZE: f32 = 44.0;
-const WIDE_TILE_HEIGHT: f32 = 36.0;
-const GROUP_HEIGHT: f32 = 40.0;
-const GROUP_ICON_SIZE: f32 = 26.0;
+const HEADER_HEIGHT: f32 = 40.0;
+const BADGE_SIZE: f32 = 26.0;
 const CODE_WIDTH: f32 = 112.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PickerEvent {
     Picked(Action),
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Target {
-    pub(crate) layer: Layer,
-    pub(crate) current: Option<Action>,
+    pub(crate) current: Action,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Group {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Section {
     Category(Category),
     Code,
 }
@@ -56,9 +57,9 @@ pub(crate) struct ActionPicker {
     code: Entity<InputState>,
     query: SharedString,
     entries: Vec<Entry>,
-    open: Option<Group>,
+    open: BTreeSet<Section>,
+    layer: Layer,
     target: Option<Target>,
-    none_label: &'static str,
     capabilities: Option<Capabilities>,
     profile_names: Vec<SharedString>,
     listening: Option<Listening>,
@@ -76,12 +77,8 @@ struct Listening {
 impl EventEmitter<PickerEvent> for ActionPicker {}
 
 impl ActionPicker {
-    pub(crate) fn new(
-        none_label: &'static str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search for an action"));
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search for a character"));
         let code = cx.new(|cx| InputState::new(window, cx).placeholder("0x65"));
         let subscriptions = vec![
             cx.subscribe(&search, |this, state, event: &InputEvent, cx| {
@@ -101,9 +98,9 @@ impl ActionPicker {
             code,
             query: SharedString::default(),
             entries: catalog::entries(0),
-            open: Some(Group::Category(Category::Basic)),
+            open: BTreeSet::from([Section::Category(Category::Basic)]),
+            layer: Layer::Base,
             target: None,
-            none_label,
             capabilities: None,
             profile_names: Vec::new(),
             listening: None,
@@ -127,18 +124,16 @@ impl ActionPicker {
         cx.notify();
     }
 
+    pub(crate) fn set_layer(&mut self, layer: Layer, cx: &mut Context<Self>) {
+        if self.layer != layer {
+            self.layer = layer;
+            cx.notify();
+        }
+    }
+
     pub(crate) fn set_target(&mut self, target: Option<Target>, cx: &mut Context<Self>) {
         if self.target == target {
             return;
-        }
-        let shown = target.and_then(|target| target.current);
-        if shown != self.target.and_then(|target| target.current)
-            && let Some(entry) = self
-                .entries
-                .iter()
-                .find(|entry| Some(entry.action) == shown)
-        {
-            self.open = Some(Group::Category(entry.category));
         }
         self.target = target;
         if target.is_none() {
@@ -147,38 +142,47 @@ impl ActionPicker {
         cx.notify();
     }
 
-    fn toggle_group(&mut self, group: Group, cx: &mut Context<Self>) {
-        self.open = (self.open != Some(group)).then_some(group);
+    pub(crate) fn listen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.listening = Some(Listening {
+            modifiers: window.modifiers(),
+            caps_lock: window.capslock().on,
+        });
+        self.focus.focus(window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn stop_listening(&mut self, cx: &mut Context<Self>) {
+        if self.listening.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn refusal(&self, action: Action) -> Option<String> {
+        catalog::refusal(action, self.layer).or_else(|| {
+            self.capabilities
+                .as_ref()
+                .and_then(|capabilities| action.validate(capabilities).err())
+                .map(|invalid| capitalized(&invalid.to_string()))
+        })
+    }
+
+    fn toggle(&mut self, section: Section, cx: &mut Context<Self>) {
+        if !self.open.remove(&section) {
+            self.open.insert(section);
+        }
         cx.notify();
     }
 
     fn pick(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(target) = self.target else {
-            return;
-        };
-        if let Some(reason) = catalog::refusal(action, target.layer) {
-            window.push_notification(Notification::warning(reason), cx);
+        if self.target.is_none() {
             return;
         }
-        if let Some(capabilities) = &self.capabilities
-            && let Err(invalid) = action.validate(capabilities)
-        {
-            window.push_notification(Notification::error(invalid.to_string()), cx);
+        if let Some(reason) = self.refusal(action) {
+            window.push_notification(Notification::warning(reason), cx);
             return;
         }
         self.listening = None;
         cx.emit(PickerEvent::Picked(action));
-        cx.notify();
-    }
-
-    fn toggle_listening(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.listening.take().is_none() && self.target.is_some() {
-            self.listening = Some(Listening {
-                modifiers: window.modifiers(),
-                caps_lock: window.capslock().on,
-            });
-            self.focus.focus(window, cx);
-        }
         cx.notify();
     }
 
@@ -188,13 +192,17 @@ impl ActionPicker {
         }
         cx.stop_propagation();
         let key = event.keystroke.key.as_str();
+        if key == "escape" {
+            self.listening = None;
+            cx.emit(PickerEvent::Cancelled);
+            cx.notify();
+            return;
+        }
         if let Some(code) = quick_bind::usage_of_key(key) {
             self.pick(Action::Keyboard(code), window, cx);
         } else {
-            self.listening = None;
-            cx.notify();
             window.push_notification(
-                Notification::warning(format!("Can't quick bind {key}; pick it from the list")),
+                Notification::warning(format!("{key} can't be bound by typing; pick it below")),
                 cx,
             );
         }
@@ -244,10 +252,8 @@ impl ActionPicker {
             cx.notify();
             return;
         };
-        if let Some(capabilities) = &self.capabilities
-            && let Err(invalid) = action.validate(capabilities)
-        {
-            self.code_problem = Some(capitalized(&invalid.to_string()).into());
+        if let Some(reason) = self.refusal(action) {
+            self.code_problem = Some(reason.into());
             cx.notify();
             return;
         }
@@ -255,61 +261,12 @@ impl ActionPicker {
         self.pick(action, window, cx);
     }
 
-    fn toolbar(&self, cx: &mut Context<Self>) -> Div {
-        let listening = self.listening.is_some();
-        let idle = self.target.is_none();
-        h_flex()
-            .gap_2()
-            .items_center()
-            .child(
-                div().flex_1().min_w_0().child(
-                    Input::new(&self.search)
-                        .cleanable(true)
-                        .prefix(Icon::new(IconName::Search).small()),
-                ),
-            )
-            .child(
-                Button::new("quick-bind")
-                    .ghost()
-                    .icon(Catalog::Keyboard)
-                    .label(if listening {
-                        "Press a key…"
-                    } else {
-                        "Quick bind"
-                    })
-                    .selected(listening)
-                    .disabled(idle)
-                    .tooltip("Binds the next key you press")
-                    .on_click(cx.listener(|this, _, window, cx| this.toggle_listening(window, cx))),
-            )
-            .child(
-                Button::new("pick-none")
-                    .ghost()
-                    .icon(IconName::Ban)
-                    .label(self.none_label)
-                    .selected(
-                        self.target
-                            .is_some_and(|target| target.current == Some(Action::None)),
-                    )
-                    .disabled(idle)
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.pick(Action::None, window, cx)),
-                    ),
-            )
-    }
-
-    fn groups(&self, cx: &mut Context<Self>) -> Div {
+    fn sections(&self, cx: &mut Context<Self>) -> Div {
         let mut list = v_flex();
         for category in Category::ALL {
-            let group = Group::Category(category);
-            let open = self.open == Some(group);
-            list = list.child(group_header(
-                group,
-                category_icon(category),
-                category.title(),
-                open,
-                cx,
-            ));
+            let section = Section::Category(category);
+            let open = self.open.contains(&section);
+            list = list.child(self.header(section, open, cx));
             if open {
                 let entries: Vec<Entry> = self
                     .entries
@@ -317,92 +274,135 @@ impl ActionPicker {
                     .filter(|entry| entry.category == category)
                     .copied()
                     .collect();
-                list = list.child(self.grid(entries, false, cx));
+                list = list.child(self.grid(&entries, cx));
             }
         }
-        let open = self.open == Some(Group::Code);
-        list.child(group_header(
-            Group::Code,
-            Catalog::SquareTerminal,
-            "HID usage",
-            open,
-            cx,
-        ))
-        .when(open, |this| this.child(self.code_row(cx)))
+        let open = self.open.contains(&Section::Code);
+        list.child(self.header(Section::Code, open, cx))
+            .when(open, |this| this.child(self.code_row(cx)))
     }
 
-    fn search_results(&self, cx: &mut Context<Self>) -> Div {
+    fn results(&self, cx: &mut Context<Self>) -> Div {
         let found = catalog::search(&self.entries, &self.query);
         if found.is_empty() {
-            let special = !self.query.is_ascii();
-            return v_flex()
-                .gap_1()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child("No results")
-                .when(special, |this| {
-                    this.child("Special characters depend on the computer's language")
-                });
+            return no_results(cx);
         }
-        self.grid(found, true, cx)
+        let mut list = v_flex();
+        for category in Category::ALL {
+            let entries: Vec<Entry> = found
+                .iter()
+                .filter(|entry| entry.category == category)
+                .copied()
+                .collect();
+            if entries.is_empty() {
+                continue;
+            }
+            list = list
+                .child(self.header(Section::Category(category), true, cx))
+                .child(self.grid(&entries, cx));
+        }
+        list
     }
 
-    fn grid(&self, entries: Vec<Entry>, searching: bool, cx: &mut Context<Self>) -> Div {
-        let tiles: Vec<Button> = entries
-            .into_iter()
-            .map(|entry| self.action_button(entry, searching, cx))
-            .collect();
-        h_flex().gap_2().flex_wrap().pt_1().pb_4().children(tiles)
-    }
-
-    fn action_button(&self, entry: Entry, searching: bool, cx: &mut Context<Self>) -> Button {
-        let action = entry.action;
-        let refusal = self
-            .target
-            .and_then(|target| catalog::refusal(action, target.layer));
-        let keyish = matches!(
-            entry.category,
-            Category::Basic
-                | Category::Extended
-                | Category::International
-                | Category::OtherKeys
-                | Category::Gamepad
-        );
-        let label = if keyish {
-            usage::legend(action)
-        } else {
-            usage::name(action)
+    fn header(&self, section: Section, open: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+        let theme = cx.theme();
+        let (badge, muted, radius) = (theme.secondary, theme.muted_foreground, theme.radius);
+        let (title, mark) = match section {
+            Section::Category(category) => (category.title(), mark(category)),
+            Section::Code => ("HID usage", Mark::Icon(Catalog::SquareTerminal)),
         };
-        let mut tooltip = usage::name(action).into_owned();
-        if let Action::Function(Function::Profile(slot)) = action
-            && let Some(name) = self.profile_names.get(usize::from(slot.get()))
-        {
-            tooltip = format!("{tooltip}: {name}");
-        }
-        if searching {
-            tooltip = format!("{tooltip} · {}", entry.category.title());
-        }
-        if let Some(reason) = refusal {
-            reason.clone_into(&mut tooltip);
-        }
+        let searching = self.is_searching();
+        h_flex()
+            .id(SharedString::from(format!("section-{title}")))
+            .w_full()
+            .h(px(HEADER_HEIGHT))
+            .gap_3()
+            .items_center()
+            .child(
+                h_flex()
+                    .flex_none()
+                    .size(px(BADGE_SIZE))
+                    .items_center()
+                    .justify_center()
+                    .rounded(radius)
+                    .bg(badge)
+                    .text_xs()
+                    .font_weight(FontWeight::BOLD)
+                    .child(match mark {
+                        Mark::Letter(letter) => div().child(letter).into_any_element(),
+                        Mark::Icon(icon) => Icon::new(icon).small().into_any_element(),
+                    }),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_base()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(title),
+            )
+            .when(!searching, |this| {
+                this.cursor_pointer()
+                    .child(
+                        div().text_color(muted).child(
+                            Icon::new(if open {
+                                Catalog::ChevronUp
+                            } else {
+                                Catalog::ChevronDown
+                            })
+                            .small(),
+                        ),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(section, cx)))
+            })
+    }
+
+    fn grid(&self, entries: &[Entry], cx: &mut Context<Self>) -> Div {
+        let tiles: Vec<Stateful<Div>> = entries
+            .iter()
+            .map(|entry| self.tile(entry.action, cx))
+            .collect();
+        h_flex().flex_wrap().gap_2().pt_1().pb_4().children(tiles)
+    }
+
+    fn tile(&self, action: Action, cx: &mut Context<Self>) -> Stateful<Div> {
+        let refusal = self.refusal(action);
         let current = self
             .target
-            .is_some_and(|target| target.current == Some(action));
+            .is_some_and(|target| target.current == action && action != Action::None);
+        let look = Look {
+            current,
+            disabled: refusal.is_some(),
+        };
+        let profile_name = match action {
+            Action::Function(openwoot_protocol::keys::Function::Profile(slot)) => self
+                .profile_names
+                .get(usize::from(slot.get()))
+                .map(SharedString::as_str),
+            _ => None,
+        };
+        let tooltip: Option<SharedString> = refusal
+            .clone()
+            .or_else(|| catalog::help(action, profile_name))
+            .map(SharedString::from);
+        let caps = theme::keycaps();
         let accent = cx.theme().primary;
-        Button::new(SharedString::from(format!("pick-{action:?}")))
-            .small()
-            .map(|button| {
-                if keyish {
-                    button.min_w(px(TILE_SIZE)).h(px(TILE_SIZE))
-                } else {
-                    button.h(px(WIDE_TILE_HEIGHT))
-                }
-            })
-            .label(SharedString::from(label))
-            .tooltip(tooltip)
-            .selected(current)
-            .when(current, |button| button.border_color(accent))
-            .disabled(self.target.is_none() || refusal.is_some())
+        let tile = keycap::tile(
+            ElementId::Name(format!("pick-{action:?}").into()),
+            action,
+            look,
+            cx,
+        )
+        .when_some(tooltip, |this, text| {
+            this.tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+        });
+        if refusal.is_some() {
+            return tile;
+        }
+        let mut dragged = Dragged::new(action, SharedString::from(usage::legend(action)));
+        if let Some(glyph) = keycap::glyph(action, caps.legend, accent) {
+            dragged = dragged.glyph(glyph);
+        }
+        tile.on_drag(dragged, |dragged, _, _, cx| cx.new(|_| dragged.clone()))
             .on_click(cx.listener(move |this, _, window, cx| this.pick(action, window, cx)))
     }
 
@@ -441,88 +441,97 @@ impl ActionPicker {
                 this.child(div().text_xs().text_color(danger).child(problem))
             })
     }
+
+    fn is_searching(&self) -> bool {
+        !self.query.trim().is_empty()
+    }
 }
 
 impl Render for ActionPicker {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let searching = !self.query.trim().is_empty();
         v_flex()
             .id("action-picker")
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::captured_key))
             .on_modifiers_changed(cx.listener(Self::captured_modifiers))
             .w_full()
-            .gap_4()
-            .child(self.toolbar(cx))
-            .child(if searching {
-                self.search_results(cx)
+            .gap_3()
+            .child(
+                Input::new(&self.search)
+                    .large()
+                    .cleanable(true)
+                    .prefix(Icon::new(Catalog::Search).small()),
+            )
+            .child(if self.is_searching() {
+                self.results(cx)
             } else {
-                self.groups(cx)
+                self.sections(cx)
             })
     }
 }
 
-fn group_header(
-    group: Group,
-    icon: Catalog,
-    title: &'static str,
-    open: bool,
-    cx: &mut Context<ActionPicker>,
-) -> Stateful<Div> {
-    let theme = cx.theme();
-    let (badge, muted, radius) = (theme.accent, theme.muted_foreground, theme.radius);
-    h_flex()
-        .id(SharedString::from(format!("group-{title}")))
-        .w_full()
-        .h(px(GROUP_HEIGHT))
-        .gap_3()
-        .items_center()
-        .cursor_pointer()
-        .child(
-            h_flex()
-                .flex_none()
-                .size(px(GROUP_ICON_SIZE))
-                .items_center()
-                .justify_center()
-                .rounded(radius)
-                .bg(badge)
-                .child(Icon::new(icon).small()),
-        )
-        .child(
-            div()
-                .flex_1()
-                .text_sm()
-                .font_weight(FontWeight::MEDIUM)
-                .child(title),
-        )
-        .child(
-            div().text_color(muted).child(
-                Icon::new(if open {
-                    Catalog::ChevronUp
-                } else {
-                    Catalog::ChevronDown
-                })
-                .small(),
-            ),
-        )
-        .on_click(cx.listener(move |this, _, _, cx| this.toggle_group(group, cx)))
+#[derive(Debug, Clone, Copy)]
+enum Mark {
+    Letter(&'static str),
+    Icon(Catalog),
 }
 
-const fn category_icon(category: Category) -> Catalog {
+const fn mark(category: Category) -> Mark {
     match category {
-        Category::Basic => Catalog::CaseSensitive,
-        Category::Extended => Catalog::Keyboard,
-        Category::International => Catalog::Globe,
-        Category::OtherKeys => Catalog::Ellipsis,
-        Category::Functions => Catalog::Zap,
-        Category::Layers => Catalog::Layers,
-        Category::Profiles => Catalog::UserRound,
-        Category::Media => Catalog::Music,
-        Category::Applications => Catalog::Monitor,
-        Category::System => Catalog::Power,
-        Category::Mouse => Catalog::Mouse,
-        Category::Gamepad => Catalog::Gamepad2,
+        Category::Basic => Mark::Letter("A"),
+        Category::Extended => Mark::Letter("#"),
+        Category::Functions => Mark::Icon(Catalog::Settings),
+        Category::Profiles => Mark::Icon(Catalog::UserRound),
+        Category::Media => Mark::Icon(Catalog::Play),
+        Category::Mouse => Mark::Icon(Catalog::Mouse),
+        Category::Gamepad => Mark::Icon(Catalog::Gamepad2),
+        Category::OtherKeys => Mark::Icon(Catalog::Keyboard),
     }
+}
+
+fn no_results(cx: &Context<ActionPicker>) -> Div {
+    let theme = cx.theme();
+    v_flex()
+        .w_full()
+        .gap_4()
+        .pt_2()
+        .child(
+            div()
+                .w_full()
+                .text_center()
+                .text_color(theme.muted_foreground)
+                .child("No results found"),
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .items_start()
+                .gap_3()
+                .p_4()
+                .rounded(theme.radius)
+                .bg(theme.secondary)
+                .child(
+                    Icon::new(Catalog::TriangleAlert)
+                        .text_color(theme.warning)
+                        .flex_none(),
+                )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("Special characters can't be remapped"),
+                        )
+                        .child(div().text_sm().text_color(theme.muted_foreground).child(
+                            "The keyboard sends key positions; the computer's language \
+                                 turns them into characters.",
+                        )),
+                ),
+        )
 }
 
 fn capitalized(text: &str) -> String {

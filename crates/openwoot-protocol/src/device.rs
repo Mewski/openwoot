@@ -49,6 +49,12 @@ pub enum Layout {
     Jis,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+pub struct LayoutState {
+    pub active: Layout,
+    pub chosen: Layout,
+}
+
 impl Validate for Settings {
     fn validate(&self, _: &Capabilities) -> Result<(), Invalid> {
         Ok(())

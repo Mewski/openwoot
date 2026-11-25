@@ -213,6 +213,7 @@ fn keyboard_wide_settings_survive_a_round_trip() {
                     green: 40,
                     blue: 40,
                 },
+                icon: 3,
             },
         },
         DONE,
@@ -317,6 +318,7 @@ fn the_largest_lighting_configuration_fits_one_frame() {
             value: profile::Info {
                 name,
                 color: Rgb::default(),
+                icon: u8::MAX,
             },
         },
         DONE,
@@ -448,7 +450,8 @@ fn the_largest_diagnostics_report_fits_one_frame() {
 fn profile_management_and_session_endpoints_survive_a_round_trip() {
     use openwoot_protocol::endpoints::{
         ActivateProfile, CreateProfile, DeleteProfile, EnterUpdateMode, FactoryReset,
-        GetProfileInfo, GetProfileRevision, GetProfiles, Restart, Revert, Save,
+        GetProfileInfo, GetProfileRevision, GetProfiles, MoveProfile, Restart, Revert, Save,
+        SwapProfiles,
     };
 
     round_trip!(
@@ -468,11 +471,28 @@ fn profile_management_and_session_endpoints_survive_a_round_trip() {
     );
     round_trip!(ActivateProfile, Slot::new(1), DONE);
     round_trip!(
+        SwapProfiles,
+        profile::Swap {
+            first: Slot::new(0),
+            second: Slot::new(3),
+        },
+        DONE,
+    );
+    round_trip!(
+        MoveProfile,
+        profile::Move {
+            from: Slot::new(3),
+            to: Slot::new(1),
+        },
+        Err(Rejection::ProfileMissing(3)),
+    );
+    round_trip!(
         GetProfileInfo,
         Slot::new(1),
         Ok(profile::Info {
             name: String::try_from("Typing").unwrap(),
             color: white(),
+            icon: 12,
         }),
     );
     round_trip!(GetProfileRevision, Slot::new(1), Ok(u32::MAX));
@@ -587,11 +607,13 @@ fn every_lighting_effect_survives_a_round_trip() {
 fn keyboard_wide_reads_runtime_switches_and_rejections_survive_a_round_trip() {
     use openwoot_protocol::{
         configuration::Invalid,
+        device::LayoutState,
         endpoints::{
-            GetDeviceSettings, GetGlobalLightbar, GetGlobalSettings, GetHostSignals, GetLayout,
-            GetSwitchModels, LeaveHostControl, ResetHostColors, ResetHostKeyColor,
-            SetGamepadDetection, SetKeyReports, SetRawScanning,
+            GetDefaultKeymap, GetDeviceSettings, GetGamepadState, GetGlobalLightbar,
+            GetGlobalSettings, GetHostSignals, GetLayout, GetSwitchModels, LeaveHostControl,
+            ResetHostColors, ResetHostKeyColor, SetGamepadDetection, SetKeyReports, SetRawScanning,
         },
+        gamepad::{Player, State},
     };
 
     round_trip!(
@@ -604,7 +626,22 @@ fn keyboard_wide_reads_runtime_switches_and_rejections_survive_a_round_trip() {
             gamepad_polling: device::PollingRate::Every4Milliseconds,
         }),
     );
-    round_trip!(GetLayout, (), Ok(Layout::Iso));
+    round_trip!(
+        GetLayout,
+        (),
+        Ok(LayoutState {
+            active: Layout::Ansi,
+            chosen: Layout::Iso,
+        }),
+    );
+    let mut factory: keys::Keymap = filled(Action::Keyboard(0x04), key_count());
+    factory[0] = Action::Function(Function::BrightnessUp);
+    round_trip!(GetDefaultKeymap, Layer::One, Ok(factory));
+    round_trip!(
+        GetDefaultKeymap,
+        Layer::Three,
+        Ok::<_, Rejection>(filled(widest_action(), MAX_KEYS)),
+    );
     round_trip!(
         SetLayout,
         Layout::Jis,
@@ -652,6 +689,16 @@ fn keyboard_wide_reads_runtime_switches_and_rejections_survive_a_round_trip() {
     );
     round_trip!(SetKeyReports, false, DONE);
     round_trip!(SetGamepadDetection, true, DONE);
+    round_trip!(
+        GetGamepadState,
+        (),
+        Ok(State {
+            player: Some(Player::Four),
+            detection: true,
+        }),
+    );
+    round_trip!(GetGamepadState, (), Ok(State::default()));
+    round_trip!(GetGamepadState, (), Err::<State, _>(Rejection::Unsupported));
     round_trip!(SetRawScanning, true, Err(Rejection::Unsupported));
     round_trip!(ResetHostKeyColor, Position { row: 5, column: 16 }, DONE);
     round_trip!(ResetHostColors, (), DONE);

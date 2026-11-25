@@ -1,473 +1,348 @@
 use gpui_kit::{
-    Context, Div, IntoElement, ParentElement as _, SharedString, StatefulInteractiveElement as _,
+    AppContext as _, Context, Div, FontWeight, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, Stateful, StatefulInteractiveElement as _,
     Styled as _, Window,
-    component::{
-        IconName, Sizable as _,
-        button::{Button, ButtonVariants as _},
-        color_picker::ColorPicker,
-        h_flex,
-        menu::{DropdownMenu as _, PopupMenuItem},
-        switch::Switch,
-        v_flex,
-    },
+    assets::IconName as Catalog,
+    component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex},
     div,
     prelude::FluentBuilder as _,
     px,
 };
-use openwoot_protocol::lighting::{
-    Effect, HueRange, MAX_EFFECTS, ReactiveColoring, ReactiveFade, Scanner, ScannerDirection,
+use openwoot_protocol::{
+    keys::Layer,
+    lighting::{Effect, MAX_EFFECTS},
 };
 
 use super::{
-    LightingPage, WHITE, add_button,
-    effect::{self, CATALOGUE, Dial, HUE_RANGES, Paint},
-    opaque_of, pill, segmented, select, stepper, sunken, tile, wide_slider,
+    LightingPage, add_button, banner,
+    effect::{self, BASE_KINDS, LAYER_KINDS, SCAN},
+    palette::PRESETS,
+    pill, sunken, tile, wide_slider,
 };
-use crate::panel;
+use crate::{
+    dropdown::{Dropdown, Item},
+    panel,
+};
 
 const LAYERS_WIDTH: f32 = 180.0;
-const WIDE_CONTENT: f32 = 1100.0;
-const WAVE_DIRECTIONS: [(bool, &str); 2] = [(true, "←"), (false, "→")];
-const SCAN_DIRECTIONS: [(ScannerDirection, &str); 4] = [
-    (ScannerDirection::Left, "←"),
-    (ScannerDirection::Right, "→"),
-    (ScannerDirection::Up, "↑"),
-    (ScannerDirection::Down, "↓"),
-];
-const TRAIL_PAINTS: [(Paint, &str); 3] = [
-    (Paint::KeyColor, "Base"),
-    (Paint::Palette, "Random"),
-    (Paint::Fixed, "Single"),
-];
+const WIDE_CARD: f32 = 760.0;
+const STATIC_DESCRIPTION: &str = "Keys show their own colours";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Shift {
-    Earlier,
-    Later,
+pub(super) enum Focus {
+    Base,
+    Effect(usize),
+}
+
+#[derive(Debug, Clone)]
+struct EffectDrag {
+    index: usize,
+    name: &'static str,
+    icon: Catalog,
 }
 
 impl LightingPage {
     pub(super) fn effects_card(&self, window: &Window, cx: &Context<Self>) -> Option<Div> {
         let settings = self.settings.as_ref()?;
         let brightness = self.brightness.read(cx).value().end();
-        let wide = f32::from(panel::content_width(window)) >= WIDE_CONTENT;
-        Some(
-            panel::section(
-                "Effects",
-                Some("Paused in Tachyon mode and while an Fn layer has its own colours.".into()),
-                cx,
-            )
-            .child(
-                h_flex()
-                    .w_full()
-                    .gap_6()
-                    .items_start()
-                    .child(div().flex_1().min_w_0().child(panel::field(
-                        "Presets",
-                        Self::preset_menu(cx),
-                        cx,
-                    )))
-                    .child(div().flex_1().min_w_0().child(panel::field(
-                        "Brightness",
-                        wide_slider(&self.brightness, format!("{brightness:.0} %"), cx),
-                        cx,
-                    ))),
-            )
-            .child(
-                h_flex()
-                    .w_full()
-                    .gap_6()
-                    .items_start()
-                    .child(div().flex_none().w(px(LAYERS_WIDTH)).child(panel::field(
-                        "Effect layers",
-                        self.effect_layers(&settings.effects, cx),
-                        cx,
-                    )))
-                    .child(self.effect_details(wide, cx)),
-            ),
-        )
-    }
-
-    fn effect_layers(&self, effects: &[Effect], cx: &Context<Self>) -> Div {
-        let count = effects.len();
-        v_flex()
-            .w_full()
-            .gap_2()
-            .children(effects.iter().enumerate().map(|(index, effect)| {
-                pill(
-                    format!("effect-{index}"),
-                    effect::name(effect),
-                    None,
-                    self.effect == Some(index),
-                    false,
-                    cx,
-                )
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.select_effect(index, window, cx);
-                }))
-                .child(Self::effect_options_menu(index, count, cx))
-            }))
-            .when(count < MAX_EFFECTS, |this| {
-                this.child(
-                    add_button("add-effect", "Add effect", cx).on_click(cx.listener(
-                        |this, _, window, cx| {
-                            if let Some(effect) = CATALOGUE.first() {
-                                this.add_effect(*effect, window, cx);
-                            }
-                        },
-                    )),
-                )
-            })
-    }
-
-    fn effect_details(&self, wide: bool, cx: &Context<Self>) -> Div {
-        let Some(effect) = self.selected_effect().copied() else {
-            return div().flex_1().min_w_0().child(panel::field(
-                "Effect parameters",
-                sunken(cx)
-                    .py_4()
-                    .items_center()
-                    .child(panel::note("Select an effect to configure it", cx)),
-                cx,
-            ));
-        };
-        let selection = panel::field("Effect selection", Self::effect_tiles(&effect, cx), cx);
-        let parameters = panel::field("Effect parameters", self.effect_parameters(&effect, cx), cx);
-        if wide {
+        let main = self.layer == Layer::Base;
+        let card = panel::section("Effects", None, cx).child(
             h_flex()
-                .flex_1()
-                .min_w_0()
+                .w_full()
                 .gap_6()
                 .items_start()
+                .child(div().flex_1().min_w_0().child(panel::field(
+                    "Presets",
+                    Self::preset_menu(cx),
+                    cx,
+                )))
+                .child(div().flex_1().min_w_0().child(panel::field(
+                    "Global brightness",
+                    wide_slider(&self.brightness, format!("{brightness:.0} %"), cx),
+                    cx,
+                ))),
+        );
+        if !main {
+            return Some(card.child(banner("Effects show on the main layer only", cx)));
+        }
+        let wide = f32::from(panel::content_width(window)) - super::COLOURS_WIDTH >= WIDE_CARD;
+        let layers = v_flex()
+            .flex_none()
+            .w(px(LAYERS_WIDTH))
+            .gap_5()
+            .child(panel::field("Base layer", self.base_pill(cx), cx))
+            .child(panel::field(
+                "Effect layers",
+                self.effect_layers(&settings.effects, cx),
+                cx,
+            ));
+        let selection = panel::field("Effect selection", self.effect_tiles(cx), cx);
+        let parameters = panel::field("Effect parameters", self.effect_parameters(cx), cx);
+        let editor = if wide {
+            h_flex()
+                .w_full()
+                .gap_6()
+                .items_start()
+                .child(layers)
                 .child(div().flex_1().min_w_0().child(selection))
                 .child(div().flex_1().min_w_0().child(parameters))
         } else {
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .gap_4()
-                .child(selection)
-                .child(parameters)
-        }
-    }
-
-    fn effect_tiles(current: &Effect, cx: &Context<Self>) -> Div {
-        sunken(cx).child(div().grid().grid_cols(2).gap_1().children(
-            CATALOGUE.iter().enumerate().map(|(index, entry)| {
-                let entry = *entry;
-                tile(
-                    format!("effect-kind-{index}"),
-                    effect::icon(&entry),
-                    effect::name(&entry),
-                    effect::description(&entry),
-                    effect::same_kind(current, &entry),
-                    cx,
-                )
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    let changed = this
-                        .selected_effect()
-                        .is_some_and(|effect| !effect::same_kind(effect, &entry));
-                    if changed {
-                        this.replace_effect(entry, window, cx);
-                    }
-                }))
-            }),
-        ))
-    }
-
-    fn effect_parameters(&self, effect: &Effect, cx: &Context<Self>) -> Div {
-        let rows: Vec<Div> = self
-            .effect_options(effect, cx)
-            .into_iter()
-            .chain(self.effect_dials(effect, cx))
-            .collect();
-        let body = sunken(cx).p_3().gap_3();
-        if rows.is_empty() {
-            body.child(panel::note("No parameters", cx))
-        } else {
-            body.children(rows)
-        }
-    }
-
-    fn effect_options_menu(
-        index: usize,
-        count: usize,
-        cx: &Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let page = cx.entity().downgrade();
-        Button::new(SharedString::from(format!("effect-options-{index}")))
-            .icon(IconName::EllipsisVertical)
-            .ghost()
-            .xsmall()
-            .dropdown_menu(move |menu, _, _| {
-                let (up, down, delete) = (page.clone(), page.clone(), page.clone());
-                menu.item(PopupMenuItem::new("Move up").disabled(index == 0).on_click(
-                    move |_, window, cx| {
-                        up.update(cx, |page, cx| {
-                            page.shift_effect(index, Shift::Earlier, window, cx);
-                        })
-                        .ok();
-                    },
-                ))
-                .item(
-                    PopupMenuItem::new("Move down")
-                        .disabled(index + 1 >= count)
-                        .on_click(move |_, window, cx| {
-                            down.update(cx, |page, cx| {
-                                page.shift_effect(index, Shift::Later, window, cx);
-                            })
-                            .ok();
-                        }),
-                )
-                .separator()
-                .item(PopupMenuItem::new("Delete").on_click(move |_, window, cx| {
-                    delete
-                        .update(cx, |page, cx| page.remove_effect(index, window, cx))
-                        .ok();
-                }))
-            })
-    }
-
-    fn hue_menu(current: HueRange, cx: &Context<Self>) -> impl IntoElement + use<> {
-        let page = cx.entity().downgrade();
-        select("effect-hues", effect::hue_name(current)).dropdown_menu(move |menu, _, _| {
-            HUE_RANGES.iter().fold(menu, |menu, (range, label)| {
-                let page = page.clone();
-                let range = *range;
-                menu.item(
-                    PopupMenuItem::new(*label)
-                        .checked(range == current)
-                        .on_click(move |_, window, cx| {
-                            page.update(cx, |page, cx| {
-                                page.edit_effect(|effect| set_hues(effect, range), window, cx);
-                            })
-                            .ok();
-                        }),
-                )
-            })
-        })
-    }
-
-    fn effect_options(&self, effect: &Effect, cx: &Context<Self>) -> Vec<Div> {
-        let mut rows = Vec::new();
-        if let Some(hues) = effect::hue_range(effect) {
-            rows.push(panel::field("Colours", Self::hue_menu(hues, cx), cx));
-        }
-        match effect {
-            Effect::RainbowWave(wave) => rows.push(choice_field(
-                "Direction",
-                "wave-direction",
-                &WAVE_DIRECTIONS,
-                wave.forward,
-                |effect, forward| {
-                    if let Effect::RainbowWave(wave) = effect {
-                        wave.forward = forward;
-                    }
-                },
-                cx,
-            )),
-            Effect::Scanner(scanner) => rows.extend(self.scanner_options(*scanner, cx)),
-            Effect::KeyRipple(ripple) => {
-                rows.push(toggle_line(
-                    "ripple-palette",
-                    "Random colours",
-                    None,
-                    ripple.palette,
-                    |effect, enabled| {
-                        if let Effect::KeyRipple(ripple) = effect {
-                            ripple.palette = enabled;
-                        }
-                    },
-                    cx,
-                ));
-                rows.push(toggle_line(
-                    "ripple-inverted",
-                    "Inverted",
-                    Some("Ripples darken the keys."),
-                    ripple.inverted,
-                    |effect, enabled| {
-                        if let Effect::KeyRipple(ripple) = effect {
-                            ripple.inverted = enabled;
-                        }
-                    },
-                    cx,
-                ));
-            }
-            Effect::ReactiveFade(fade) => rows.extend(self.trail_options(*fade, cx)),
-            Effect::SimplexNoise(_) | Effect::PolarGradient(_) => rows.push(panel::field(
-                "Colours",
-                h_flex()
-                    .gap_2()
-                    .child(ColorPicker::new(&self.first_color).small())
-                    .child(ColorPicker::new(&self.second_color).small()),
-                cx,
-            )),
-            _ => {}
-        }
-        if let Some(enabled) = effect::analog_curve(effect) {
-            rows.push(toggle_line(
-                "analog-curve",
-                "Analog curve",
-                Some("Follow the gamepad response curve in gamepad mode."),
-                enabled,
-                effect::set_analog_curve,
-                cx,
-            ));
-        }
-        rows
-    }
-
-    fn scanner_options(&self, scanner: Scanner, cx: &Context<Self>) -> [Div; 2] {
-        let across = matches!(
-            scanner.direction,
-            ScannerDirection::Left | ScannerDirection::Right
-        );
-        let limit = self
-            .store
-            .read(cx)
-            .keyboard()
-            .map_or(u8::MAX, |keyboard| {
-                if across {
-                    keyboard.capabilities.key_columns
-                } else {
-                    keyboard.capabilities.key_rows
-                }
-            })
-            .max(1);
-        let unit = match (across, scanner.width) {
-            (true, 1) => "key",
-            (true, _) => "keys",
-            (false, 1) => "row",
-            (false, _) => "rows",
+            h_flex().w_full().gap_6().items_start().child(layers).child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_5()
+                    .child(selection)
+                    .child(parameters),
+            )
         };
-        let width = panel::field(
-            "Width",
-            h_flex().child(stepper(
-                "scanner-width",
-                scanner.width,
-                1..=limit,
-                format!("{} {unit}", scanner.width),
-                cx.listener(|this, width: &u8, window, cx| {
-                    let width = *width;
-                    this.edit_effect(
-                        |effect| {
-                            if let Effect::Scanner(scanner) = effect {
-                                scanner.width = width;
-                            }
-                        },
-                        window,
-                        cx,
-                    );
-                }),
-            )),
-            cx,
-        );
-        let direction = choice_field(
-            "Direction",
-            "scanner-direction",
-            &SCAN_DIRECTIONS,
-            scanner.direction,
-            |effect, direction| {
-                if let Effect::Scanner(scanner) = effect {
-                    scanner.direction = direction;
-                }
-            },
-            cx,
-        );
-        [width, direction]
-    }
-
-    fn trail_options(&self, fade: ReactiveFade, cx: &Context<Self>) -> [Div; 2] {
-        let paint = effect::paint_of(fade.coloring);
-        let selected = TRAIL_PAINTS
-            .iter()
-            .position(|(mode, _)| *mode == paint)
-            .unwrap_or(0);
-        let coloring = panel::field(
-            "Colour",
-            h_flex()
-                .gap_2()
-                .items_center()
-                .child(segmented(
-                    "trail-colour",
-                    TRAIL_PAINTS.map(|(_, label)| label),
-                    selected,
-                    cx.listener(|this, index: &usize, window, cx| {
-                        if let Some((mode, _)) = TRAIL_PAINTS.get(*index) {
-                            this.choose_trail_paint(*mode, window, cx);
-                        }
-                    }),
+        Some(
+            card.when(self.base().is_some(), |this| {
+                this.child(banner(
+                    "The base effect's colours replace the key colours",
+                    cx,
                 ))
-                .when(paint == Paint::Fixed, |this| {
-                    this.child(ColorPicker::new(&self.first_color).small())
-                }),
-            cx,
-        );
-        let inverted = toggle_line(
-            "trail-inverted",
-            "Inverted",
-            Some("Pressed keys go dark and light up again."),
-            fade.inverted,
-            |effect, enabled| {
-                if let Effect::ReactiveFade(fade) = effect {
-                    fade.inverted = enabled;
-                }
-            },
-            cx,
-        );
-        [coloring, inverted]
+            })
+            .child(editor),
+        )
     }
 
-    fn effect_dials(&self, effect: &Effect, cx: &Context<Self>) -> Vec<Div> {
-        Dial::of(effect)
-            .iter()
-            .filter_map(|dial| {
-                let state = self
-                    .dials
+    pub(super) fn focused_index(&self) -> Option<usize> {
+        match self.focus {
+            Focus::Base => self.base().map(|_| 0),
+            Focus::Effect(index) => Some(index),
+        }
+    }
+
+    pub(super) fn focused_effect(&self) -> Option<&Effect> {
+        self.settings.as_ref()?.effects.get(self.focused_index()?)
+    }
+
+    pub(super) fn keep_focus(&mut self) {
+        let count = self
+            .settings
+            .as_ref()
+            .map_or(0, |settings| settings.effects.len());
+        if let Focus::Effect(index) = self.focus
+            && (index >= count || index < self.first_layer())
+        {
+            self.focus = Focus::Base;
+        }
+    }
+
+    fn base(&self) -> Option<&Effect> {
+        self.settings
+            .as_ref()?
+            .effects
+            .first()
+            .filter(|effect| effect::is_base(effect))
+    }
+
+    fn first_layer(&self) -> usize {
+        usize::from(self.base().is_some())
+    }
+
+    fn preset_menu(cx: &Context<Self>) -> impl IntoElement + use<> {
+        let page = cx.entity().downgrade();
+        Dropdown::new("color-presets")
+            .placeholder("Pick a preset")
+            .items(PRESETS.iter().map(|preset| Item::new(preset.name)))
+            .on_select(move |index, window, cx| {
+                page.update(cx, |page, cx| page.apply_preset(index, window, cx))
+                    .ok();
+            })
+    }
+
+    fn base_pill(&self, cx: &Context<Self>) -> Stateful<Div> {
+        let (icon, name) = self.base().map_or((Catalog::Ban, "Static"), |effect| {
+            (effect::icon(effect), effect::name(effect))
+        });
+        pill(
+            "base-effect",
+            Some(icon),
+            name,
+            None,
+            self.focus == Focus::Base,
+            cx,
+        )
+        .on_click(cx.listener(|this, _, window, cx| this.focus_on(Focus::Base, window, cx)))
+    }
+
+    fn effect_layers(&self, effects: &[Effect], cx: &Context<Self>) -> Div {
+        let first = self.first_layer();
+        let primary = cx.theme().primary;
+        v_flex()
+            .w_full()
+            .gap_2()
+            .children(
+                effects
                     .iter()
-                    .find(|(other, _)| other == dial)
-                    .map(|(_, state)| state)?;
-                let mut shown = *effect;
-                dial.apply(&mut shown, state.read(cx).value().end());
-                Some(panel::field(
-                    dial.label(effect),
-                    wide_slider(state, dial.reading(&shown).unwrap_or_default(), cx),
-                    cx,
-                ))
+                    .enumerate()
+                    .skip(first)
+                    .map(|(index, effect)| {
+                        let drag = EffectDrag {
+                            index,
+                            name: effect::name(effect),
+                            icon: effect::icon(effect),
+                        };
+                        pill(
+                            SharedString::from(format!("effect-layer-{index}")),
+                            Some(effect::icon(effect)),
+                            effect::name(effect),
+                            None,
+                            self.focus == Focus::Effect(index),
+                            cx,
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.focus_on(Focus::Effect(index), window, cx);
+                        }))
+                        .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+                        .drag_over::<EffectDrag>(move |style, _, _, _| style.border_color(primary))
+                        .on_drop(cx.listener(move |this, drag: &EffectDrag, window, cx| {
+                            this.move_effect(drag.index, index, window, cx);
+                        }))
+                        .child(Self::remove_button(index, cx))
+                    }),
+            )
+            .when(effects.len() < MAX_EFFECTS, |this| {
+                this.child(
+                    add_button("add-effect-layer", "Add RGB Fx layer", cx)
+                        .on_click(cx.listener(|this, _, window, cx| this.add_layer(window, cx))),
+                )
             })
-            .collect()
     }
 
-    fn choose_trail_paint(&mut self, mode: Paint, window: &mut Window, cx: &mut Context<Self>) {
-        let fixed = self
-            .first_color
-            .read(cx)
-            .value()
-            .map_or(WHITE.opaque(), opaque_of);
-        let coloring = match mode {
-            Paint::KeyColor => ReactiveColoring::KeyColor,
-            Paint::Palette => ReactiveColoring::Palette,
-            Paint::Fixed => ReactiveColoring::Fixed(fixed),
+    fn remove_button(index: usize, cx: &Context<Self>) -> Stateful<Div> {
+        let theme = cx.theme();
+        div()
+            .id(SharedString::from(format!("remove-effect-{index}")))
+            .flex_none()
+            .size(px(26.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.0))
+            .text_color(theme.muted_foreground)
+            .hover(|style| style.bg(theme.secondary))
+            .child(Icon::new(IconName::Close).xsmall())
+            .on_click(cx.listener(move |this, _, window, cx| {
+                cx.stop_propagation();
+                this.remove_effect(index, window, cx);
+            }))
+    }
+
+    fn effect_tiles(&self, cx: &Context<Self>) -> Div {
+        let grid = div().grid().grid_cols(2).gap_1();
+        let grid = match self.focus {
+            Focus::Base => {
+                let current = self.base().copied();
+                let full = self
+                    .settings
+                    .as_ref()
+                    .is_some_and(|settings| settings.effects.len() >= MAX_EFFECTS);
+                let static_tile = tile(
+                    "base-kind-static",
+                    Catalog::Ban,
+                    "Static",
+                    STATIC_DESCRIPTION,
+                    current.is_none(),
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, window, cx| this.choose_base(None, window, cx)));
+                grid.child(static_tile)
+                    .children(BASE_KINDS.iter().enumerate().map(|(index, kind)| {
+                        let kind = *kind;
+                        let chosen =
+                            current.is_some_and(|effect| effect::same_kind(&effect, &kind));
+                        tile(
+                            SharedString::from(format!("base-kind-{index}")),
+                            effect::icon(&kind),
+                            effect::name(&kind),
+                            effect::description(&kind),
+                            chosen,
+                            cx,
+                        )
+                        .when(full && current.is_none(), |this| this.opacity(0.5))
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.choose_base(Some(kind), window, cx);
+                            },
+                        ))
+                    }))
+            }
+            Focus::Effect(index) => {
+                let current = self.focused_effect().copied();
+                grid.children(LAYER_KINDS.iter().enumerate().map(|(position, kind)| {
+                    let kind = *kind;
+                    let chosen = current.is_some_and(|effect| effect::same_kind(&effect, &kind));
+                    tile(
+                        SharedString::from(format!("layer-kind-{position}")),
+                        effect::icon(&kind),
+                        effect::name(&kind),
+                        effect::description(&kind),
+                        chosen,
+                        cx,
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.choose_kind(index, kind, window, cx);
+                    }))
+                }))
+            }
         };
-        self.edit_effect(
-            |effect| {
-                if let Effect::ReactiveFade(fade) = effect {
-                    fade.coloring = coloring;
-                }
-            },
-            window,
-            cx,
-        );
-        self.sync_effect_controls(window, cx);
+        sunken(cx).p_2().child(grid)
     }
 
-    fn select_effect(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        self.effect = Some(index);
+    fn focus_on(&mut self, focus: Focus, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus = focus;
         self.sync_effect_controls(window, cx);
         cx.notify();
     }
 
-    fn add_effect(&mut self, effect: Effect, window: &mut Window, cx: &mut Context<Self>) {
+    fn choose_base(&mut self, kind: Option<Effect>, window: &mut Window, cx: &mut Context<Self>) {
+        let current = self.base().copied();
+        match (current, kind) {
+            (None, None) => return,
+            (Some(current), Some(kind)) if effect::same_kind(&current, &kind) => return,
+            (Some(_), None) => self.edit_settings(
+                |settings| {
+                    settings.effects.remove(0);
+                },
+                window,
+                cx,
+            ),
+            (Some(_), Some(kind)) => self.edit_effect(0, |effect| *effect = kind, window, cx),
+            (None, Some(kind)) => self.edit_settings(
+                |settings| {
+                    settings.effects.insert(0, kind).ok();
+                },
+                window,
+                cx,
+            ),
+        }
+        self.focus = Focus::Base;
+        self.sync_effect_controls(window, cx);
+        cx.notify();
+    }
+
+    fn choose_kind(
+        &mut self,
+        index: usize,
+        kind: Effect,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let changed = self
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.effects.get(index))
+            .is_some_and(|effect| !effect::same_kind(effect, &kind));
+        if changed {
+            self.edit_effect(index, |effect| *effect = kind, window, cx);
+            self.sync_effect_controls(window, cx);
+        }
+    }
+
+    fn add_layer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(count) = self
             .settings
             .as_ref()
@@ -480,27 +355,19 @@ impl LightingPage {
         }
         self.edit_settings(
             |settings| {
-                settings.effects.push(effect).ok();
+                settings.effects.push(SCAN).ok();
             },
             window,
             cx,
         );
-        self.select_effect(count, window, cx);
-    }
-
-    fn replace_effect(&mut self, effect: Effect, window: &mut Window, cx: &mut Context<Self>) {
-        self.edit_effect(|current| *current = effect, window, cx);
-        self.sync_effect_controls(window, cx);
+        self.focus_on(Focus::Effect(count), window, cx);
     }
 
     fn remove_effect(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(count) = self
+        let count = self
             .settings
             .as_ref()
-            .map(|settings| settings.effects.len())
-        else {
-            return;
-        };
+            .map_or(0, |settings| settings.effects.len());
         if index >= count {
             return;
         }
@@ -511,100 +378,67 @@ impl LightingPage {
             window,
             cx,
         );
-        self.effect = match (self.effect, count - 1) {
-            (_, 0) => None,
-            (Some(selected), remaining) if selected > index || selected >= remaining => {
-                Some(selected.saturating_sub(1))
+        self.focus = match self.focus {
+            Focus::Effect(focused) if focused == index => {
+                let first = self.first_layer();
+                let remaining = count - 1;
+                if index < remaining {
+                    Focus::Effect(index)
+                } else if index > first {
+                    Focus::Effect(index - 1)
+                } else {
+                    Focus::Base
+                }
             }
-            (selected, _) => selected,
+            Focus::Effect(focused) if focused > index => Focus::Effect(focused - 1),
+            focus => focus,
         };
+        self.keep_focus();
         self.sync_effect_controls(window, cx);
+        cx.notify();
     }
 
-    fn shift_effect(
-        &mut self,
-        index: usize,
-        shift: Shift,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(count) = self
+    fn move_effect(&mut self, from: usize, to: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let first = self.first_layer();
+        let count = self
             .settings
             .as_ref()
-            .map(|settings| settings.effects.len())
-        else {
+            .map_or(0, |settings| settings.effects.len());
+        if from == to || from < first || to < first || from >= count || to >= count {
             return;
-        };
-        let target = match shift {
-            Shift::Earlier => index.checked_sub(1),
-            Shift::Later => Some(index + 1).filter(|target| *target < count),
-        };
-        let Some(target) = target.filter(|_| index < count) else {
-            return;
-        };
-        self.edit_settings(|settings| settings.effects.swap(index, target), window, cx);
-        self.effect = self.effect.map(|selected| match selected {
-            selected if selected == index => target,
-            selected if selected == target => index,
-            selected => selected,
-        });
-    }
-}
-
-const fn set_hues(effect: &mut Effect, hues: HueRange) {
-    match effect {
-        Effect::RainbowWave(wave) => wave.hues = hues,
-        Effect::HueCycle(cycle) => cycle.hues = hues,
-        _ => {}
-    }
-}
-
-fn choice_field<T: Copy + PartialEq + 'static, const N: usize>(
-    label: &'static str,
-    id: &'static str,
-    choices: &'static [(T, &'static str); N],
-    current: T,
-    change: fn(&mut Effect, T),
-    cx: &Context<LightingPage>,
-) -> Div {
-    let selected = choices
-        .iter()
-        .position(|(value, _)| *value == current)
-        .unwrap_or(0);
-    panel::field(
-        label,
-        h_flex().child(segmented(
-            id,
-            choices.iter().map(|(_, name)| *name),
-            selected,
-            cx.listener(move |this, index: &usize, window, cx| {
-                if let Some((value, _)) = choices.get(*index) {
-                    let value = *value;
-                    this.edit_effect(|effect| change(effect, value), window, cx);
-                }
-            }),
-        )),
-        cx,
-    )
-}
-
-fn toggle_line(
-    id: &'static str,
-    label: &'static str,
-    help: Option<&'static str>,
-    checked: bool,
-    change: fn(&mut Effect, bool),
-    cx: &Context<LightingPage>,
-) -> Div {
-    panel::toggle(
-        label,
-        help.map(SharedString::from),
-        Switch::new(id).checked(checked).on_change(cx.listener(
-            move |this, enabled: &bool, window, cx| {
-                let enabled = *enabled;
-                this.edit_effect(|effect| change(effect, enabled), window, cx);
+        }
+        self.edit_settings(
+            |settings| {
+                let moved = settings.effects.remove(from);
+                settings.effects.insert(to, moved).ok();
             },
-        )),
-        cx,
-    )
+            window,
+            cx,
+        );
+        self.focus = Focus::Effect(to);
+        self.sync_effect_controls(window, cx);
+        cx.notify();
+    }
+}
+
+impl Render for EffectDrag {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        h_flex()
+            .w(px(LAYERS_WIDTH))
+            .h(px(46.0))
+            .px_4()
+            .gap_3()
+            .items_center()
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(theme.primary)
+            .bg(theme.background)
+            .shadow_lg()
+            .text_sm()
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(theme.foreground)
+            .child(Icon::new(self.icon).small())
+            .child(self.name)
+    }
 }

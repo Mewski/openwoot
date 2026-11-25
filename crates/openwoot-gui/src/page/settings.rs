@@ -1,47 +1,54 @@
+mod choice;
+mod layout;
+mod sheet;
+mod sleep;
+
 use gpui_kit::{
     AppContext as _, Context, Div, Entity, IntoElement, ParentElement as _, Render, SharedString,
-    Styled as _, Subscription, Window,
+    Subscription, Window,
     component::{
-        ActiveTheme as _, Selectable as _, Sizable as _, WindowExt as _,
-        button::{Button, ButtonGroup, ButtonVariant, ButtonVariants as _},
+        Sizable as _, WindowExt as _,
+        button::{Button, ButtonVariant, ButtonVariants as _},
         h_flex,
         notification::Notification,
-        slider::{Slider, SliderEvent, SliderState},
-        switch::Switch,
-        v_flex,
+        slider::{SliderEvent, SliderState},
     },
-    div, px,
+    prelude::FluentBuilder as _,
 };
 use openwoot_protocol::{
-    device::{self, KeyboardFormat, Layout, Speed},
+    device::{self, KeyboardFormat, Layout, LayoutState, Speed},
     endpoints::{
-        FactoryReset, GetDeviceSettings, GetGlobalSettings, Restart, SetDeviceSettings,
+        FactoryReset, GetDeviceSettings, GetGlobalSettings, GetLayout, Restart, SetDeviceSettings,
         SetGlobalSettings, SetLayout,
     },
     global,
-    lighting::Idle,
 };
 
+use self::sleep::Sleep;
+pub(super) use self::{
+    layout::name as layout_name,
+    sheet::{Tone, callout, entry, sheet},
+};
 use super::Page;
 use crate::{
     panel,
     store::{Scope, Store, StoreEvent},
+    switch::Switch,
 };
 
-const MAX_IDLE_MINUTES: f32 = 60.0;
-const SLIDER_WIDTH: f32 = 180.0;
-const READOUT_WIDTH: f32 = 52.0;
-const DEFAULT_IDLE: Idle = Idle {
-    dim_after_minutes: 5,
-    off_after_minutes: 15,
-    off_enabled: true,
-};
+const POLLING_RATES: [(Speed, &str); 2] = [(Speed::High, "8000 Hz"), (Speed::Full, "1000 Hz")];
+const NUM_LOCK: [(bool, &str); 2] = [
+    (false, "Regular: Input numbers when the indicator is on"),
+    (true, "Inverted: Input numbers when the indicator is off"),
+];
 
 pub(crate) struct SettingsPage {
     store: Entity<Store>,
     device: Option<device::Settings>,
+    started_with: Option<device::Settings>,
     global: Option<global::Settings>,
-    layout: Option<Layout>,
+    layout: Option<LayoutState>,
+    sleep: Sleep,
     dim_after: Entity<SliderState>,
     off_after: Entity<SliderState>,
     _subscriptions: Vec<Subscription>,
@@ -49,40 +56,47 @@ pub(crate) struct SettingsPage {
 
 impl SettingsPage {
     pub(crate) fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let minutes = |cx: &mut Context<Self>| {
-            cx.new(|_| {
-                SliderState::new()
-                    .min(1.0)
-                    .max(MAX_IDLE_MINUTES)
-                    .step(1.0)
-                    .default_value(f32::from(DEFAULT_IDLE.dim_after_minutes))
-            })
-        };
-        let dim_after = minutes(cx);
-        let off_after = minutes(cx);
+        let dim_after = cx.new(|_| sleep::slider_state());
+        let off_after = cx.new(|_| sleep::slider_state());
         let subscriptions = vec![
             cx.subscribe_in(&store, window, |this, _, event, window, cx| match event {
-                StoreEvent::Connected | StoreEvent::Reloaded => this.load(window, cx),
+                StoreEvent::Connected => {
+                    this.started_with = None;
+                    this.load(window, cx);
+                }
+                StoreEvent::Reloaded => this.load(window, cx),
                 StoreEvent::Disconnected | StoreEvent::ProfileChanged | StoreEvent::Failed(_) => {}
             }),
-            cx.subscribe(&dim_after, |this, _, event: &SliderEvent, cx| match event {
-                SliderEvent::Change(_) => cx.notify(),
-                SliderEvent::Release(value) => {
-                    this.change_idle(|idle| idle.dim_after_minutes = minutes_of(value.end()), cx);
-                }
-            }),
-            cx.subscribe(&off_after, |this, _, event: &SliderEvent, cx| match event {
-                SliderEvent::Change(_) => cx.notify(),
-                SliderEvent::Release(value) => {
-                    this.change_idle(|idle| idle.off_after_minutes = minutes_of(value.end()), cx);
-                }
-            }),
+            cx.subscribe_in(
+                &dim_after,
+                window,
+                |this, _, event: &SliderEvent, window, cx| match event {
+                    SliderEvent::Change(value) => {
+                        let sleep = this.sleep.with_dim(sleep::stop_of(value.end()));
+                        this.move_sleep(sleep, window, cx);
+                    }
+                    SliderEvent::Release(_) => this.store_sleep(cx),
+                },
+            ),
+            cx.subscribe_in(
+                &off_after,
+                window,
+                |this, _, event: &SliderEvent, window, cx| match event {
+                    SliderEvent::Change(value) => {
+                        let sleep = this.sleep.with_off(sleep::stop_of(value.end()));
+                        this.move_sleep(sleep, window, cx);
+                    }
+                    SliderEvent::Release(_) => this.store_sleep(cx),
+                },
+            ),
         ];
         let mut page = Self {
             store,
             device: None,
+            started_with: None,
             global: None,
             layout: None,
+            sleep: Sleep::of(None),
             dim_after,
             off_after,
             _subscriptions: subscriptions,
@@ -92,32 +106,26 @@ impl SettingsPage {
     }
 
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.layout = self
-            .store
-            .read(cx)
-            .keyboard()
-            .and_then(|keyboard| keyboard.layout);
-        let device = self
-            .store
-            .update(cx, |store, cx| store.fetch::<GetDeviceSettings, _>((), cx));
-        let global = self
-            .store
-            .update(cx, |store, cx| store.fetch::<GetGlobalSettings, _>((), cx));
+        let (device, global, layout) = self.store.update(cx, |store, cx| {
+            (
+                store.fetch::<GetDeviceSettings, _>((), cx),
+                store.fetch::<GetGlobalSettings, _>((), cx),
+                store.fetch::<GetLayout, _>((), cx),
+            )
+        });
         cx.spawn_in(window, async move |this, cx| {
             let device = device.await.ok();
             let global = global.await.ok();
+            let layout = layout.await.ok();
             this.update_in(cx, |page, window, cx| {
                 page.device = device;
+                if page.started_with.is_none() {
+                    page.started_with = device;
+                }
                 page.global = global;
-                let idle = global
-                    .and_then(|global| global.idle)
-                    .unwrap_or(DEFAULT_IDLE);
-                page.dim_after.update(cx, |slider, cx| {
-                    slider.set_value(f32::from(idle.dim_after_minutes), window, cx);
-                });
-                page.off_after.update(cx, |slider, cx| {
-                    slider.set_value(f32::from(idle.off_after_minutes), window, cx);
-                });
+                page.layout = layout;
+                page.sleep = Sleep::of(global.and_then(|global| global.idle));
+                page.sync_sleep(window, cx);
                 cx.notify();
             })
             .ok();
@@ -127,27 +135,35 @@ impl SettingsPage {
 
     fn change_device(
         &mut self,
-        change: impl FnOnce(&mut device::Settings) + 'static,
+        change: impl Fn(&mut device::Settings) + 'static,
         cx: &mut Context<Self>,
     ) {
+        if let Some(settings) = &mut self.device {
+            change(settings);
+        }
+        cx.notify();
         let current = self
             .store
             .update(cx, |store, cx| store.fetch::<GetDeviceSettings, _>((), cx));
         cx.spawn(async move |this, cx| {
-            let Ok(mut settings) = current.await else {
+            let Ok(stored) = current.await else {
                 return;
             };
+            let mut settings = stored;
             change(&mut settings);
             let Ok(applied) = this.update(cx, |page, cx| {
-                page.device = Some(settings);
-                cx.notify();
                 page.store.update(cx, |store, cx| {
-                    store.apply::<SetDeviceSettings>(settings, Scope::Keyboard, cx)
+                    store.change::<SetDeviceSettings>(&stored, settings, Scope::Keyboard, cx)
                 })
             }) else {
                 return;
             };
-            applied.await.ok();
+            let written = applied.await.is_ok();
+            this.update(cx, |page, cx| {
+                page.device = Some(if written { settings } else { stored });
+                cx.notify();
+            })
+            .ok();
         })
         .detach();
     }
@@ -157,48 +173,127 @@ impl SettingsPage {
         change: impl FnOnce(&mut global::Settings),
         cx: &mut Context<Self>,
     ) {
-        let Some(settings) = &mut self.global else {
+        let Some(previous) = self.global else {
             return;
         };
-        change(settings);
-        let settings = *settings;
-        self.store
-            .update(cx, |store, cx| {
-                store.apply::<SetGlobalSettings>(settings, Scope::Keyboard, cx)
-            })
-            .detach();
+        let mut settings = previous;
+        change(&mut settings);
+        if settings == previous {
+            return;
+        }
+        self.global = Some(settings);
         cx.notify();
+        let applied = self.store.update(cx, |store, cx| {
+            store.change::<SetGlobalSettings>(&previous, settings, Scope::Keyboard, cx)
+        });
+        cx.spawn(async move |this, cx| {
+            if applied.await.is_err() {
+                this.update(cx, |page, cx| {
+                    if page.global == Some(settings) {
+                        page.global = Some(previous);
+                        page.sleep = Sleep::of(previous.idle);
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
     }
 
-    fn change_idle(&mut self, change: impl FnOnce(&mut Idle), cx: &mut Context<Self>) {
-        self.change_global(
-            |settings| {
-                if let Some(idle) = &mut settings.idle {
-                    change(idle);
-                }
-            },
-            cx,
-        );
+    fn sync_sleep(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let dim = sleep::position(self.sleep.dim);
+        let off = sleep::position(self.sleep.off);
+        self.dim_after
+            .update(cx, |slider, cx| slider.set_value(dim, window, cx));
+        self.off_after
+            .update(cx, |slider, cx| slider.set_value(off, window, cx));
+    }
+
+    fn move_sleep(&mut self, sleep: Sleep, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sleep != sleep {
+            self.sleep = sleep;
+            self.sync_sleep(window, cx);
+            cx.notify();
+        }
+    }
+
+    fn store_sleep(&mut self, cx: &mut Context<Self>) {
+        let idle = self.sleep.idle();
+        if self.global.is_some_and(|global| global.idle != idle) {
+            self.change_global(move |settings| settings.idle = idle, cx);
+        }
+    }
+
+    fn pick_sleep(&mut self, sleep: Sleep, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_sleep(sleep, window, cx);
+        self.store_sleep(cx);
     }
 
     fn choose_layout(&mut self, layout: Layout, cx: &mut Context<Self>) {
-        self.layout = Some(layout);
-        self.store
-            .update(cx, |store, cx| {
-                store.apply::<SetLayout>(layout, Scope::Keyboard, cx)
-            })
-            .detach();
+        let Some(previous) = self.layout else {
+            return;
+        };
+        if previous.chosen == layout {
+            return;
+        }
+        self.layout = Some(LayoutState {
+            chosen: layout,
+            ..previous
+        });
         cx.notify();
+        let applied = self.store.update(cx, |store, cx| {
+            store.change::<SetLayout>(&previous.chosen, layout, Scope::Keyboard, cx)
+        });
+        cx.spawn(async move |this, cx| {
+            if applied.await.is_err() {
+                this.update(cx, |page, cx| {
+                    if page.layout.is_some_and(|state| state.chosen == layout) {
+                        page.layout = Some(previous);
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }
+        })
+        .detach();
+    }
+
+    fn changed_since_start<T: PartialEq>(&self, field: impl Fn(&device::Settings) -> T) -> bool {
+        matches!(
+            (self.device, self.started_with),
+            (Some(now), Some(started)) if field(&now) != field(&started)
+        )
+    }
+
+    fn layout_pending(&self) -> bool {
+        self.layout
+            .is_some_and(|state| state.active != state.chosen)
+    }
+
+    fn save_and_restart(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let save = self.store.update(cx, |store, cx| store.save(cx));
+        let device = self.store.read(cx).device();
+        cx.spawn_in(window, async move |_, cx| {
+            if save.await.is_err() {
+                return;
+            }
+            if let Err(error) = device.call::<Restart>(()).await {
+                let message = Notification::error(error.to_string());
+                cx.update(|window, cx| window.push_notification(message, cx))
+                    .ok();
+            }
+        })
+        .detach();
     }
 
     fn restart(&self, window: &mut Window, cx: &mut Context<Self>) {
         let restart = self.store.read(cx).device().call::<Restart>(());
         cx.spawn_in(window, async move |_, cx| {
             if let Err(error) = restart.await {
-                cx.update(|window, cx| {
-                    window.push_notification(Notification::error(error.to_string()), cx);
-                })
-                .ok();
+                let message = Notification::error(error.to_string());
+                cx.update(|window, cx| window.push_notification(message, cx))
+                    .ok();
             }
         })
         .detach();
@@ -209,8 +304,8 @@ impl SettingsPage {
         window.open_alert_dialog(cx, move |alert, _, _| {
             let store = store.clone();
             alert
-                .title("Reset to factory settings?")
-                .description("Every profile and setting returns to its default.")
+                .title("Reset all keyboard settings?")
+                .description("Every profile and setting returns to the factory state.")
                 .confirm()
                 .ok_text("Reset")
                 .ok_variant(ButtonVariant::Danger)
@@ -219,7 +314,10 @@ impl SettingsPage {
                         let reset = store.apply::<FactoryReset>((), Scope::Runtime, cx);
                         cx.spawn(async move |store, cx| {
                             if reset.await.is_ok()
-                                && let Ok(reload) = store.update(cx, |store, cx| store.reload(cx))
+                                && let Ok(reload) = store.update(cx, |store, cx| {
+                                    store.forget_changes(cx);
+                                    store.reload(cx)
+                                })
                             {
                                 reload.await;
                             }
@@ -231,7 +329,220 @@ impl SettingsPage {
         });
     }
 
-    fn keyboard_section(&self, cx: &mut Context<Self>) -> Div {
+    fn restart_callout(id: &'static str, cx: &mut Context<Self>) -> Div {
+        callout(Tone::Info, "Applies after a restart.", cx).child(
+            Button::new(id)
+                .primary()
+                .small()
+                .label("Save and restart")
+                .on_click(cx.listener(|this, _, window, cx| this.save_and_restart(window, cx))),
+        )
+    }
+
+    fn compatibility_section(&self, cx: &mut Context<Self>) -> Div {
+        let boot = self
+            .device
+            .map(|settings| settings.keyboard == KeyboardFormat::Boot);
+        entry(
+            "Compatibility mode (disable NKRO)",
+            Some(
+                "Reports six keys at a time, for BIOS screens, consoles and old computers.".into(),
+            ),
+            Some(
+                Switch::new("compatibility-mode")
+                    .checked(boot.unwrap_or(false))
+                    .disabled(boot.is_none())
+                    .on_change(cx.listener(|this, checked: &bool, _, cx| {
+                        let format = if *checked {
+                            KeyboardFormat::Boot
+                        } else {
+                            KeyboardFormat::NKeyRollover
+                        };
+                        this.change_device(move |settings| settings.keyboard = format, cx);
+                    }))
+                    .into_any_element(),
+            ),
+            cx,
+        )
+        .when(
+            self.changed_since_start(|settings| settings.keyboard)
+                && !self.changed_since_start(|settings| settings.speed),
+            |this| this.child(Self::restart_callout("restart-compatibility", cx)),
+        )
+    }
+
+    fn polling_section(&self, cx: &mut Context<Self>) -> Div {
+        entry(
+            "Polling rate",
+            Some(
+                "How often the keyboard reports to the computer; lower it if the connection is \
+                 unstable."
+                    .into(),
+            ),
+            None,
+            cx,
+        )
+        .child(choice::choices(
+            "polling-rate",
+            &POLLING_RATES,
+            self.device.map(|settings| settings.speed),
+            cx.listener(|this, speed: &Speed, _, cx| {
+                let speed = *speed;
+                this.change_device(move |settings| settings.speed = speed, cx);
+            }),
+            cx,
+        ))
+        .when(
+            self.changed_since_start(|settings| settings.speed),
+            |this| this.child(Self::restart_callout("restart-polling-rate", cx)),
+        )
+    }
+
+    fn num_lock_section(&self, cx: &mut Context<Self>) -> Div {
+        entry(
+            "Num Lock indicator",
+            cfg!(target_os = "macos").then(|| {
+                SharedString::from("macOS has no Num Lock; choose regular to hide the indicator.")
+            }),
+            None,
+            cx,
+        )
+        .child(choice::choices(
+            "num-lock",
+            &NUM_LOCK,
+            self.global.map(|settings| settings.num_lock_inverted),
+            cx.listener(|this, inverted: &bool, _, cx| {
+                let inverted = *inverted;
+                this.change_global(|settings| settings.num_lock_inverted = inverted, cx);
+            }),
+            cx,
+        ))
+    }
+
+    fn sleep_section(&self, cx: &mut Context<Self>) -> Div {
+        let disabled = self.global.is_none();
+        entry(
+            "RGB sleep mode",
+            Some("Dims and then turns off the lighting while no key is pressed.".into()),
+            None,
+            cx,
+        )
+        .child(panel::field(
+            "Turn off after",
+            sleep::stepped(
+                "turn-off-after",
+                &self.off_after,
+                self.sleep.off,
+                disabled,
+                cx.listener(|this, stop: &u8, window, cx| {
+                    let sleep = this.sleep.with_off(*stop);
+                    this.pick_sleep(sleep, window, cx);
+                }),
+                cx,
+            ),
+            cx,
+        ))
+        .child(panel::field(
+            "Dim after",
+            sleep::stepped(
+                "dim-after",
+                &self.dim_after,
+                self.sleep.dim,
+                disabled,
+                cx.listener(|this, stop: &u8, window, cx| {
+                    let sleep = this.sleep.with_dim(*stop);
+                    this.pick_sleep(sleep, window, cx);
+                }),
+                cx,
+            ),
+            cx,
+        ))
+    }
+
+    fn debounce_section(&self, cx: &mut Context<Self>) -> Div {
+        let filtered = self.global.map(|settings| settings.release_rebound_filter);
+        entry(
+            "Debounce filter",
+            Some("Ignores keys that bounce back down after a release; adds no latency.".into()),
+            Some(
+                Switch::new("debounce-filter")
+                    .checked(filtered.unwrap_or(false))
+                    .disabled(filtered.is_none())
+                    .on_change(cx.listener(|this, checked: &bool, _, cx| {
+                        let filtered = *checked;
+                        this.change_global(
+                            |settings| settings.release_rebound_filter = filtered,
+                            cx,
+                        );
+                    }))
+                    .into_any_element(),
+            ),
+            cx,
+        )
+    }
+
+    fn layout_section(&self, layouts: &[Layout], cx: &mut Context<Self>) -> Div {
+        entry(
+            "Layout",
+            Some("Match the physical layout of your keyboard.".into()),
+            None,
+            cx,
+        )
+        .child(layout::cards(
+            layouts,
+            self.layout.map(|state| state.chosen),
+            cx.listener(|this, layout: &Layout, _, cx| this.choose_layout(*layout, cx)),
+            cx,
+        ))
+        .when(self.layout_pending(), |this| {
+            this.child(Self::restart_callout("restart-layout", cx))
+        })
+    }
+
+    fn restart_section(cx: &mut Context<Self>) -> Div {
+        entry(
+            "Restart keyboard",
+            Some("Starts the firmware again; unsaved changes are lost.".into()),
+            None,
+            cx,
+        )
+        .child(
+            h_flex().child(
+                Button::new("restart")
+                    .outline()
+                    .label("Restart")
+                    .on_click(cx.listener(|this, _, window, cx| this.restart(window, cx))),
+            ),
+        )
+    }
+
+    fn reset_section(cx: &mut Context<Self>) -> Div {
+        entry(
+            "Reset all keyboard settings",
+            Some("Restores every profile and setting to the factory state.".into()),
+            None,
+            cx,
+        )
+        .child(
+            h_flex().child(
+                Button::new("factory-reset")
+                    .danger()
+                    .label("Reset all keyboard settings")
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.confirm_factory_reset(window, cx)),
+                    ),
+            ),
+        )
+        .child(callout(
+            Tone::Danger,
+            "This cannot be undone; every profile and setting is lost.",
+            cx,
+        ))
+    }
+}
+
+impl Render for SettingsPage {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let layouts: Vec<Layout> = self
             .store
             .read(cx)
@@ -239,212 +550,18 @@ impl SettingsPage {
             .map_or_else(Vec::new, |keyboard| {
                 keyboard.capabilities.layouts.iter().copied().collect()
             });
-        let current = self.layout;
-        let global = self.global;
-        panel::section("Keyboard", Some("Layout and key behaviour.".into()), cx)
-            .child(panel::row(
-                "Layout",
-                Some("Applies after Save and a restart".into()),
-                ButtonGroup::new("layout")
-                    .small()
-                    .outline()
-                    .children(layouts.iter().map(|layout| {
-                        Button::new(layout_name(*layout))
-                            .label(layout_name(*layout))
-                            .selected(current == Some(*layout))
-                    }))
-                    .on_click(cx.listener(move |this, clicks: &Vec<usize>, _, cx| {
-                        if let Some(layout) = clicks.first().and_then(|index| layouts.get(*index)) {
-                            this.choose_layout(*layout, cx);
-                        }
-                    })),
-                cx,
-            ))
-            .child(panel::row(
-                "Invert Num Lock",
-                Some("For macOS, which never turns Num Lock on".into()),
-                Switch::new("num-lock-inverted")
-                    .checked(global.is_some_and(|settings| settings.num_lock_inverted))
-                    .on_change(cx.listener(|this, checked: &bool, _, cx| {
-                        let inverted = *checked;
-                        this.change_global(|settings| settings.num_lock_inverted = inverted, cx);
-                    })),
-                cx,
-            ))
-            .child(panel::row(
-                "Debounce filter",
-                Some("Ignores a key bouncing back right after release".into()),
-                Switch::new("release-rebound-filter")
-                    .checked(global.is_some_and(|settings| settings.release_rebound_filter))
-                    .on_change(cx.listener(|this, checked: &bool, _, cx| {
-                        let filtered = *checked;
-                        this.change_global(
-                            |settings| settings.release_rebound_filter = filtered,
-                            cx,
-                        );
-                    })),
-                cx,
-            ))
-    }
-
-    fn usb_section(&self, cx: &mut Context<Self>) -> Div {
-        let device = self.device;
-        panel::section(
-            "USB",
-            Some("Applies the next time the keyboard starts.".into()),
-            cx,
-        )
-        .child(panel::row(
-            "NKRO compatibility",
-            Some("6-key report for BIOS screens, KVM switches and consoles".into()),
-            Switch::new("boot-keyboard")
-                .checked(device.is_some_and(|settings| settings.keyboard == KeyboardFormat::Boot))
-                .on_change(cx.listener(|this, checked: &bool, _, cx| {
-                    let format = if *checked {
-                        KeyboardFormat::Boot
-                    } else {
-                        KeyboardFormat::NKeyRollover
-                    };
-                    this.change_device(move |settings| settings.keyboard = format, cx);
-                })),
-            cx,
-        ))
-        .child(panel::row(
-            "Full speed",
-            Some("1000 Hz instead of 8000 Hz, for hubs that misbehave".into()),
-            Switch::new("full-speed")
-                .checked(device.is_some_and(|settings| settings.speed == Speed::Full))
-                .on_change(cx.listener(|this, checked: &bool, _, cx| {
-                    let speed = if *checked { Speed::Full } else { Speed::High };
-                    this.change_device(move |settings| settings.speed = speed, cx);
-                })),
-            cx,
-        ))
-    }
-
-    fn idle_section(&self, cx: &mut Context<Self>) -> Div {
-        let idle = self.global.and_then(|global| global.idle);
-        let mut section = panel::section(
-            "Idle",
-            Some("Dims and turns off the LEDs while no key is used.".into()),
-            cx,
-        )
-        .child(panel::row(
-            "Dim when idle",
-            None,
-            Switch::new("idle-enabled")
-                .checked(idle.is_some())
-                .on_change(cx.listener(|this, checked: &bool, _, cx| {
-                    let idle = checked.then_some(DEFAULT_IDLE);
-                    this.change_global(|settings| settings.idle = idle, cx);
-                })),
-            cx,
-        ));
-        let Some(idle) = idle else {
-            return section;
-        };
-        section = section
-            .child(panel::row(
-                "Dim after",
-                None,
-                minutes_control(&self.dim_after, cx),
-                cx,
-            ))
-            .child(panel::row(
-                "Turn off",
-                None,
-                Switch::new("idle-off")
-                    .checked(idle.off_enabled)
-                    .on_change(cx.listener(|this, checked: &bool, _, cx| {
-                        let enabled = *checked;
-                        this.change_idle(|idle| idle.off_enabled = enabled, cx);
-                    })),
-                cx,
-            ));
-        if idle.off_enabled {
-            section = section.child(panel::row(
-                "Turn off after",
-                None,
-                minutes_control(&self.off_after, cx),
-                cx,
-            ));
+        let mut sections = vec![
+            self.compatibility_section(cx),
+            self.polling_section(cx),
+            self.num_lock_section(cx),
+            self.sleep_section(cx),
+            self.debounce_section(cx),
+        ];
+        if layouts.len() > 1 {
+            sections.push(self.layout_section(&layouts, cx));
         }
-        section
+        sections.push(Self::restart_section(cx));
+        sections.push(Self::reset_section(cx));
+        panel::page().child(sheet(Page::Settings.title(), sections, cx))
     }
-
-    fn maintenance_section(cx: &mut Context<Self>) -> Div {
-        panel::section("Maintenance", None, cx)
-            .child(panel::row(
-                "Restart",
-                Some("Unsaved changes are lost".into()),
-                Button::new("restart")
-                    .outline()
-                    .small()
-                    .label("Restart")
-                    .on_click(cx.listener(|this, _, window, cx| this.restart(window, cx))),
-                cx,
-            ))
-            .child(panel::row(
-                "Factory reset",
-                None,
-                Button::new("factory-reset")
-                    .danger()
-                    .small()
-                    .label("Reset…")
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.confirm_factory_reset(window, cx)),
-                    ),
-                cx,
-            ))
-    }
-}
-
-impl Render for SettingsPage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let left = v_flex()
-            .gap_4()
-            .child(self.keyboard_section(cx))
-            .child(self.usb_section(cx));
-        let right = v_flex()
-            .gap_4()
-            .child(self.idle_section(cx))
-            .child(Self::maintenance_section(cx));
-        panel::page()
-            .child(panel::heading(Page::Settings.title(), None, div(), cx))
-            .child(panel::columns(left, right))
-    }
-}
-
-fn minutes_control(slider: &Entity<SliderState>, cx: &Context<SettingsPage>) -> Div {
-    let minutes = minutes_of(slider.read(cx).value().end());
-    h_flex()
-        .gap_3()
-        .child(div().w(px(SLIDER_WIDTH)).child(Slider::new(slider)))
-        .child(
-            div()
-                .w(px(READOUT_WIDTH))
-                .text_right()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(SharedString::from(format!("{minutes} min"))),
-        )
-}
-
-const fn layout_name(layout: Layout) -> &'static str {
-    match layout {
-        Layout::Ansi => "ANSI",
-        Layout::Iso => "ISO",
-        Layout::Jis => "JIS",
-    }
-}
-
-fn minutes_of(value: f32) -> u8 {
-    let clamped = value.round().clamp(1.0, MAX_IDLE_MINUTES);
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "the value is rounded and clamped to 1..=60"
-    )]
-    let minutes = clamped as u8;
-    minutes
 }

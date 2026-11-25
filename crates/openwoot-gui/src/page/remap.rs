@@ -1,4 +1,7 @@
 mod catalog;
+mod factory;
+mod keycap;
+mod layers;
 mod letter_layout;
 mod picker;
 mod quick_bind;
@@ -6,17 +9,12 @@ mod quick_bind;
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Context, Div, Entity, FontWeight, InteractiveElement as _,
-    IntoElement, Modifiers, ParentElement as _, Render, SharedString, Stateful,
-    StatefulInteractiveElement as _, Styled as _, Subscription, WeakEntity, Window,
+    AnyElement, App, AppContext as _, Context, Div, Entity, FocusHandle, FontWeight,
+    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, ParentElement as _, Render,
+    SharedString, Stateful, StatefulInteractiveElement as _, Styled as _, Subscription, Window,
     assets::IconName as Catalog,
     component::{
-        ActiveTheme as _, Disableable as _, Icon, Sizable as _, WindowExt as _,
-        button::{Button, ButtonVariant, ButtonVariants as _},
-        h_flex,
-        menu::{DropdownMenu as _, PopupMenuItem},
-        notification::Notification,
-        tooltip::Tooltip,
+        ActiveTheme as _, Icon, Sizable as _, WindowExt as _, h_flex, notification::Notification,
         v_flex,
     },
     div,
@@ -26,46 +24,103 @@ use gpui_kit::{
 use openwoot_protocol::{
     advanced::{self, Behaviour},
     configuration::Validate as _,
-    endpoints::{GetAdvancedKeys, GetKeymap, SetKeymap},
-    keys::{Action, Keymap, LAYERS, Layer},
+    endpoints::{GetAdvancedKeys, GetDefaultKeymap, GetKeymap, SetKeymap},
+    keys::{Action, Function, Keymap, LAYERS, Layer},
     profile::{LayerChange, LayerRef},
 };
 
-use self::letter_layout::LetterLayout;
+use self::{
+    factory::{Defaults, Factory},
+    letter_layout::LetterLayout,
+};
 pub(super) use self::{
-    catalog::refusal,
+    keycap::{blank_chip, chip, face as keycap_face, glyph},
+    layers::{column as layers_column, layer_label, pill as layer_pill},
     picker::{ActionPicker, PickerEvent, Target},
     quick_bind::usage_of_key,
 };
 use super::{Page, advanced::Kind};
 use crate::{
-    keyboard::{KeyFace, KeyboardView, Selection},
+    dropdown::{Dropdown, Item},
+    keyboard::{Dragged, KeyFace, KeyboardView, Selection},
     panel,
     store::{Keyboard, Scope, Store, StoreEvent},
-    usage,
+    theme, usage,
 };
 
 const STALE_AFTER: Duration = Duration::from_secs(2);
 const SIDE_CARD_WIDTH: f32 = 340.0;
-const LAYOUT_TILE_SIZE: f32 = 64.0;
-const PILL_HEIGHT: f32 = 38.0;
+const LAYOUT_TILE_SIZE: f32 = 68.0;
+const MENU_WIDTH: f32 = 240.0;
+const BIND_PROMPT: &str = "Press any key to bind";
+const MANAGED: &str =
+    "This key has an advanced key configured. To remap it, remove the advanced key first.";
+const LOCKED: &str = "This layer switch key is configured from the main layer";
+const UNBOUND: &str = "This key won't register any input";
+const UNREACHABLE: &str = "No key opens this layer";
+const REMAP_HELP: &str =
+    "Change what each key sends, on the main layer and on Fn layers reached by holding a Fn key";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Moved(usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LayerCommand {
+    Copy,
+    PasteReplace,
+    PasteMerge,
+    Duplicate,
+    Delete,
+}
 
 pub(crate) struct RemapPage {
     store: Entity<Store>,
     layer: Layer,
     keymaps: [Option<Keymap>; LAYERS],
     advanced: Option<advanced::Keys>,
-    selection: Selection,
+    defaults: Option<Defaults>,
+    selected: Option<usize>,
     picker: Entity<ActionPicker>,
     copied: Option<(Layer, Keymap)>,
+    added: [bool; LAYERS],
+    focus: FocusHandle,
     revision: u64,
     seen: Instant,
     _subscriptions: Vec<Subscription>,
 }
 
+impl LayerCommand {
+    const ALL: [Self; 5] = [
+        Self::Copy,
+        Self::PasteReplace,
+        Self::PasteMerge,
+        Self::Duplicate,
+        Self::Delete,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Copy => "Copy",
+            Self::PasteReplace => "Paste and replace",
+            Self::PasteMerge => "Paste and merge",
+            Self::Duplicate => "Duplicate",
+            Self::Delete => "Delete",
+        }
+    }
+
+    const fn shortcut(self) -> Option<&'static str> {
+        match self {
+            Self::Copy => Some("C"),
+            Self::PasteReplace => Some("V"),
+            Self::Duplicate => Some("D"),
+            Self::PasteMerge | Self::Delete => None,
+        }
+    }
+}
+
 impl RemapPage {
     pub(crate) fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let picker = cx.new(|cx| ActionPicker::new("Disable", window, cx));
+        let picker = cx.new(|cx| ActionPicker::new(window, cx));
         let subscriptions = vec![
             cx.subscribe_in(&store, window, |this, _, event, window, cx| match event {
                 StoreEvent::Connected | StoreEvent::ProfileChanged | StoreEvent::Reloaded => {
@@ -74,8 +129,7 @@ impl RemapPage {
                 StoreEvent::Disconnected => {
                     this.keymaps = [const { None }; LAYERS];
                     this.advanced = None;
-                    this.selection.clear();
-                    this.sync_picker(cx);
+                    this.deselect(cx);
                     cx.notify();
                 }
                 StoreEvent::Failed(_) => {}
@@ -83,9 +137,9 @@ impl RemapPage {
             cx.subscribe_in(
                 &picker,
                 window,
-                |this, _, event: &PickerEvent, window, cx| {
-                    let PickerEvent::Picked(action) = event;
-                    this.assign(*action, window, cx);
+                |this, _, event: &PickerEvent, window, cx| match event {
+                    PickerEvent::Picked(action) => this.picked(*action, window, cx),
+                    PickerEvent::Cancelled => this.deselect(cx),
                 },
             ),
         ];
@@ -94,9 +148,12 @@ impl RemapPage {
             layer: Layer::Base,
             keymaps: [const { None }; LAYERS],
             advanced: None,
-            selection: Selection::default(),
+            defaults: None,
+            selected: None,
             picker,
             copied: None,
+            added: [false; LAYERS],
+            focus: cx.focus_handle(),
             revision: 0,
             seen: Instant::now(),
             _subscriptions: subscriptions,
@@ -120,6 +177,11 @@ impl RemapPage {
         let advanced = self.store.update(cx, |store, cx| {
             store.fetch::<GetAdvancedKeys, _>(profile, cx)
         });
+        let defaults = [Layer::Base, Layer::One].map(|layer| {
+            self.store.update(cx, |store, cx| {
+                store.fetch::<GetDefaultKeymap, _>(layer, cx)
+            })
+        });
         let revision = self.revision;
         cx.spawn_in(window, async move |this, cx| {
             let mut loaded = [const { None }; LAYERS];
@@ -127,6 +189,11 @@ impl RemapPage {
                 *slot = keymap.await.ok();
             }
             let advanced = advanced.await.ok();
+            let [main, function] = defaults;
+            let defaults = match (main.await, function.await) {
+                (Ok(main), Ok(function)) => Some(Defaults { main, function }),
+                _ => None,
+            };
             this.update_in(cx, |page, window, cx| {
                 if page.revision != revision {
                     page.load(window, cx);
@@ -134,6 +201,11 @@ impl RemapPage {
                 }
                 page.keymaps = loaded;
                 page.advanced = advanced;
+                page.defaults = defaults;
+                if !page.shown(page.layer) {
+                    page.layer = Layer::Base;
+                }
+                page.deselect(cx);
                 page.sync_picker(cx);
                 cx.notify();
             })
@@ -158,7 +230,6 @@ impl RemapPage {
             this.update(cx, |page, cx| {
                 if page.advanced.as_ref() != Some(&advanced) {
                     page.advanced = Some(advanced);
-                    page.sync_picker(cx);
                     cx.notify();
                 }
             })
@@ -187,7 +258,6 @@ impl RemapPage {
                 if let Some(slot) = page.keymaps.get_mut(usize::from(layer.number())) {
                     *slot = keymap;
                 }
-                page.sync_picker(cx);
                 cx.notify();
             })
             .ok();
@@ -206,92 +276,150 @@ impl RemapPage {
             .and_then(|keymap| keymap.get(key).copied())
     }
 
-    fn advanced_on(&self, key: usize, layer: Layer) -> Option<&advanced::Key> {
-        self.advanced.iter().flatten().find(|entry| {
-            entry.layer == layer
-                && (usize::from(entry.key.get()) == key
-                    || match entry.behaviour {
-                        Behaviour::DepthPriority(pair) => usize::from(pair.other.get()) == key,
-                        Behaviour::Socd(pair) => usize::from(pair.other.get()) == key,
-                        Behaviour::DynamicKeystroke(_)
-                        | Behaviour::ModTap(_)
-                        | Behaviour::Toggle(_) => false,
-                    })
-        })
-    }
-
-    fn is_managed(&self, key: usize, layer: Layer) -> bool {
-        self.advanced_on(key, layer)
-            .is_some_and(|entry| Kind::of(&entry.behaviour).owns_actions())
-    }
-
-    fn common_action(&self) -> Option<Action> {
-        let mut actions = self
-            .selection
+    fn managed(&self, key: usize, layer: Layer) -> Option<Kind> {
+        self.advanced
             .iter()
-            .map(|key| self.action(self.layer, key));
-        let first = actions.next()??;
-        actions.all(|action| action == Some(first)).then_some(first)
+            .flatten()
+            .filter(|entry| entry.layer == layer && usize::from(entry.key.get()) == key)
+            .map(|entry| Kind::of(&entry.behaviour))
+            .find(|kind| kind.owns_actions())
+    }
+
+    fn locked(&self, key: usize, layer: Layer) -> bool {
+        layer != Layer::Base && self.action(Layer::Base, key) == Some(Action::Layer(layer))
+    }
+
+    fn editable(&self, key: usize) -> bool {
+        self.keymap(self.layer).is_some()
+            && self.managed(key, self.layer).is_none()
+            && !self.locked(key, self.layer)
+    }
+
+    fn opens(&self, layer: Layer) -> bool {
+        let opener = Action::Layer(layer);
+        let in_keymaps = Layer::ALL
+            .into_iter()
+            .filter(|other| *other != layer)
+            .filter_map(|other| self.keymap(other))
+            .any(|keymap| keymap.contains(&opener));
+        let in_advanced = self
+            .advanced
+            .iter()
+            .flatten()
+            .any(|entry| match entry.behaviour {
+                Behaviour::DynamicKeystroke(keystroke) => keystroke
+                    .strokes
+                    .iter()
+                    .any(|stroke| stroke.action == opener),
+                Behaviour::ModTap(mod_tap) => mod_tap.tap == opener || mod_tap.hold == opener,
+                Behaviour::Toggle(action) => action == opener,
+                Behaviour::DepthPriority(_) | Behaviour::Socd(_) => false,
+            });
+        in_keymaps || in_advanced
+    }
+
+    fn shown(&self, layer: Layer) -> bool {
+        layer == Layer::Base
+            || self.added.get(usize::from(layer.number())).copied() == Some(true)
+            || self
+                .keymap(layer)
+                .is_some_and(|keymap| keymap.iter().any(|action| *action != Action::None))
+            || self.opens(layer)
+    }
+
+    fn next_free(&self) -> Option<Layer> {
+        Layer::ALL
+            .into_iter()
+            .skip(1)
+            .find(|layer| !self.shown(*layer))
     }
 
     fn sync_picker(&self, cx: &mut Context<Self>) {
-        let target =
-            (!self.selection.is_empty() && self.keymap(self.layer).is_some()).then(|| Target {
-                layer: self.layer,
-                current: self.common_action(),
-            });
-        self.picker
-            .update(cx, |picker, cx| picker.set_target(target, cx));
-    }
-
-    fn choose_layer(&mut self, layer: Layer, cx: &mut Context<Self>) {
-        self.layer = layer;
-        self.sync_picker(cx);
-        cx.notify();
-    }
-
-    fn click_key(&mut self, key: usize, modifiers: Modifiers, cx: &mut Context<Self>) {
-        self.selection.click(key, modifiers);
-        self.sync_picker(cx);
-        cx.notify();
-    }
-
-    fn select_all(&mut self, cx: &mut Context<Self>) {
-        if let Some(keyboard) = self.store.read(cx).keyboard().cloned() {
-            self.selection.select_all(&keyboard);
-        }
-        self.sync_picker(cx);
-        cx.notify();
-    }
-
-    fn clear_selection(&mut self, cx: &mut Context<Self>) {
-        self.selection.clear();
-        self.sync_picker(cx);
-        cx.notify();
-    }
-
-    fn assign(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
         let layer = self.layer;
-        let Some(keymap) = self.keymap(layer).cloned() else {
+        let target = self.selected.map(|key| Target {
+            current: self.action(layer, key).unwrap_or_default(),
+        });
+        self.picker.update(cx, |picker, cx| {
+            picker.set_layer(layer, cx);
+            picker.set_target(target, cx);
+        });
+    }
+
+    fn choose_layer(&mut self, layer: Layer, window: &mut Window, cx: &mut Context<Self>) {
+        self.layer = layer;
+        self.deselect(cx);
+        self.focus.focus(window, cx);
+        cx.notify();
+    }
+
+    fn click_key(&mut self, key: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.editable(key) {
+            return;
+        }
+        if self.selected == Some(key) {
+            self.deselect(cx);
+            return;
+        }
+        self.selected = Some(key);
+        self.sync_picker(cx);
+        self.picker
+            .update(cx, |picker, cx| picker.listen(window, cx));
+        cx.notify();
+    }
+
+    fn deselect(&mut self, cx: &mut Context<Self>) {
+        self.selected = None;
+        self.sync_picker(cx);
+        self.picker.update(cx, ActionPicker::stop_listening);
+        cx.notify();
+    }
+
+    fn picked(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.selected else {
             return;
         };
-        if let Some(reason) = refusal(action, layer) {
+        self.deselect(cx);
+        self.assign(key, action, window, cx);
+    }
+
+    fn assign(&mut self, key: usize, action: Action, window: &mut Window, cx: &mut Context<Self>) {
+        let layer = self.layer;
+        if !self.editable(key) {
+            return;
+        }
+        if let Some(reason) = self.picker.read(cx).refusal(action) {
             window.push_notification(Notification::warning(reason), cx);
             return;
         }
-        let mut changed = keymap;
-        let mut kept = 0_usize;
-        for key in self.selection.iter() {
-            if self.is_managed(key, layer) {
-                kept += 1;
-            } else if let Some(slot) = changed.get_mut(key) {
-                *slot = action;
-            }
+        let Some(mut keymap) = self.keymap(layer).cloned() else {
+            return;
+        };
+        if let Some(slot) = keymap.get_mut(key) {
+            *slot = action;
         }
-        if kept > 0 {
-            window.push_notification(Notification::warning(kept_message(kept)), cx);
+        self.write(layer, keymap, window, cx);
+    }
+
+    fn swap(&mut self, from: usize, to: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let layer = self.layer;
+        if from == to || !self.editable(from) || !self.editable(to) {
+            return;
         }
-        self.write(layer, changed, window, cx);
+        let (Some(moved), Some(replaced)) = (self.action(layer, from), self.action(layer, to))
+        else {
+            return;
+        };
+        let Some(mut keymap) = self.keymap(layer).cloned() else {
+            return;
+        };
+        if let Some(slot) = keymap.get_mut(to) {
+            *slot = moved;
+        }
+        if let Some(slot) = keymap.get_mut(from) {
+            *slot = replaced;
+        }
+        self.deselect(cx);
+        self.write(layer, keymap, window, cx);
     }
 
     fn write(&mut self, layer: Layer, keymap: Keymap, window: &mut Window, cx: &mut Context<Self>) {
@@ -299,7 +427,10 @@ impl RemapPage {
             return;
         };
         let profile = keyboard.active;
-        if self.keymap(layer) == Some(&keymap) {
+        let Some(before) = self.keymap(layer).cloned() else {
+            return;
+        };
+        if before == keymap {
             return;
         }
         if let Err(invalid) = keymap.validate(&keyboard.capabilities) {
@@ -312,7 +443,12 @@ impl RemapPage {
         self.revision += 1;
         let written = keymap.clone();
         let applied = self.store.update(cx, |store, cx| {
-            store.apply::<SetKeymap>(
+            store.change::<SetKeymap>(
+                &LayerChange {
+                    profile,
+                    layer,
+                    value: before,
+                },
                 LayerChange {
                     profile,
                     layer,
@@ -340,12 +476,52 @@ impl RemapPage {
         cx.notify();
     }
 
+    fn add_layer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(layer) = self.next_free() else {
+            return;
+        };
+        if let Some(added) = self.added.get_mut(usize::from(layer.number())) {
+            *added = true;
+        }
+        self.choose_layer(layer, window, cx);
+    }
+
+    fn run(
+        &mut self,
+        command: LayerCommand,
+        layer: Layer,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match command {
+            LayerCommand::Copy => self.copy_layer(layer, window, cx),
+            LayerCommand::PasteReplace => self.paste_layer(layer, false, window, cx),
+            LayerCommand::PasteMerge => self.paste_layer(layer, true, window, cx),
+            LayerCommand::Duplicate => self.duplicate_layer(layer, window, cx),
+            LayerCommand::Delete => self.delete_layer(layer, window, cx),
+        }
+    }
+
+    fn available(&self, command: LayerCommand, layer: Layer) -> bool {
+        let loaded = self.keymaps.iter().all(Option::is_some);
+        loaded
+            && match command {
+                LayerCommand::Copy => true,
+                LayerCommand::PasteReplace | LayerCommand::PasteMerge => self.copied.is_some(),
+                LayerCommand::Duplicate => layer != Layer::Base && self.next_free().is_some(),
+                LayerCommand::Delete => layer != Layer::Base,
+            }
+    }
+
     fn copy_layer(&mut self, layer: Layer, window: &mut Window, cx: &mut Context<Self>) {
         let Some(keymap) = self.keymap(layer).cloned() else {
             return;
         };
         self.copied = Some((layer, keymap));
-        window.push_notification(Notification::info("Layer copied"), cx);
+        window.push_notification(
+            Notification::info(format!("{} copied", layer_label(layer))),
+            cx,
+        );
         cx.notify();
     }
 
@@ -366,266 +542,398 @@ impl RemapPage {
         self.write(layer, pasted, window, cx);
     }
 
-    fn confirm_replace(&self, target: Layer, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((source, _)) = self.copied else {
+    fn duplicate_layer(&mut self, layer: Layer, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.available(LayerCommand::Duplicate, layer) {
+            return;
+        }
+        let (Some(target), Some(source)) = (self.next_free(), self.keymap(layer).cloned()) else {
             return;
         };
-        let page = cx.entity().downgrade();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let page = page.clone();
-            alert
-                .title(format!(
-                    "Replace {} with {}?",
-                    layer_label(target),
-                    layer_label(source)
-                ))
-                .confirm()
-                .ok_text("Replace")
-                .ok_variant(ButtonVariant::Danger)
-                .on_ok(move |_, window, cx| {
-                    page.update(cx, |page, cx| page.paste_layer(target, false, window, cx))
-                        .ok();
-                    true
-                })
-        });
+        let Some(empty) = self.keymap(target).cloned() else {
+            return;
+        };
+        let (copy, dropped) = paste(&empty, &source, target, false);
+        if dropped > 0 {
+            window.push_notification(Notification::warning(dropped_message(dropped)), cx);
+        }
+        if let Some(added) = self.added.get_mut(usize::from(target.number())) {
+            *added = true;
+        }
+        self.write(target, copy, window, cx);
+        self.choose_layer(target, window, cx);
     }
 
-    fn confirm_clear(&self, layer: Layer, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(keymap) = self.keymap(layer) else {
+    fn delete_layer(&mut self, layer: Layer, window: &mut Window, cx: &mut Context<Self>) {
+        if layer == Layer::Base {
             return;
-        };
-        let mut cleared = keymap.clone();
-        cleared.fill(Action::None);
-        let page = cx.entity().downgrade();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let page = page.clone();
-            let cleared = cleared.clone();
-            alert
-                .title(format!("Clear {}?", layer_label(layer)))
-                .description("Every key on this layer loses its action.")
-                .confirm()
-                .ok_text("Clear")
-                .ok_variant(ButtonVariant::Danger)
-                .on_ok(move |_, window, cx| {
-                    let cleared = cleared.clone();
-                    page.update(cx, |page, cx| page.write(layer, cleared, window, cx))
-                        .ok();
-                    true
-                })
-        });
+        }
+        let opener = Action::Layer(layer);
+        for other in Layer::ALL {
+            let Some(keymap) = self.keymap(other) else {
+                continue;
+            };
+            let mut changed = keymap.clone();
+            for action in &mut changed {
+                if other == layer || *action == opener {
+                    *action = Action::None;
+                }
+            }
+            self.write(other, changed, window, cx);
+        }
+        if let Some(added) = self.added.get_mut(usize::from(layer.number())) {
+            *added = false;
+        }
+        if self.layer == layer {
+            self.choose_layer(Layer::Base, window, cx);
+        }
+        cx.notify();
     }
 
     fn apply_layout(&mut self, layout: LetterLayout, window: &mut Window, cx: &mut Context<Self>) {
         let Some(keyboard) = self.store.read(cx).keyboard().cloned() else {
             return;
         };
-        let Some(base) = self.keymap(Layer::Base).cloned() else {
+        let layer = self.layer;
+        let Some(current) = self.keymap(layer).cloned() else {
             return;
         };
-        let from = letter_layout::detect(&base, |key| place(&keyboard, key))
+        let from = letter_layout::detect(&current, |key| place(&keyboard, key))
             .unwrap_or(LetterLayout::Qwerty);
-        let converted = letter_layout::convert(&base, from, layout);
-        self.write(Layer::Base, converted, window, cx);
+        let converted = letter_layout::convert(&current, from, layout);
+        self.write(layer, converted, window, cx);
     }
 
-    fn opens(&self, layer: Layer) -> bool {
-        let opener = Action::Layer(layer);
-        let in_keymaps = Layer::ALL
-            .into_iter()
-            .filter(|other| *other != layer)
-            .filter_map(|other| self.keymap(other))
-            .any(|keymap| keymap.contains(&opener));
-        let in_advanced = self
-            .advanced
-            .iter()
-            .flatten()
-            .any(|entry| match entry.behaviour {
-                Behaviour::DynamicKeystroke(keystroke) => keystroke
-                    .strokes
-                    .iter()
-                    .any(|stroke| stroke.action == opener),
-                Behaviour::ModTap(mod_tap) => mod_tap.tap == opener || mod_tap.hold == opener,
-                Behaviour::Toggle(action) => action == opener,
-                Behaviour::DepthPriority(_) | Behaviour::Socd(_) => false,
-            });
-        in_keymaps || in_advanced
+    fn factory_keymap(&self, factory: Factory) -> Option<Keymap> {
+        let defaults = self.defaults.as_ref()?;
+        let current = self.keymap(self.layer)?;
+        let preset = factory.keymap(defaults);
+        Some(
+            current
+                .iter()
+                .enumerate()
+                .map(|(key, kept)| {
+                    if self.managed(key, self.layer).is_some() || self.locked(key, self.layer) {
+                        return *kept;
+                    }
+                    preset
+                        .get(key)
+                        .copied()
+                        .filter(|action| catalog::refusal(*action, self.layer).is_none())
+                        .unwrap_or(Action::None)
+                })
+                .collect(),
+        )
     }
 
-    fn face(&self, keyboard: &Keyboard, key: usize) -> KeyFace {
+    fn apply_factory(&mut self, factory: Factory, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(keymap) = self.factory_keymap(factory) {
+            self.write(self.layer, keymap, window, cx);
+        }
+    }
+
+    fn factory_tile(&self, factory: Factory, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+        let keymap = self.factory_keymap(factory)?;
+        let selected = self.keymap(self.layer) == Some(&keymap);
+        Some(
+            preset_tile(
+                SharedString::from(format!("factory-{}", factory.name())),
+                factory.sample(),
+                factory.name(),
+                selected,
+                cx,
+            )
+            .on_click(
+                cx.listener(move |this, _, window, cx| this.apply_factory(factory, window, cx)),
+            ),
+        )
+    }
+
+    fn shortcut(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.focus.is_focused(window) || !event.keystroke.modifiers.secondary(cx) {
+            return;
+        }
+        let command = match event.keystroke.key.as_str() {
+            "c" => LayerCommand::Copy,
+            "v" => LayerCommand::PasteReplace,
+            "d" => LayerCommand::Duplicate,
+            _ => return,
+        };
+        cx.stop_propagation();
+        if self.available(command, self.layer) {
+            self.run(command, self.layer, window, cx);
+        }
+    }
+
+    fn face(&self, keyboard: &Keyboard, key: usize, cx: &App) -> KeyFace {
         let layer = self.layer;
-        let base = self
-            .action(Layer::Base, key)
-            .or_else(|| keyboard.legends.get(key).copied())
+        let theme = cx.theme();
+        let caps = theme::keycaps();
+        if let Some(kind) = self.managed(key, layer) {
+            return KeyFace {
+                glyph: Some(kind.glyph(caps.legend)),
+                tooltip: Some(MANAGED.into()),
+                ..KeyFace::default()
+            };
+        }
+        let action = self
+            .action(layer, key)
+            .or_else(|| {
+                (layer == Layer::Base)
+                    .then(|| keyboard.legends.get(key).copied())
+                    .flatten()
+            })
             .unwrap_or_default();
-        let mut face = KeyFace::default();
-        match (layer, self.action(layer, key)) {
-            (Layer::Base, Some(Action::None)) => face.dimmed = true,
-            (_, Some(Action::None) | None) => {
-                face.legend = usage::legend(base).into();
-                face.dimmed = true;
+        if self.locked(key, layer) {
+            return KeyFace {
+                legend: usage::legend(Action::Layer(layer)).into(),
+                dimmed: true,
+                tooltip: Some(LOCKED.into()),
+                ..KeyFace::default()
+            };
+        }
+        if self.selected == Some(key) {
+            return KeyFace {
+                callout: Some(BIND_PROMPT.into()),
+                ..KeyFace::default()
+            };
+        }
+        match action {
+            Action::None if layer == Layer::Base => KeyFace {
+                glyph: Some(keycap::alert(theme.warning)),
+                tooltip: Some(UNBOUND.into()),
+                ..KeyFace::default()
+            },
+            Action::None => KeyFace::default(),
+            action => {
+                let profile_name = match action {
+                    Action::Function(Function::Profile(slot)) => keyboard
+                        .profiles
+                        .get(usize::from(slot.get()))
+                        .map(|info| info.name.as_str()),
+                    _ => None,
+                };
+                KeyFace {
+                    legend: usage::legend(action).into(),
+                    glyph: glyph(action, caps.legend, theme.primary),
+                    tooltip: catalog::help(action, profile_name).map(SharedString::from),
+                    ..KeyFace::default()
+                }
             }
-            (_, Some(action)) => face.legend = usage::legend(action).into(),
         }
-        if let Some(entry) = self.advanced_on(key, layer) {
-            face.detail = Some(Kind::of(&entry.behaviour).badge().into());
-        }
-        face
+    }
+
+    fn keyboard_view(
+        &self,
+        keyboard: &Keyboard,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> KeyboardView {
+        let mut selection = Selection::default();
+        selection.set(self.selected);
+        let caps = theme::keycaps();
+        let accent = cx.theme().primary;
+        let payloads: Vec<Option<Dragged<Moved>>> = (0..keyboard.key_count())
+            .map(|key| {
+                let action = self.action(self.layer, key)?;
+                (self.editable(key) && action != Action::None).then(|| {
+                    let dragged =
+                        Dragged::new(Moved(key), SharedString::from(usage::legend(action)));
+                    match glyph(action, caps.legend, accent) {
+                        Some(glyph) => dragged.glyph(glyph),
+                        None => dragged,
+                    }
+                })
+            })
+            .collect();
+        let clicked = cx.entity().downgrade();
+        let cleared = clicked.clone();
+        let dropped = clicked.clone();
+        let swapped = clicked.clone();
+        KeyboardView::new("remap-keyboard", keyboard, |key| {
+            self.face(keyboard, key, cx)
+        })
+        .selection(&selection)
+        .fit_width(panel::content_width_beside_side(window))
+        .on_key_click(move |key, _, window, cx| {
+            clicked
+                .update(cx, |page, cx| page.click_key(key, window, cx))
+                .ok();
+        })
+        .on_key_secondary_click(move |key, window, cx| {
+            cleared
+                .update(cx, |page, cx| page.assign(key, Action::None, window, cx))
+                .ok();
+        })
+        .on_key_drop::<Action>(move |key, action, window, cx| {
+            dropped
+                .update(cx, |page, cx| {
+                    page.deselect(cx);
+                    page.assign(key, *action, window, cx);
+                })
+                .ok();
+        })
+        .on_key_drag::<Moved>(move |key| payloads.get(key).cloned().flatten())
+        .on_key_drop::<Moved>(move |key, moved, window, cx| {
+            swapped
+                .update(cx, |page, cx| page.swap(moved.0, key, window, cx))
+                .ok();
+        })
     }
 
     fn layers(&self, cx: &mut Context<Self>) -> Div {
-        let loaded = self.keymaps.iter().all(Option::is_some);
-        let pills: Vec<Stateful<Div>> = Layer::ALL
+        let pills: Vec<AnyElement> = Layer::ALL
             .into_iter()
+            .filter(|layer| self.shown(*layer))
             .map(|layer| {
-                let menu = self.layer_menu(layer, loaded, cx);
-                layer_pill("remap", layer, self.layer == layer, Some(menu), cx)
-                    .on_click(cx.listener(move |this, _, _, cx| this.choose_layer(layer, cx)))
-            })
-            .collect();
-        layers_column(pills, cx)
-    }
-
-    fn layer_menu(&self, layer: Layer, loaded: bool, cx: &mut Context<Self>) -> AnyElement {
-        let page = cx.entity().downgrade();
-        let copied = self.copied.is_some();
-        let button = Button::new(SharedString::from(format!(
-            "remap-layer-menu-{}",
-            layer.number()
-        )))
-        .ghost()
-        .xsmall()
-        .icon(Catalog::EllipsisVertical)
-        .disabled(!loaded)
-        .dropdown_menu(move |menu, _, _| {
-            let menu = menu
-                .item(menu_item(
-                    "Copy layer",
-                    true,
-                    &page,
+                let trailing = h_flex()
+                    .gap_1()
+                    .items_center()
+                    .when(
+                        layer != Layer::Base
+                            && self.keymaps.iter().all(Option::is_some)
+                            && !self.opens(layer),
+                        |this| {
+                            this.child(layers::warning(
+                                SharedString::from(format!("remap-unreachable-{}", layer.number())),
+                                UNREACHABLE,
+                                cx,
+                            ))
+                        },
+                    )
+                    .child(self.layer_menu(layer, cx))
+                    .into_any_element();
+                layer_pill(
+                    format!("remap-layer-{}", layer.number()),
                     layer,
-                    Self::copy_layer,
-                ))
-                .item(menu_item(
-                    "Paste and replace…",
-                    copied,
-                    &page,
-                    layer,
-                    |page, layer, window, cx| page.confirm_replace(layer, window, cx),
-                ))
-                .item(menu_item(
-                    "Paste and merge",
-                    copied,
-                    &page,
-                    layer,
-                    |page, layer, window, cx| page.paste_layer(layer, true, window, cx),
-                ));
-            if layer == Layer::Base {
-                menu
-            } else {
-                menu.separator().item(menu_item(
-                    "Clear layer…",
-                    true,
-                    &page,
-                    layer,
-                    |page, layer, window, cx| page.confirm_clear(layer, window, cx),
-                ))
-            }
-        });
-        div().child(button).into_any_element()
-    }
-
-    fn notes(&self, cx: &mut Context<Self>) -> Vec<Div> {
-        let managed = self
-            .selection
-            .iter()
-            .any(|key| self.is_managed(key, self.layer));
-        let unreachable = self.layer != Layer::Base
-            && self.keymaps.iter().all(Option::is_some)
-            && !self.opens(self.layer);
-        [
-            (managed, "Keys with an advanced key can't be remapped"),
-            (unreachable, "No key opens this layer"),
-        ]
-        .into_iter()
-        .filter(|(shown, _)| *shown)
-        .map(|(_, line)| panel::note(line, cx))
-        .collect()
-    }
-
-    fn layout_field(&self, keyboard: &Keyboard, cx: &mut Context<Self>) -> Option<Div> {
-        let base = self.keymap(Layer::Base)?;
-        let detected = letter_layout::detect(base, |key| place(keyboard, key));
-        let tiles: Vec<Stateful<Div>> = LetterLayout::ALL
-            .into_iter()
-            .filter(|layout| detected.is_some() || *layout != LetterLayout::Qwerty)
-            .map(|layout| {
-                layout_tile(layout, detected == Some(layout), cx).on_click(
-                    cx.listener(move |this, _, window, cx| this.apply_layout(layout, window, cx)),
+                    self.layer == layer,
+                    Some(trailing),
+                    cx,
                 )
+                .on_click(
+                    cx.listener(move |this, _, window, cx| this.choose_layer(layer, window, cx)),
+                )
+                .into_any_element()
             })
             .collect();
-        Some(panel::field(
-            "Letter layout",
+        let full = self.next_free().is_none();
+        let add = layers::add_button("remap-add-layer", full, cx)
+            .when(!full, |this| {
+                this.on_click(cx.listener(|this, _, window, cx| this.add_layer(window, cx)))
+            })
+            .into_any_element();
+        layers_column(pills, Some(add), cx)
+    }
+
+    fn layer_menu(&self, layer: Layer, cx: &mut Context<Self>) -> AnyElement {
+        let page = cx.entity().downgrade();
+        let shortcut = if cfg!(target_os = "macos") {
+            "⌘"
+        } else {
+            "Ctrl+"
+        };
+        let items: Vec<Item> = LayerCommand::ALL
+            .into_iter()
+            .map(|command| {
+                let item = Item::new(command.label())
+                    .disabled(!self.available(command, layer))
+                    .danger(command == LayerCommand::Delete);
+                match command.shortcut() {
+                    Some(key) => item.detail(format!("{shortcut}{key}")),
+                    None => item,
+                }
+            })
+            .collect();
+        let muted = cx.theme().muted_foreground;
+        let hover = cx.theme().secondary_hover;
+        div()
+            .id(SharedString::from(format!(
+                "remap-layer-menu-{}",
+                layer.number()
+            )))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                Dropdown::new(SharedString::from(format!(
+                    "remap-layer-dropdown-{}",
+                    layer.number()
+                )))
+                .menu_width(px(MENU_WIDTH))
+                .trigger(move |open, _| {
+                    div()
+                        .size_6()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded_md()
+                        .text_color(muted)
+                        .when(open, |this| this.bg(hover))
+                        .hover(move |style| style.bg(hover))
+                        .child(Icon::new(Catalog::EllipsisVertical).small())
+                        .into_any_element()
+                })
+                .items(items)
+                .on_select(move |index, window, cx| {
+                    let Some(command) = LayerCommand::ALL.get(index).copied() else {
+                        return;
+                    };
+                    page.update(cx, |page, cx| page.run(command, layer, window, cx))
+                        .ok();
+                }),
+            )
+            .into_any_element()
+    }
+
+    fn presets_card(&self, keyboard: &Keyboard, cx: &mut Context<Self>) -> Div {
+        let card = panel::section(
+            "Remap keys",
+            Some("Drag keys from the right onto the keyboard, or pick a preset".into()),
+            cx,
+        );
+        let Some(keymap) = self.keymap(self.layer) else {
+            return card;
+        };
+        let detected = letter_layout::detect(keymap, |key| place(keyboard, key));
+        let mut tiles: Vec<Stateful<Div>> = Vec::new();
+        tiles.extend(self.factory_tile(Factory::Default, cx));
+        tiles.extend(self.factory_tile(Factory::Function, cx));
+        for layout in LetterLayout::ALL
+            .into_iter()
+            .filter(|layout| *layout != LetterLayout::Qwerty)
+        {
+            if layout == LetterLayout::Alphabetical {
+                tiles.extend(self.factory_tile(Factory::Leet, cx));
+            }
+            tiles.push(
+                preset_tile(
+                    SharedString::from(format!("letter-layout-{}", layout.name())),
+                    layout.sample(),
+                    layout.name(),
+                    detected == Some(layout),
+                    cx,
+                )
+                .on_click(
+                    cx.listener(move |this, _, window, cx| this.apply_layout(layout, window, cx)),
+                ),
+            );
+        }
+        card.child(panel::field(
+            "Select a preset",
             h_flex().gap_2().flex_wrap().children(tiles),
             cx,
         ))
-    }
-
-    fn remap_card(&self, keyboard: &Keyboard, cx: &mut Context<Self>) -> Div {
-        let card = panel::section(
-            "Remap keys",
-            Some("Changes apply to the active profile".into()),
-            cx,
-        )
-        .children(self.notes(cx));
-        if self.layer == Layer::Base {
-            card.children(self.layout_field(keyboard, cx))
-        } else {
-            card
-        }
-    }
-
-    fn selection_actions(&self, cx: &mut Context<Self>) -> Div {
-        h_flex()
-            .gap_2()
-            .child(
-                Button::new("remap-select-all")
-                    .small()
-                    .label("Select all keys")
-                    .on_click(cx.listener(|this, _, _, cx| this.select_all(cx))),
-            )
-            .child(
-                Button::new("remap-discard-selection")
-                    .small()
-                    .label("Discard selection")
-                    .disabled(self.selection.is_empty())
-                    .on_click(cx.listener(|this, _, _, cx| this.clear_selection(cx))),
-            )
     }
 }
 
 impl Render for RemapPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let page = panel::page();
         let Some(keyboard) = self.store.read(cx).keyboard().cloned() else {
-            return page;
+            return panel::page();
         };
         if self.seen.elapsed() > STALE_AFTER {
             self.refresh_advanced(cx);
         }
         self.seen = Instant::now();
-        let weak = cx.entity().downgrade();
-        let view = KeyboardView::new("remap-keyboard", &keyboard, |key| self.face(&keyboard, key))
-            .selection(&self.selection)
-            .fit_width(panel::content_width_beside_side(window))
-            .on_key_click(move |key, event, _, cx| {
-                weak.update(cx, |page, cx| page.click_key(key, event.modifiers(), cx))
-                    .ok();
-            });
-        let caption = self
-            .selection
-            .is_empty()
-            .then(|| caption("Select keys to remap", cx));
+        let view = self.keyboard_view(&keyboard, window, cx);
         let cards = h_flex()
             .w_full()
             .items_start()
@@ -634,112 +942,49 @@ impl Render for RemapPage {
                 div()
                     .flex_none()
                     .w(px(SIDE_CARD_WIDTH))
-                    .child(self.remap_card(&keyboard, cx)),
+                    .child(self.presets_card(&keyboard, cx)),
             )
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(panel::section("Actions", None, cx).child(self.picker.clone())),
+                div().flex_1().min_w_0().child(
+                    v_flex()
+                        .w_full()
+                        .p_6()
+                        .rounded(cx.theme().radius_lg)
+                        .bg(cx.theme().group_box)
+                        .child(self.picker.clone()),
+                ),
             );
-        page.child(panel::stage_with_side(self.layers(cx), view))
-            .children(caption)
+        let body = v_flex()
+            .w_full()
+            .gap_5()
             .child(panel::heading(
                 Page::Remap.title(),
-                Some("Shift-, Ctrl- or Cmd-click selects several keys".into()),
-                self.selection_actions(cx),
+                Some(REMAP_HELP.into()),
+                div(),
                 cx,
             ))
-            .child(cards)
-    }
-}
-
-pub(super) const fn layer_label(layer: Layer) -> &'static str {
-    match layer {
-        Layer::Base => "Base layer",
-        Layer::One => "Fn layer 1",
-        Layer::Two => "Fn layer 2",
-        Layer::Three => "Fn layer 3",
-    }
-}
-
-pub(super) fn layers_column(pills: Vec<Stateful<Div>>, cx: &App) -> Div {
-    v_flex()
-        .w_full()
-        .gap_2()
-        .child(
-            h_flex()
-                .gap_1p5()
-                .items_center()
-                .pb_1()
-                .child(panel::label("Layers", cx))
-                .child(
-                    div()
-                        .id("layers-help")
-                        .text_color(cx.theme().muted_foreground)
-                        .child(Icon::new(Catalog::CircleQuestionMark).xsmall())
-                        .tooltip(|window, cx| {
-                            Tooltip::new("Fn layers work while a key that opens them is held")
-                                .build(window, cx)
-                        }),
-                ),
+            .child(cards);
+        panel::page_with_stage(
+            "remap-body",
+            panel::stage_with_side(self.layers(cx), view),
+            body,
         )
-        .children(pills)
+        .track_focus(&self.focus)
+        .on_key_down(cx.listener(Self::shortcut))
+    }
 }
 
-pub(super) fn layer_pill(
-    page: &'static str,
-    layer: Layer,
+fn preset_tile(
+    id: SharedString,
+    sample: &'static str,
+    name: &'static str,
     selected: bool,
-    trailing: Option<AnyElement>,
     cx: &App,
 ) -> Stateful<Div> {
     let theme = cx.theme();
-    let hover = theme.secondary;
-    let padded = trailing.is_none();
-    h_flex()
-        .id(SharedString::from(format!(
-            "{page}-layer-{}",
-            layer.number()
-        )))
-        .w_full()
-        .h(px(PILL_HEIGHT))
-        .pl_3()
-        .map(|this| if padded { this.pr_3() } else { this.pr_1() })
-        .gap_2()
-        .items_center()
-        .justify_between()
-        .rounded(theme.radius)
-        .border_1()
-        .border_color(if selected {
-            theme.primary
-        } else {
-            theme.group_box
-        })
-        .bg(theme.group_box)
-        .text_sm()
-        .font_weight(FontWeight::MEDIUM)
-        .cursor_pointer()
-        .hover(move |style| style.bg(hover))
-        .child(layer_label(layer))
-        .children(trailing)
-}
-
-pub(super) fn caption(text: &'static str, cx: &App) -> Div {
-    h_flex()
-        .w_full()
-        .justify_center()
-        .child(panel::label(text, cx))
-}
-
-fn layout_tile(layout: LetterLayout, selected: bool, cx: &App) -> Stateful<Div> {
-    let theme = cx.theme();
-    let hover = theme.secondary;
+    let hover = theme.secondary_hover;
     v_flex()
-        .id(SharedString::from(format!(
-            "letter-layout-{}",
-            layout.name()
-        )))
+        .id(id)
         .size(px(LAYOUT_TILE_SIZE))
         .items_center()
         .justify_center()
@@ -751,37 +996,16 @@ fn layout_tile(layout: LetterLayout, selected: bool, cx: &App) -> Stateful<Div> 
         } else {
             theme.border
         })
-        .bg(theme.accent)
+        .bg(theme.secondary)
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
-        .child(
-            div()
-                .text_xs()
-                .font_weight(FontWeight::BOLD)
-                .child(layout.sample()),
-        )
+        .child(div().text_sm().font_weight(FontWeight::BOLD).child(sample))
         .child(
             div()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child(layout.name()),
+                .child(name),
         )
-}
-
-fn menu_item(
-    label: &'static str,
-    enabled: bool,
-    page: &WeakEntity<RemapPage>,
-    layer: Layer,
-    run: fn(&mut RemapPage, Layer, &mut Window, &mut Context<RemapPage>),
-) -> PopupMenuItem {
-    let page = page.clone();
-    PopupMenuItem::new(label)
-        .disabled(!enabled)
-        .on_click(move |_, window, cx| {
-            page.update(cx, |page, cx| run(page, layer, window, cx))
-                .ok();
-        })
 }
 
 fn place(keyboard: &Keyboard, key: usize) -> Option<(u16, u16)> {
@@ -803,7 +1027,7 @@ fn paste(target: &Keymap, copied: &Keymap, layer: Layer, merge: bool) -> (Keymap
     let mut pasted = target.clone();
     let mut dropped = 0;
     for (slot, action) in pasted.iter_mut().zip(copied.iter().copied()) {
-        let allowed = refusal(action, layer).is_none();
+        let allowed = catalog::refusal(action, layer).is_none();
         if !allowed {
             dropped += 1;
         }
@@ -818,14 +1042,6 @@ fn paste(target: &Keymap, copied: &Keymap, layer: Layer, merge: bool) -> (Keymap
     (pasted, dropped)
 }
 
-fn kept_message(kept: usize) -> String {
-    if kept == 1 {
-        "1 key has an advanced key and kept its action".to_owned()
-    } else {
-        format!("{kept} keys have an advanced key and kept their action")
-    }
-}
-
 fn dropped_message(dropped: usize) -> String {
     if dropped == 1 {
         "1 action can't go on this layer and was left out".to_owned()
@@ -836,8 +1052,6 @@ fn dropped_message(dropped: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use openwoot_protocol::keys::Function;
-
     use super::*;
 
     fn keymap(actions: &[Action]) -> Keymap {

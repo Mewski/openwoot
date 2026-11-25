@@ -17,6 +17,7 @@ const SCROLLBAR_ALLOWANCE: f32 = 12.0;
 const CONTROL_WIDTH: f32 = 240.0;
 const SIDE_WIDTH: f32 = 140.0;
 const SIDE_GAP: f32 = 20.0;
+const HELP_TOOLTIP_WIDTH: f32 = 360.0;
 
 pub(crate) fn content_width(window: &Window) -> Pixels {
     let shell = RAIL_WIDTH + NAVIGATION_WIDTH + NAVIGATION_MARGIN + SCROLLBAR_ALLOWANCE;
@@ -37,6 +38,25 @@ pub(crate) fn page() -> Div {
         .pt_4()
         .pb_8()
         .gap_5()
+}
+
+pub(crate) fn page_with_stage(
+    id: &'static str,
+    stage: impl IntoElement,
+    body: impl IntoElement,
+) -> Div {
+    page()
+        .h_full()
+        .pb_0()
+        .child(div().flex_none().child(stage))
+        .child(
+            div()
+                .id(id)
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .child(v_flex().gap_5().pb_8().child(body)),
+        )
 }
 
 pub(crate) fn stage(content: impl IntoElement) -> Div {
@@ -92,7 +112,7 @@ pub(crate) fn section(
     description: Option<SharedString>,
     cx: &App,
 ) -> Div {
-    card(title.into(), description, None, cx)
+    card(title.into(), None, description, None, cx)
 }
 
 pub(crate) fn section_with(
@@ -103,19 +123,42 @@ pub(crate) fn section_with(
 ) -> Div {
     card(
         title.into(),
+        None,
         description,
         Some(trailing.into_any_element()),
         cx,
     )
 }
 
+pub(crate) fn section_with_help(
+    title: impl Into<SharedString>,
+    help: impl Into<SharedString>,
+    description: Option<SharedString>,
+    trailing: Option<AnyElement>,
+    cx: &App,
+) -> Div {
+    card(title.into(), Some(help.into()), description, trailing, cx)
+}
+
 fn card(
     title: SharedString,
+    help: Option<SharedString>,
     description: Option<SharedString>,
     trailing: Option<AnyElement>,
     cx: &App,
 ) -> Div {
     let theme = cx.theme();
+    let help = help.map(|help| help_icon(&title, help, cx));
+    let heading = h_flex()
+        .gap_1p5()
+        .child(
+            div()
+                .text_lg()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.foreground)
+                .child(title),
+        )
+        .children(help);
     v_flex()
         .w_full()
         .gap_4()
@@ -129,13 +172,7 @@ fn card(
                     h_flex()
                         .gap_3()
                         .justify_between()
-                        .child(
-                            div()
-                                .text_lg()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.foreground)
-                                .child(title),
-                        )
+                        .child(heading)
                         .children(trailing),
                 )
                 .when_some(description, |this, description| {
@@ -220,6 +257,10 @@ fn help_icon(owner: &SharedString, help: SharedString, cx: &App) -> AnyElement {
         .id(SharedString::from(format!("help-{owner}")))
         .text_color(cx.theme().muted_foreground)
         .child(Icon::new(Catalog::CircleQuestionMark).small())
-        .tooltip(move |window, cx| Tooltip::new(help.clone()).build(window, cx))
+        .tooltip(move |window, cx| {
+            Tooltip::new(help.clone())
+                .max_w(px(HELP_TOOLTIP_WIDTH))
+                .build(window, cx)
+        })
         .into_any_element()
 }

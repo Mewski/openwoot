@@ -1,3 +1,5 @@
+mod device_info;
+
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
@@ -9,26 +11,27 @@ use gpui_kit::{
         button::{Button, ButtonVariants as _},
         h_flex,
         notification::Notification,
-        switch::Switch,
         tab::{Tab, TabBar},
         v_flex,
     },
     div, hsla,
 };
 use openwoot_protocol::{
-    device::Layout,
     diagnostics::{Bus, BusErrors, Lighting, Report, Usb},
     endpoints::{GetDiagnostics, GetSensorValues, SetKeyReports, SetRawScanning},
     profile::Slot,
     sensors::{self, Reading},
 };
 
+pub(super) use self::device_info::open_device_info;
+use self::device_info::{Line, device_lines, text_of, value_line};
 use super::Page;
 use crate::{
     device::Device,
     keyboard::{KeyFace, KeyboardView},
     panel,
     store::{Keyboard, Scope, Store, StoreEvent},
+    switch::Switch,
     usage,
 };
 
@@ -43,8 +46,6 @@ const READINGS: [(Reading, &str); 4] = [
     (Reading::RestLevel, "Rest"),
     (Reading::BottomLevel, "Bottom"),
 ];
-
-type Line = (&'static str, String);
 
 pub(crate) struct DiagnosticsPage {
     store: Entity<Store>,
@@ -231,8 +232,8 @@ impl DiagnosticsPage {
 
     fn keyboard(&self, keyboard: &Keyboard, window: &Window) -> KeyboardView {
         let reading = self.reading;
-        let values = self.values.clone().unwrap_or_default();
-        let range = spread(&values);
+        let values = self.values.as_deref().unwrap_or_default();
+        let range = spread(values);
         KeyboardView::new("sensor-readout", keyboard, |index| {
             let legend = usage::legend(keyboard.legends.get(index).copied().unwrap_or_default());
             let Some(value) = values.get(index).copied().flatten() else {
@@ -250,6 +251,7 @@ impl DiagnosticsPage {
                     fill: None,
                     travel: Some(fraction),
                     dimmed: false,
+                    ..KeyFace::default()
                 };
             }
             KeyFace {
@@ -258,6 +260,7 @@ impl DiagnosticsPage {
                 fill: range.map(|(low, high)| heat(level(value, low, high))),
                 travel: None,
                 dimmed: false,
+                ..KeyFace::default()
             }
         })
         .fit_width(panel::content_width(window))
@@ -289,24 +292,24 @@ impl DiagnosticsPage {
     }
 
     fn device_section(keyboard: &Keyboard, cx: &Context<Self>) -> Div {
-        panel::section("Device", None, cx)
-            .child(
-                v_flex().gap_1().children(
-                    device_lines(keyboard)
-                        .into_iter()
-                        .map(|line| value_line(line, cx)),
-                ),
-            )
-            .child(
-                h_flex().justify_end().child(
-                    Button::new("copy-device")
-                        .ghost()
-                        .small()
-                        .icon(Catalog::Clipboard)
-                        .label("Copy")
-                        .on_click(cx.listener(|this, _, window, cx| this.copy(window, cx))),
-                ),
-            )
+        panel::section_with(
+            "Device",
+            None,
+            Button::new("copy-report")
+                .ghost()
+                .small()
+                .icon(Catalog::Clipboard)
+                .label("Copy report")
+                .on_click(cx.listener(|this, _, window, cx| this.copy(window, cx))),
+            cx,
+        )
+        .child(
+            v_flex().gap_1().children(
+                device_lines(keyboard)
+                    .iter()
+                    .map(|line| value_line(line, cx)),
+            ),
+        )
     }
 
     fn testing_section(&self, cx: &Context<Self>) -> Div {
@@ -359,7 +362,7 @@ impl DiagnosticsPage {
                 v_flex()
                     .gap_1()
                     .child(panel::note(group, cx))
-                    .children(lines.into_iter().map(|line| value_line(line, cx)))
+                    .children(lines.iter().map(|line| value_line(line, cx)))
             })
             .collect();
         let half = groups.len().div_ceil(2);
@@ -384,97 +387,28 @@ impl Drop for DiagnosticsPage {
 impl Render for DiagnosticsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.rendered = Instant::now();
-        let page = panel::page();
-        let Some(keyboard) = self.store.read(cx).keyboard().cloned() else {
-            return page.child(panel::note("No keyboard", cx));
+        let Some(keyboard) = self.store.read(cx).keyboard() else {
+            return panel::page().child(panel::note("No keyboard", cx));
         };
         let left = v_flex()
             .gap_4()
-            .child(Self::device_section(&keyboard, cx))
+            .child(Self::device_section(keyboard, cx))
             .child(self.testing_section(cx));
-        page.child(panel::stage(self.keyboard(&keyboard, window)))
-            .children(self.caption(cx))
+        let stage = v_flex()
+            .gap_5()
+            .child(panel::stage(self.keyboard(keyboard, window)))
+            .children(self.caption(cx));
+        let body = v_flex()
+            .gap_5()
             .child(panel::heading(
                 Page::Diagnostics.title(),
                 Some("Live sensor readout and status of the keyboard".into()),
                 self.reading_tabs(cx),
                 cx,
             ))
-            .child(panel::columns(left, self.status_section(&keyboard, cx)))
+            .child(panel::columns(left, self.status_section(keyboard, cx)));
+        panel::page_with_stage("diagnostics-body", stage, body)
     }
-}
-
-fn value_line((label, value): Line, cx: &Context<DiagnosticsPage>) -> Div {
-    let theme = cx.theme();
-    h_flex()
-        .w_full()
-        .gap_4()
-        .justify_between()
-        .text_sm()
-        .child(div().text_color(theme.foreground).child(label))
-        .child(div().text_color(theme.muted_foreground).child(value))
-}
-
-fn device_lines(keyboard: &Keyboard) -> Vec<Line> {
-    let capabilities = &keyboard.capabilities;
-    vec![
-        ("Keyboard", keyboard.name.to_string()),
-        ("Firmware", keyboard.version.firmware.to_string()),
-        ("Protocol", keyboard.version.protocol.to_string()),
-        (
-            "Key matrix",
-            format!(
-                "{} × {} ({} keys)",
-                capabilities.key_rows,
-                capabilities.key_columns,
-                capabilities.key_count()
-            ),
-        ),
-        (
-            "Profiles",
-            format!("{} of {}", keyboard.profiles.len(), capabilities.profiles),
-        ),
-        (
-            "Layouts",
-            capabilities
-                .layouts
-                .iter()
-                .map(|layout| layout_name(*layout))
-                .collect::<Vec<_>>()
-                .join(", "),
-        ),
-        (
-            "Layout",
-            keyboard.layout.map_or_else(
-                || "Unknown".to_owned(),
-                |layout| layout_name(layout).to_owned(),
-            ),
-        ),
-        (
-            "Light bar",
-            match capabilities.lightbar_leds {
-                0 => "None".to_owned(),
-                1 => "1 LED".to_owned(),
-                leds => format!("{leds} LEDs"),
-            },
-        ),
-        (
-            "Host signals",
-            if capabilities.host_signals {
-                "Yes"
-            } else {
-                "No"
-            }
-            .to_owned(),
-        ),
-        ("Switch models", capabilities.switch_models.to_string()),
-        (
-            "Edition",
-            capabilities
-                .edition
-                .map_or_else(|| "None".to_owned(), |edition| edition.to_string()),
-        ),
-    ]
 }
 
 fn report_groups(report: &Report, keyboard: &Keyboard) -> Vec<(&'static str, Vec<Line>)> {
@@ -613,22 +547,6 @@ fn error_counts(errors: &BusErrors) -> String {
     format!("{total} ({})", kinds.join(", "))
 }
 
-fn text_of(lines: &[Line]) -> String {
-    lines
-        .iter()
-        .map(|(label, value)| format!("{label}: {value}\n"))
-        .collect::<Vec<_>>()
-        .concat()
-}
-
-const fn layout_name(layout: Layout) -> &'static str {
-    match layout {
-        Layout::Ansi => "ANSI",
-        Layout::Iso => "ISO",
-        Layout::Jis => "JIS",
-    }
-}
-
 fn spread(values: &[Option<u16>]) -> Option<(u16, u16)> {
     let present = values.iter().flatten().copied();
     let low = present.clone().min()?;
@@ -686,14 +604,5 @@ mod tests {
             lines.last().map(|(_, value)| value.as_str()),
             Some("no acknowledge")
         );
-    }
-
-    #[test]
-    fn copied_text_has_one_line_per_entry() {
-        let lines = vec![
-            ("Keyboard", "Wooting 80HE".to_owned()),
-            ("Edition", "None".to_owned()),
-        ];
-        assert_eq!(text_of(&lines), "Keyboard: Wooting 80HE\nEdition: None\n");
     }
 }

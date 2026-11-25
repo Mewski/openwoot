@@ -7,6 +7,12 @@ use openwoot_protocol::{
 
 use crate::store::Keyboard;
 
+pub(super) const BLACK: Rgb = Rgb {
+    red: 0,
+    green: 0,
+    blue: 0,
+};
+
 pub(super) fn uniform(count: usize, color: Rgb) -> KeyColors {
     let mut colors = KeyColors::new();
     for _ in 0..count {

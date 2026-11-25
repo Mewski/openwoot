@@ -22,7 +22,7 @@ impl Record for Colors {
 
 impl Record for Info {
     const ITEM: u8 = 0x22;
-    const VERSION: u8 = 1;
+    const VERSION: u8 = 2;
 }
 
 impl Record for Revision {
@@ -67,6 +67,7 @@ mod tests {
     use super::*;
     use crate::{
         keys::{ActiveProfile, Keymaps},
+        profile::Order,
         storage::LayoutOverride,
     };
 
@@ -102,6 +103,7 @@ mod tests {
             <lightbar::Entries as Record>::ITEM,
             <switches::Settings as Record>::ITEM,
             <LayoutOverride as Record>::ITEM,
+            <Order as Record>::ITEM,
         ]);
     }
 }

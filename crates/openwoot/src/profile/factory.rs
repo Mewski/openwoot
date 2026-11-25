@@ -58,6 +58,7 @@ impl Preset {
         Info {
             name,
             color: self.color,
+            icon: 0,
         }
     }
 

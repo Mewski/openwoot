@@ -1,15 +1,13 @@
 use std::time::Duration;
 
 use gpui_kit::{
-    Context, Div, InteractiveElement as _, KeyDownEvent, KeyUpEvent, Modifiers,
-    ModifiersChangedEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Task, Window,
-    component::{
-        ActiveTheme as _, Sizable as _,
-        button::{Button, ButtonVariants as _},
-        h_flex, v_flex,
-    },
-    div, px, relative,
+    AnyElement, Context, Div, InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent,
+    Modifiers, ModifiersChangedEvent, ParentElement as _, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Task, Window,
+    component::{ActiveTheme as _, h_flex, v_flex},
+    div,
+    prelude::FluentBuilder as _,
+    px, relative,
 };
 use openwoot_protocol::{
     advanced,
@@ -18,56 +16,63 @@ use openwoot_protocol::{
     sensors::{self, Reading},
 };
 
-use super::{AdvancedPage, rules};
-use crate::{page::remap::usage_of_key, panel, usage};
+use super::{AdvancedPage, editor::section_title, rules};
+use crate::{page::remap::usage_of_key, panel, theme, usage};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(33);
 const VISIBLE_WITHIN: Duration = Duration::from_millis(500);
 const FULL_TRAVEL: f32 = 4095.0;
 const BAR_WIDTH: f32 = 160.0;
-const VALUE_WIDTH: f32 = 64.0;
+const VALUE_WIDTH: f32 = 56.0;
+const PANE_HEIGHT: f32 = 180.0;
+const RELEASED_KEPT: usize = 12;
 
 pub(super) struct Tester {
     travel: Option<sensors::Values>,
-    held: Vec<SharedString>,
+    pressed: Vec<SharedString>,
+    released: Vec<SharedString>,
     modifiers: Modifiers,
     _poll: Task<()>,
 }
 
 impl AdvancedPage {
     pub(super) fn start_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let device = self.store.read(cx).device();
-        let poll = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(POLL_INTERVAL).await;
-                let Ok(visible) = this.update(cx, |page, _| page.seen.elapsed() < VISIBLE_WITHIN)
-                else {
-                    return;
-                };
-                if !visible {
-                    continue;
-                }
-                let reading = device
-                    .configure::<GetSensorValues, sensors::Values>(Reading::Travel)
-                    .await
-                    .ok();
-                let updated = this.update(cx, |page, cx| {
-                    if let Some(tester) = &mut page.tester {
-                        tester.travel = reading;
-                        cx.notify();
+        if self.tester.is_none() {
+            let device = self.store.read(cx).device();
+            let poll = cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(POLL_INTERVAL).await;
+                    let Ok(visible) =
+                        this.update(cx, |page, _| page.seen.elapsed() < VISIBLE_WITHIN)
+                    else {
+                        return;
+                    };
+                    if !visible {
+                        continue;
                     }
-                });
-                if updated.is_err() {
-                    return;
+                    let reading = device
+                        .configure::<GetSensorValues, sensors::Values>(Reading::Travel)
+                        .await
+                        .ok();
+                    let updated = this.update(cx, |page, cx| {
+                        if let Some(tester) = &mut page.tester {
+                            tester.travel = reading;
+                            cx.notify();
+                        }
+                    });
+                    if updated.is_err() {
+                        return;
+                    }
                 }
-            }
-        });
-        self.tester = Some(Tester {
-            travel: None,
-            held: Vec::new(),
-            modifiers: Modifiers::default(),
-            _poll: poll,
-        });
+            });
+            self.tester = Some(Tester {
+                travel: None,
+                pressed: Vec::new(),
+                released: Vec::new(),
+                modifiers: Modifiers::default(),
+                _poll: poll,
+            });
+        }
         self.tester_focus.focus(window, cx);
         cx.notify();
     }
@@ -80,35 +85,17 @@ impl AdvancedPage {
 
     pub(super) fn tested_travel(&self, key: usize) -> Option<f32> {
         let tester = self.tester.as_ref()?;
-        let entry = self.selected_entry()?;
-        if !rules::bindings(entry).any(|(bound, _)| usize::from(bound.get()) == key) {
+        let entry = self.edited()?;
+        if !rules::bindings(&entry).any(|(bound, _)| usize::from(bound.get()) == key) {
             return None;
         }
         let travel = tester.travel.as_ref()?.get(key).copied().flatten()?;
         Some((f32::from(travel) / FULL_TRAVEL).clamp(0.0, 1.0))
     }
 
-    pub(super) fn tester_rows(&self, entry: &advanced::Key, cx: &mut Context<Self>) -> Div {
-        let testing = self.tester.is_some();
-        let toggle = Button::new("advanced-test")
-            .ghost()
-            .small()
-            .label(if testing { "Stop" } else { "Start" })
-            .on_click(cx.listener(|this, _, window, cx| {
-                if this.tester.is_some() {
-                    this.stop_test(cx);
-                } else {
-                    this.start_test(window, cx);
-                }
-            }));
-        let row = panel::row(
-            "Test",
-            Some("Shows key travel and what the computer receives".into()),
-            toggle,
-            cx,
-        );
+    pub(super) fn tester_panes(&self, entry: &advanced::Key, cx: &mut Context<Self>) -> AnyElement {
         let Some(tester) = &self.tester else {
-            return row;
+            return div().into_any_element();
         };
         let bars: Vec<Div> = rules::bindings(entry)
             .map(|(key, _)| {
@@ -121,31 +108,33 @@ impl AdvancedPage {
                 )
             })
             .collect();
-        let mut received = modifier_names(tester.modifiers);
-        received.extend(tester.held.iter().cloned());
-        let received: SharedString = if received.is_empty() {
-            "Nothing".into()
-        } else {
-            received.join(" + ").into()
-        };
-        div().child(
-            v_flex()
-                .id("advanced-tester")
-                .track_focus(&self.tester_focus)
-                .on_key_down(cx.listener(Self::tested_key_down))
-                .on_key_up(cx.listener(Self::tested_key_up))
-                .on_modifiers_changed(cx.listener(Self::tested_modifiers))
-                .on_click(cx.listener(|this, _, window, cx| this.tester_focus.focus(window, cx)))
-                .gap_1()
-                .child(row)
-                .children(bars)
-                .child(panel::row(
-                    "Received",
-                    None,
-                    div().text_sm().child(received),
-                    cx,
-                )),
-        )
+        let mut pressed = modifier_names(tester.modifiers);
+        pressed.extend(tester.pressed.iter().cloned());
+        v_flex()
+            .id("advanced-tester")
+            .track_focus(&self.tester_focus)
+            .on_key_down(cx.listener(Self::tested_key_down))
+            .on_key_up(cx.listener(Self::tested_key_up))
+            .on_modifiers_changed(cx.listener(Self::tested_modifiers))
+            .on_click(cx.listener(|this, _, window, cx| this.tester_focus.focus(window, cx)))
+            .gap_4()
+            .child(section_title(
+                "Test your binding",
+                "Press the keys; this shows what the computer receives",
+                cx,
+            ))
+            .child(
+                h_flex()
+                    .w_full()
+                    .h(px(PANE_HEIGHT))
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .child(pane("Pressed keys", &pressed, false, cx))
+                    .child(pane("Released keys", &tester.released, true, cx)),
+            )
+            .child(v_flex().gap_1().children(bars))
+            .into_any_element()
     }
 
     fn tested_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -154,8 +143,8 @@ impl AdvancedPage {
         };
         cx.stop_propagation();
         let name = received_name(&event.keystroke.key);
-        if !tester.held.contains(&name) {
-            tester.held.push(name);
+        if !tester.pressed.contains(&name) {
+            tester.pressed.push(name);
             cx.notify();
         }
     }
@@ -166,7 +155,8 @@ impl AdvancedPage {
         };
         cx.stop_propagation();
         let name = received_name(&event.keystroke.key);
-        tester.held.retain(|held| *held != name);
+        tester.pressed.retain(|held| *held != name);
+        release(tester, name);
         cx.notify();
     }
 
@@ -177,10 +167,61 @@ impl AdvancedPage {
         cx: &mut Context<Self>,
     ) {
         if let Some(tester) = &mut self.tester {
+            let before = modifier_names(tester.modifiers);
+            let after = modifier_names(event.modifiers);
+            for name in before {
+                if !after.contains(&name) {
+                    release(tester, name);
+                }
+            }
             tester.modifiers = event.modifiers;
             cx.notify();
         }
     }
+}
+
+fn release(tester: &mut Tester, name: SharedString) {
+    tester.released.retain(|released| *released != name);
+    tester.released.insert(0, name);
+    tester.released.truncate(RELEASED_KEPT);
+}
+
+fn pane(
+    title: &'static str,
+    keys: &[SharedString],
+    faded: bool,
+    cx: &Context<AdvancedPage>,
+) -> Div {
+    let theme = cx.theme();
+    let caps = theme::keycaps();
+    v_flex()
+        .flex_1()
+        .h_full()
+        .p_3()
+        .gap_2()
+        .when(faded, |this| this.border_l_1().border_color(theme.border))
+        .child(panel::label(title, cx))
+        .child(
+            h_flex()
+                .flex_wrap()
+                .gap_1()
+                .children(keys.iter().map(|key| {
+                    div()
+                        .px_1p5()
+                        .py_0p5()
+                        .rounded(px(4.0))
+                        .bg(caps.top)
+                        .border_1()
+                        .border_color(theme.border)
+                        .text_xs()
+                        .text_color(if faded {
+                            theme.muted_foreground
+                        } else {
+                            caps.legend
+                        })
+                        .child(key.clone())
+                })),
+        )
 }
 
 fn travel_bar(tester: &Tester, key: usize, cx: &Context<AdvancedPage>) -> Div {

@@ -10,14 +10,15 @@ use openwoot_protocol::{
     lighting::Color,
 };
 
+use super::number::seconds_text;
+
 pub(super) const DEFAULT_TIME_MS: u16 = 1500;
-pub(super) const KINDS: [Kind; 6] = [
-    Kind::Meter,
+pub(super) const TYPES: [Kind; 5] = [
     Kind::ProfileIndicator,
+    Kind::Meter,
     Kind::Mirror,
     Kind::Blink,
     Kind::Solid,
-    Kind::Custom,
 ];
 pub(super) const BUILTINS: [Builtin; 11] = [
     Builtin::ActiveProfile,
@@ -40,7 +41,7 @@ pub(super) const COMPARATORS: [Comparator; 6] = [
     Comparator::Less,
     Comparator::LessOrEqual,
 ];
-pub(super) const TIMINGS: [Timing; 3] = [Timing::While, Timing::Matched, Timing::Changed];
+pub(super) const TIMINGS: [Timing; 3] = [Timing::Matched, Timing::While, Timing::Changed];
 
 const RED: Color = color(255, 0, 0);
 const WHITE: Color = color(255, 255, 255);
@@ -97,30 +98,24 @@ impl Kind {
             Self::ProfileIndicator => "Profile indicator",
             Self::Mirror => "Sync with keyboard",
             Self::Blink => "Pulse",
-            Self::Solid => "Solid",
-            Self::Custom => "Multiple colours",
-        }
-    }
-
-    pub(super) const fn description(self) -> &'static str {
-        match self {
-            Self::Meter => "Fills the LEDs like a bar with the value of a signal.",
-            Self::ProfileIndicator => "Shows the colour and slot of the active profile.",
-            Self::Mirror => "Copies the colours of a row or column of keys onto the LEDs.",
-            Self::Blink => "Changes between two colours, sharply or smoothly.",
-            Self::Solid => "Lights the LEDs, or a rectangle of keys, in one colour.",
-            Self::Custom => "Gives every LED its own colour.",
+            Self::Solid | Self::Custom => "Solid",
         }
     }
 
     pub(super) const fn icon(self) -> Catalog {
         match self {
             Self::Meter => Catalog::Gauge,
-            Self::ProfileIndicator => Catalog::Layers,
-            Self::Mirror => Catalog::Keyboard,
-            Self::Blink => Catalog::Repeat,
-            Self::Solid => Catalog::Lightbulb,
-            Self::Custom => Catalog::Palette,
+            Self::ProfileIndicator => Catalog::ToggleRight,
+            Self::Mirror => Catalog::RefreshCw,
+            Self::Blink => Catalog::HeartPulse,
+            Self::Solid | Self::Custom => Catalog::PaintBucket,
+        }
+    }
+
+    pub(super) const fn family(self) -> Self {
+        match self {
+            Self::Custom => Self::Solid,
+            kind => kind,
         }
     }
 
@@ -171,7 +166,7 @@ impl Timing {
 
     pub(super) const fn label(self) -> &'static str {
         match self {
-            Self::While => "While",
+            Self::While => "While match",
             Self::Matched => "On match",
             Self::Changed => "On change",
         }
@@ -281,6 +276,29 @@ pub(super) fn number_row(matrix: Matrix) -> KeyRect {
             column: 1.min(last),
         },
         last: Position { row, column: last },
+    }
+}
+
+pub(super) fn above_keys(matrix: Matrix) -> KeyRect {
+    KeyRect {
+        first: Position { row: 0, column: 0 },
+        last: Position {
+            row: 0,
+            column: matrix.columns.saturating_sub(1),
+        },
+    }
+}
+
+pub(super) const fn period_ms(effect: &Effect) -> Option<u16> {
+    match effect {
+        Effect::Blink(blink) => Some(blink.period_ms),
+        _ => None,
+    }
+}
+
+pub(super) const fn set_period_ms(effect: &mut Effect, period: u16) {
+    if let Effect::Blink(blink) = effect {
+        blink.period_ms = period;
     }
 }
 
@@ -411,22 +429,6 @@ pub(super) const fn builtin_name(builtin: Builtin) -> &'static str {
     }
 }
 
-pub(super) const fn builtin_detail(builtin: Builtin) -> &'static str {
-    match builtin {
-        Builtin::ActiveProfile => "The number of the active profile, 1 for the first.",
-        Builtin::AnalogLevel => "How deep the deepest key is pressed, 0 to 255.",
-        Builtin::KeyPressed => "1 while any key is pressed, otherwise 0.",
-        Builtin::CapsLock => "1 while Caps Lock is on, otherwise 0.",
-        Builtin::ScrollLock => "1 while Scroll Lock is on, otherwise 0.",
-        Builtin::NumLock => "1 while Num Lock is on, otherwise 0.",
-        Builtin::ProfileCount => "The number of profiles on the keyboard.",
-        Builtin::ActiveLayer => "The Fn layer in use, 0 for the base layer.",
-        Builtin::Brightness => "The key brightness in percent, 0 to 100.",
-        Builtin::KeyRate => "The key presses of the last second.",
-        Builtin::ProfileColor => "The colour of the active profile, packed into one number.",
-    }
-}
-
 pub(super) const fn comparator_symbol(comparator: Comparator) -> &'static str {
     match comparator {
         Comparator::Equal => "=",
@@ -453,51 +455,6 @@ pub(super) const fn lightbar_range(effect: &Effect) -> Option<Range> {
             ..
         }) => Some(*range),
         Effect::Blink(_) | Effect::Solid(_) => None,
-    }
-}
-
-pub(super) fn effect_summary(effect: &Effect) -> String {
-    let leds = |range: &Range| {
-        format!(
-            "LEDs {}–{}",
-            u16::from(range.first) + 1,
-            u16::from(range.last) + 1
-        )
-    };
-    let target = |target: &Target| match target {
-        Target::Lightbar(range) => leds(range),
-        Target::Keys(rect) => keys(*rect),
-    };
-    match effect {
-        Effect::Meter(meter) => format!("{} · {}", signal_name(meter.signal), leds(&meter.range)),
-        Effect::ProfileIndicator(indicator) => {
-            format!(
-                "{} · {}",
-                background_name(indicator.background),
-                leds(&indicator.range)
-            )
-        }
-        Effect::Mirror(mirror) => format!("{} · {}", keys(mirror.source), leds(&mirror.range)),
-        Effect::Blink(blink) => format!("{} ms · {}", blink.period_ms, target(&blink.target)),
-        Effect::Solid(solid) => target(&solid.target),
-        Effect::Custom(custom) => leds(&custom.range),
-    }
-}
-
-fn keys(rect: KeyRect) -> String {
-    let span = |first: u8, last: u8| {
-        if first == last {
-            format!("{}", u16::from(first) + 1)
-        } else {
-            format!("{}–{}", u16::from(first) + 1, u16::from(last) + 1)
-        }
-    };
-    let rows = span(rect.first.row, rect.last.row);
-    let columns = span(rect.first.column, rect.last.column);
-    if rect.first.row == rect.last.row {
-        format!("Row {rows}, keys {columns}")
-    } else {
-        format!("Rows {rows}, keys {columns}")
     }
 }
 
@@ -542,22 +499,16 @@ pub(super) fn condition_summary(condition: &Condition) -> String {
     groups.join(joiner(condition.logic))
 }
 
-pub(super) const fn background_name(background: Background) -> &'static str {
-    match background {
-        Background::ProfileColor => "Full",
-        Background::Transparent => "Transparent",
-        Background::Fixed(_) => "Fixed",
-        Background::Contrast => "Complementing",
-        Background::DimmedProfileColor => "Darker",
-    }
-}
-
 fn term_summary(term: &Term) -> String {
     match term {
         Term::Trigger {
             signal,
             duration_ms,
-        } => format!("{duration_ms} ms after {} changes", signal_name(*signal)),
+        } => format!(
+            "{} changes, for {} s",
+            signal_name(*signal),
+            seconds_text(*duration_ms)
+        ),
         Term::Compare(comparison) => {
             let operand = match comparison.operand {
                 Operand::Signal(signal) => signal_name(signal),
@@ -569,7 +520,10 @@ fn term_summary(term: &Term) -> String {
                 comparator_symbol(comparison.comparator)
             );
             match comparison.hold_ms {
-                Some(hold) => format!("{hold} ms after {compared}"),
+                Some(hold) => format!(
+                    "{compared}, for {} s",
+                    seconds_text(u16::try_from(hold).unwrap_or(u16::MAX))
+                ),
                 None => compared,
             }
         }
@@ -609,7 +563,7 @@ mod tests {
     fn every_kind_starts_as_a_valid_effect() {
         for leds in [1, 2, 10, 16] {
             let matrix = Matrix { leds, ..MATRIX };
-            for kind in KINDS {
+            for kind in TYPES.into_iter().chain([Kind::Custom]) {
                 let effect = kind.effect(matrix);
                 assert_eq!(Kind::of(&effect), kind);
                 assert_eq!(
@@ -733,13 +687,18 @@ mod tests {
             condition_summary(&condition),
             "Caps Lock state = 1 or Any key actuated = 1"
         );
+        let mut changed = condition.clone();
+        changed.groups.truncate(1);
+        if let Some(group) = changed.groups.get_mut(0) {
+            group.terms.clear();
+            group
+                .terms
+                .push(Timing::Changed.apply(&default_term()))
+                .ok();
+        }
         assert_eq!(
-            effect_summary(&Kind::Meter.effect(MATRIX)),
-            "Max analog value · LEDs 1–10"
-        );
-        assert_eq!(
-            effect_summary(&Kind::Mirror.effect(MATRIX)),
-            "Row 2, keys 2–11 · LEDs 1–10"
+            condition_summary(&changed),
+            "Any key actuated changes, for 1.5 s"
         );
     }
 }

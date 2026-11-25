@@ -7,6 +7,7 @@ mod face;
 mod factory;
 mod key_part;
 mod model;
+mod order;
 mod records;
 mod shared;
 
@@ -19,5 +20,6 @@ pub use face::stored_face;
 pub use factory::{Factory, Preset};
 use key_part::KeyPart;
 pub use model::Model;
+pub use order::Order;
 pub use records::{Count, Revision};
 pub use shared::Shared;

@@ -101,18 +101,21 @@ fn open_model(board: &mut Board) -> &'static Mutex<Mutual, ProfileModel> {
     if board.storage.opened.is_err() {
         STATE.diagnostics().storage_loaded(&board.storage.opened);
     }
-    let model = MODEL.init(Mutex::new(Model::new(
-        STATE.keys(),
-        STATE.profile(),
-        board
-            .storage
-            .settings
-            .take()
-            .map(|settings| settings.with_diagnostics(STATE.diagnostics())),
-        &FACTORY,
-        board.storage.layout_variant,
-        PROFILES,
-    )));
+    let model = MODEL.init(Mutex::new(
+        Model::new(
+            STATE.keys(),
+            STATE.profile(),
+            board
+                .storage
+                .settings
+                .take()
+                .map(|settings| settings.with_diagnostics(STATE.diagnostics())),
+            &FACTORY,
+            board.storage.layout_variant,
+            PROFILES,
+        )
+        .with_factory_variant(board.storage.factory_layout_variant),
+    ));
     block_on(model.get_mut().load());
     model
 }

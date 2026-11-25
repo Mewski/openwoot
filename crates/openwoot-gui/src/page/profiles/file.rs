@@ -6,7 +6,7 @@ use std::{
 use openwoot_protocol::{PROTOCOL_VERSION, profile};
 use serde::{Deserialize, Serialize};
 
-use super::parts::Parts;
+use crate::profile_parts::Parts;
 
 pub(super) const FORMAT: u16 = 1;
 pub(super) const EXTENSION: &str = "json";
@@ -47,6 +47,30 @@ pub(super) enum FileError {
         path.display()
     )]
     UnknownFormat { path: PathBuf, found: u16 },
+    #[error("could not list `{}`", path.display())]
+    List {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not create `{}`", path.display())]
+    CreateDirectory {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not remove `{}`", path.display())]
+    Remove {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("could not find a data folder for profiles on this computer")]
+    NoDataDirectory,
+    #[error("could not start the profile file worker")]
+    Worker(#[source] io::Error),
+    #[error("the profile file worker stopped")]
+    WorkerStopped,
 }
 
 #[derive(Deserialize)]
@@ -206,6 +230,7 @@ mod tests {
                     green: 40,
                     blue: 40,
                 },
+                icon: 0,
             },
             parts,
         )

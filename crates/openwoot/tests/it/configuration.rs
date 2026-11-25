@@ -16,22 +16,25 @@ use openwoot_protocol::{
     device::Layout,
     encode_message, encode_request,
     endpoints::{
-        ActivateProfile, GetCapabilities, GetKeyGeometry, GetKeymap, GetLayout, GetSwitchModels,
-        GetSwitches, GetVersion, Save, SetGamepadDetection, SetKeyReports, SetKeymap, SetLayout,
-        SetLighting, SetSwitches,
+        ActivateProfile, GetCapabilities, GetDefaultKeymap, GetGamepadState, GetKeyGeometry,
+        GetKeymap, GetLayout, GetProfileInfo, GetProfiles, GetSwitchModels, GetSwitches,
+        GetVersion, MoveProfile, Revert, Save, SetGamepadDetection, SetKeyReports, SetKeymap,
+        SetLayout, SetLighting, SetSwitches, SwapProfiles,
     },
     gamepad, geometry,
     heapless::Vec,
     keys::{Action, Keymap, Layer},
     lightbar,
     lighting::{self, Indicators},
-    profile::{Change, LayerChange, LayerRef, Slot},
+    profile::{Change, LayerChange, LayerRef, Move, Slot, Summary, Swap},
     report, switches,
 };
 
 use crate::{
     lighting::{COLUMNS, ROWS},
-    profile::{ProfileModel, chosen, factory_switches, open, storage, switch_capabilities},
+    profile::{
+        ProfileModel, chosen, factory_switches, layouts, open, storage, switch_capabilities,
+    },
     storage::Nor,
     support::stock_identity,
 };
@@ -158,6 +161,25 @@ fn a_keyboard_without_configuration_still_answers_its_version_and_refuses_the_re
         ask!(handler, GetKeyGeometry, ()),
         Ok(Some(Err(Rejection::Unsupported)))
     );
+    assert_eq!(
+        ask!(handler, GetDefaultKeymap, Layer::One),
+        Ok(Some(Err(Rejection::Unsupported)))
+    );
+    assert_eq!(
+        ask!(handler, GetGamepadState, ()),
+        Ok(Some(Err(Rejection::Unsupported)))
+    );
+    assert_eq!(
+        ask!(
+            handler,
+            SwapProfiles,
+            Swap {
+                first: Slot::new(0),
+                second: Slot::new(1),
+            }
+        ),
+        Ok(Some(Err(Rejection::Unsupported)))
+    );
 }
 
 #[test]
@@ -267,19 +289,33 @@ fn a_body_that_does_not_decode_answers_deser_failed() {
 }
 
 #[test]
-fn key_reports_and_gamepad_detection_switch_the_host_state() {
+fn key_reports_and_gamepad_detection_switch_the_host_state_and_the_gamepad_state_reports_it() {
     static HOST: HostState = HostState::new();
     let mut handler = configured().with_host(&HOST);
+    assert_eq!(
+        ask!(handler, GetGamepadState, ()),
+        Ok(Some(Ok(gamepad::State {
+            player: None,
+            detection: false,
+        })))
+    );
     assert_eq!(ask!(handler, SetKeyReports, false), Ok(Some(Ok(()))));
     assert!(!HOST.key_reports());
     assert_eq!(ask!(handler, SetGamepadDetection, true), Ok(Some(Ok(()))));
     assert!(HOST.gamepad_detection());
+    assert_eq!(
+        ask!(handler, GetGamepadState, ()),
+        Ok(Some(Ok(gamepad::State {
+            player: None,
+            detection: true,
+        })))
+    );
     assert_eq!(ask!(handler, SetKeyReports, true), Ok(Some(Ok(()))));
     assert!(HOST.key_reports());
 }
 
 #[test]
-fn key_reports_and_gamepad_detection_are_unsupported_without_host_state() {
+fn the_host_state_endpoints_are_unsupported_without_host_state() {
     let mut handler = configured();
     assert_eq!(
         ask!(handler, SetKeyReports, false),
@@ -287,6 +323,10 @@ fn key_reports_and_gamepad_detection_are_unsupported_without_host_state() {
     );
     assert_eq!(
         ask!(handler, SetGamepadDetection, true),
+        Ok(Some(Err(Rejection::Unsupported)))
+    );
+    assert_eq!(
+        ask!(handler, GetGamepadState, ()),
         Ok(Some(Err(Rejection::Unsupported)))
     );
 }
@@ -356,7 +396,10 @@ fn the_switch_and_layout_endpoints_answer_through_the_profile_configurator() {
         )))))
     );
     assert_eq!(ask!(handler, GetSwitches, ()), Ok(Some(Ok(tuned))));
-    assert_eq!(ask!(handler, GetLayout, ()), Ok(Some(Ok(Layout::Ansi))));
+    assert_eq!(
+        ask!(handler, GetLayout, ()),
+        Ok(Some(Ok(layouts(Layout::Ansi, Layout::Ansi))))
+    );
     assert_eq!(ask!(handler, SetLayout, Layout::Iso), Ok(Some(Ok(()))));
     assert_eq!(
         ask!(handler, SetLayout, Layout::Jis),
@@ -364,8 +407,16 @@ fn the_switch_and_layout_endpoints_answer_through_the_profile_configurator() {
             Layout::Jis
         )))))
     );
-    assert_eq!(ask!(handler, GetLayout, ()), Ok(Some(Ok(Layout::Ansi))));
+    assert_eq!(
+        ask!(handler, GetLayout, ()),
+        Ok(Some(Ok(layouts(Layout::Ansi, Layout::Iso))))
+    );
     assert_eq!(ask!(handler, Save, ()), Ok(Some(Ok(()))));
+    assert_eq!(ask!(handler, Revert, ()), Ok(Some(Ok(()))));
+    assert_eq!(
+        ask!(handler, GetLayout, ()),
+        Ok(Some(Ok(layouts(Layout::Ansi, Layout::Iso))))
+    );
 }
 
 #[test]
@@ -400,8 +451,107 @@ fn the_key_geometry_of_the_layout_in_effect_reaches_the_host() {
         Ok(Some(Ok(expected.clone())))
     );
     assert_eq!(ask!(handler, SetLayout, Layout::Iso), Ok(Some(Ok(()))));
-    assert_eq!(ask!(handler, GetLayout, ()), Ok(Some(Ok(Layout::Ansi))));
+    assert_eq!(
+        ask!(handler, GetLayout, ()),
+        Ok(Some(Ok(layouts(Layout::Ansi, Layout::Iso))))
+    );
     assert_eq!(ask!(handler, GetKeyGeometry, ()), Ok(Some(Ok(expected))));
+}
+
+#[test]
+fn the_factory_keymap_of_each_layer_reaches_the_host_whatever_the_profiles_hold() {
+    let keys = keys::Shared::new();
+    let shared = profile::Shared::new();
+    let model = Mutex::<CriticalSectionRawMutex, _>::new(open(&keys, &shared, None));
+    let mut handler = Handler::with_configuration(
+        VERSION,
+        stock_identity(None),
+        Configurator::new(&model, switch_capabilities()),
+    );
+    let factory: Keymap = Vec::from_array([Action::Keyboard(0x04); ROWS * COLUMNS]);
+    let typed: Keymap = Vec::from_array([Action::Keyboard(0x05); ROWS * COLUMNS]);
+    let base = LayerRef {
+        profile: Slot::new(0),
+        layer: Layer::Base,
+    };
+    assert_eq!(
+        ask!(handler, GetDefaultKeymap, Layer::Base),
+        Ok(Some(Ok(factory.clone())))
+    );
+    assert_eq!(
+        ask!(
+            handler,
+            SetKeymap,
+            LayerChange {
+                profile: base.profile,
+                layer: base.layer,
+                value: typed.clone(),
+            }
+        ),
+        Ok(Some(Ok(())))
+    );
+    assert_eq!(ask!(handler, GetKeymap, base), Ok(Some(Ok(typed))));
+    assert_eq!(
+        ask!(handler, GetDefaultKeymap, Layer::Base),
+        Ok(Some(Ok(factory)))
+    );
+    assert_eq!(
+        ask!(handler, GetDefaultKeymap, Layer::Three),
+        Ok(Some(Ok(Vec::from_array([Action::None; ROWS * COLUMNS]))))
+    );
+}
+
+#[test]
+fn profiles_swap_and_move_through_the_profile_configurator_and_the_active_one_follows() {
+    let keys = keys::Shared::new();
+    let shared = profile::Shared::new();
+    let mut settings = storage();
+    let model = Mutex::<CriticalSectionRawMutex, _>::new(open(&keys, &shared, Some(&mut settings)));
+    let mut handler = Handler::with_configuration(
+        VERSION,
+        stock_identity(None),
+        Configurator::new(&model, switch_capabilities()),
+    );
+    let swap = |first, second| Swap {
+        first: Slot::new(first),
+        second: Slot::new(second),
+    };
+    let shift = |from, to| Move {
+        from: Slot::new(from),
+        to: Slot::new(to),
+    };
+    let summary = |active| Summary {
+        count: 2,
+        active: Slot::new(active),
+    };
+    assert_eq!(ask!(handler, SwapProfiles, swap(0, 1)), Ok(Some(Ok(()))));
+    assert_eq!(ask!(handler, GetProfiles, ()), Ok(Some(Ok(summary(1)))));
+    assert_eq!(
+        ask!(handler, GetProfileInfo, Slot::new(0))
+            .map(|reply| reply.map(|info| info.map(|info| info.name))),
+        Ok(Some(Ok("Rapid Profile".try_into().unwrap())))
+    );
+    assert_eq!(ask!(handler, MoveProfile, shift(1, 0)), Ok(Some(Ok(()))));
+    assert_eq!(ask!(handler, GetProfiles, ()), Ok(Some(Ok(summary(0)))));
+    assert_eq!(
+        ask!(handler, GetProfileInfo, Slot::new(0))
+            .map(|reply| reply.map(|info| info.map(|info| info.name))),
+        Ok(Some(Ok("Typing Profile".try_into().unwrap())))
+    );
+    assert_eq!(
+        ask!(handler, SwapProfiles, swap(0, 3)),
+        Ok(Some(Err(Rejection::ProfileMissing(3))))
+    );
+    assert_eq!(
+        ask!(handler, MoveProfile, shift(2, 0)),
+        Ok(Some(Err(Rejection::ProfileMissing(2))))
+    );
+    assert_eq!(
+        ask!(handler, SwapProfiles, swap(4, 0)),
+        Ok(Some(Err(Rejection::Invalid(Invalid::ProfileOutsideRange(
+            4
+        )))))
+    );
 }
 
 fn answered<T>(endpoint: &str, answer: &Result<T, Rejection>) {
@@ -444,11 +594,15 @@ fn the_profile_configurator_answers_every_keyboard_wide_endpoint() {
     answered("layout", &layout);
     answered(
         "layout/set",
-        &block_on(configurator.set_layout(layout.unwrap())),
+        &block_on(configurator.set_layout(layout.unwrap().chosen)),
     );
     answered(
         "geometry",
         &block_on(configurator.key_geometry(&mut geometry::Keys::new())),
+    );
+    answered(
+        "default-keymap",
+        &block_on(configurator.default_keymap(Layer::One, &mut Keymap::new())),
     );
     let global = block_on(configurator.global_settings());
     answered("global", &global);
@@ -486,6 +640,14 @@ fn the_profile_configurator_answers_every_keyboard_wide_endpoint() {
     answered(
         "profiles/activate",
         &block_on(configurator.activate_profile(Slot::new(1))),
+    );
+    answered(
+        "profiles/swap",
+        &block_on(configurator.swap_profiles(Slot::new(0), Slot::new(1))),
+    );
+    answered(
+        "profiles/move",
+        &block_on(configurator.move_profile(Slot::new(1), Slot::new(0))),
     );
     answered("save", &block_on(configurator.save()));
     answered("revert", &block_on(configurator.revert()));

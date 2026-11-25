@@ -10,18 +10,21 @@ use openwoot_protocol::{
     decode_message, encode_message,
     endpoints::{
         ActivateProfile, CreateProfile, DeleteProfile, EnterUpdateMode, FactoryReset,
-        GetAdvancedKeys, GetCapabilities, GetDeviceSettings, GetDiagnostics, GetGamepadMapping,
-        GetGamepadSettings, GetGlobalLightbar, GetGlobalSettings, GetHostSignals, GetKeyColors,
-        GetKeyGeometry, GetKeyOverrides, GetKeySettings, GetKeymap, GetLayout, GetLightbar,
-        GetLighting, GetProfileInfo, GetProfileRevision, GetProfiles, GetSensorValues,
-        GetSwitchModels, GetSwitches, GetVersion, LeaveHostControl, ResetHostColors,
-        ResetHostKeyColor, Restart, Revert, Save, SetAdvancedKeys, SetDeviceSettings,
-        SetGamepadDetection, SetGamepadMapping, SetGamepadSettings, SetGlobalLightbar,
-        SetGlobalSettings, SetHostColors, SetHostKeyColor, SetHostSignals, SetKeyColors,
-        SetKeyOverrides, SetKeyReports, SetKeySettings, SetKeymap, SetLayout, SetLightbar,
-        SetLighting, SetProfileInfo, SetRawScanning, SetSwitches,
+        GetAdvancedKeys, GetCapabilities, GetDefaultKeymap, GetDeviceSettings, GetDiagnostics,
+        GetGamepadMapping, GetGamepadSettings, GetGamepadState, GetGlobalLightbar,
+        GetGlobalSettings, GetHostSignals, GetKeyColors, GetKeyGeometry, GetKeyOverrides,
+        GetKeySettings, GetKeymap, GetLayout, GetLightbar, GetLighting, GetProfileInfo,
+        GetProfileRevision, GetProfiles, GetSensorValues, GetSwitchModels, GetSwitches, GetVersion,
+        LeaveHostControl, MoveProfile, ResetHostColors, ResetHostKeyColor, Restart, Revert, Save,
+        SetAdvancedKeys, SetDeviceSettings, SetGamepadDetection, SetGamepadMapping,
+        SetGamepadSettings, SetGlobalLightbar, SetGlobalSettings, SetHostColors, SetHostKeyColor,
+        SetHostSignals, SetKeyColors, SetKeyOverrides, SetKeyReports, SetKeySettings, SetKeymap,
+        SetLayout, SetLightbar, SetLighting, SetProfileInfo, SetRawScanning, SetSwitches,
+        SwapProfiles,
     },
-    gamepad, keys, lightbar,
+    gamepad,
+    keys::{self, Layer},
+    lightbar,
     profile::{LayerRef, Slot},
     stock::Status,
 };
@@ -291,6 +294,9 @@ async fn keyboard_endpoints<C: Configuration>(
         filled GetKeyGeometry => async |configuration, (), keys| {
             configuration.key_geometry(keys).await
         },
+        filled GetDefaultKeymap => async |configuration, layer: Layer, keymap| {
+            configuration.default_keymap(layer, keymap).await
+        },
         plain GetGlobalSettings => async |configuration, ()| configuration.global_settings().await,
         checked SetGlobalSettings => async |configuration, settings| {
             configuration.set_global_settings(settings).await
@@ -302,6 +308,12 @@ async fn keyboard_endpoints<C: Configuration>(
         },
         checked ActivateProfile => async |configuration, profile| {
             configuration.activate_profile(profile).await
+        },
+        checked SwapProfiles => async |configuration, swap| {
+            configuration.swap_profiles(swap.first, swap.second).await
+        },
+        checked MoveProfile => async |configuration, shift| {
+            configuration.move_profile(shift.from, shift.to).await
         },
         filled GetGlobalLightbar => async |configuration, (), entries| {
             configuration.global_lightbar(entries).await
@@ -415,6 +427,9 @@ async fn host_endpoints<C: Configuration>(
     dispatch!(key, configuration, message, response;
         plain SetKeyReports => async |_, enabled| {
             host.map(|host| host.set_key_reports(enabled)).ok_or(Rejection::Unsupported)
+        },
+        plain GetGamepadState => async |_, ()| {
+            host.map(gamepad_state).ok_or(Rejection::Unsupported)
         },
         plain SetGamepadDetection => async |_, enabled| {
             host.map(|host| host.set_gamepad_detection(enabled)).ok_or(Rejection::Unsupported)
@@ -615,4 +630,13 @@ fn reply(response: &[u8], length: Option<usize>) -> Option<&[u8]> {
 
 const fn key_at(position: keys::Position) -> crate::keys::Key {
     crate::keys::Key::new(position.row, position.column)
+}
+
+fn gamepad_state(host: &HostState) -> gamepad::State {
+    gamepad::State {
+        player: host
+            .xinput_player()
+            .and_then(|player| gamepad::Player::ALL.get(usize::from(player)).copied()),
+        detection: host.gamepad_detection(),
+    }
 }

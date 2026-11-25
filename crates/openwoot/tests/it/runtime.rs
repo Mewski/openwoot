@@ -29,10 +29,12 @@ use openwoot::{
     usb::{Face, HostState, KeyboardFormat, Mode, PollingRate, Resources, Speed},
 };
 use openwoot_protocol::{
+    configuration::Rejection,
     decode_response,
     diagnostics::Usb as UsbReadout,
     encode_request,
-    endpoints::GetVersion,
+    endpoints::{GetGamepadState, GetVersion},
+    gamepad::{self, Player},
     keys::{Action, Layer},
     lighting::Effects,
     report,
@@ -312,6 +314,73 @@ fn the_xinput_led_pattern_from_the_host_sets_the_player() {
     assert_eq!(session.xinput_player, Some(1));
     let unknown = connect(xinput, HIGH_SPEED, &[], &[0x01, 0x03, 0x00]).unwrap();
     assert_eq!(unknown.xinput_player, None);
+}
+
+#[test]
+fn the_player_the_host_lights_on_the_xinput_controller_reaches_the_gamepad_state() {
+    static STATE: HostState = HostState::new();
+    let host = Host::default();
+    let mut resources = Resources::new();
+    let key_reports = KeyReports::<Mutual>::new();
+    let xinput = Face {
+        mode: Mode::Xinput,
+        ..Face::default()
+    };
+    let Usb {
+        mut device,
+        channel,
+        reports,
+    } = Usb::new(
+        host.driver(),
+        HIGH_SPEED,
+        xinput,
+        IDENTITY,
+        &mut resources,
+        &STATE,
+    );
+    let handler =
+        Handler::new(protocol::version("1", "2", "3"), stock_identity(None)).with_host(&STATE);
+    let mut update_mode = Recorder::default();
+    let mut firmware = pin!(join3(
+        device.run(),
+        channel.run(handler, &mut update_mode),
+        reports.run(&key_reports),
+    ));
+    let mut wire = Wire::configured(&host, firmware.as_mut());
+    assert_eq!(
+        gamepad_state(&mut wire, 1),
+        Ok(Some(Ok(gamepad::State::default())))
+    );
+    host.send_packets(XINPUT_OUT, &[0x01, 0x03, 0x08], XINPUT_PACKET_SIZE);
+    wire.settle();
+    assert_eq!(
+        gamepad_state(&mut wire, 2),
+        Ok(Some(Ok(gamepad::State {
+            player: Some(Player::Three),
+            detection: false,
+        })))
+    );
+    assert_eq!(
+        wire.request(setup(0, SET_CONFIGURATION, 1, 0, 0)),
+        Some(Outcome::Accepted)
+    );
+    wire.settle();
+    assert_eq!(
+        gamepad_state(&mut wire, 3),
+        Ok(Some(Ok(gamepad::State::default())))
+    );
+}
+
+fn gamepad_state<F: Future>(
+    wire: &mut Wire<'_, F>,
+    sequence: u16,
+) -> Result<Option<Result<gamepad::State, Rejection>>, openwoot_protocol::Error> {
+    let mut request = [0; report::MAX_LEN];
+    let request = encode_request::<GetGamepadState>(sequence, &(), &mut request)?;
+    wire.host
+        .send_packets(CHANNEL_OUT, request, CHANNEL_PACKET_SIZE);
+    wire.settle();
+    decode_response::<GetGamepadState>(sequence, &wire.host.take_sent(CHANNEL_IN).concat())
 }
 
 struct Wire<'w, F: Future> {

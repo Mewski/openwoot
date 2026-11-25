@@ -1,7 +1,7 @@
 use openwoot_protocol::{
     gamepad::{self, Control},
     keys::{self, Action, Distance, Override},
-    lighting::Rgb,
+    lighting::{self, Effect, HueRange, RainbowWave, Rgb},
 };
 
 const USAGE_W: u8 = 0x1A;
@@ -13,12 +13,19 @@ const FPS_ACTUATION_MM: f32 = 1.0;
 const FPS_RAPID_TRIGGER_MM: f32 = 0.2;
 const FPS_MOVEMENT_ACTUATION_MM: f32 = 0.4;
 const FPS_WINDOWS_KEY_ACTUATION_MM: f32 = 3.0;
+const TYPING_ACTUATION_MM: f32 = 1.5;
+const TYPING_WAVE: Effect = Effect::RainbowWave(RainbowWave {
+    hues: HueRange::From113To204,
+    period: 16,
+    forward: false,
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Preset {
     Fps,
     AnalogMovement,
     Racing,
+    Typing,
     Custom,
 }
 
@@ -32,14 +39,31 @@ pub(super) struct Movement {
 }
 
 impl Preset {
-    pub(super) const ALL: [Self; 4] = [Self::Fps, Self::AnalogMovement, Self::Racing, Self::Custom];
+    pub(super) const ALL: [Self; 5] = [
+        Self::Fps,
+        Self::AnalogMovement,
+        Self::Racing,
+        Self::Typing,
+        Self::Custom,
+    ];
 
     pub(super) const fn name(self) -> &'static str {
         match self {
-            Self::Fps => "FPS",
+            Self::Fps => "FPS game",
             Self::AnalogMovement => "Analog movement",
             Self::Racing => "Racing",
+            Self::Typing => "Typing",
             Self::Custom => "Custom",
+        }
+    }
+
+    pub(super) const fn description(self) -> &'static str {
+        match self {
+            Self::Fps => "1 mm actuation, Rapid Trigger and quick WASD for shooters.",
+            Self::AnalogMovement => "WASD drives the left stick for smooth movement.",
+            Self::Racing => "W and S are throttle and brake, A and D steer.",
+            Self::Typing => "1.5 mm actuation without Rapid Trigger under a calm blue wave.",
+            Self::Custom => "A blank profile to set up from scratch.",
         }
     }
 
@@ -60,6 +84,11 @@ impl Preset {
                 green: 168,
                 blue: 32,
             },
+            Self::Typing => Rgb {
+                red: 40,
+                green: 90,
+                blue: 255,
+            },
             Self::Custom => Rgb {
                 red: 160,
                 green: 120,
@@ -69,11 +98,23 @@ impl Preset {
     }
 
     pub(super) const fn changes_keys(self) -> bool {
-        matches!(self, Self::Fps)
+        matches!(self, Self::Fps | Self::Typing)
     }
 
     pub(super) const fn changes_gamepad(self) -> bool {
         matches!(self, Self::AnalogMovement | Self::Racing)
+    }
+
+    pub(super) const fn changes_lighting(self) -> bool {
+        matches!(self, Self::Typing)
+    }
+
+    pub(super) fn tune_lighting(self, settings: &mut lighting::Settings) {
+        if self != Self::Typing {
+            return;
+        }
+        settings.effects.clear();
+        settings.effects.push(TYPING_WAVE).ok();
     }
 
     pub(super) fn tune_keys(
@@ -83,22 +124,31 @@ impl Preset {
         movement: Movement,
         distance: impl Fn(usize, f32) -> Distance,
     ) {
-        if self != Self::Fps {
-            return;
-        }
         let reference = movement.up.unwrap_or_default();
-        settings.actuation = distance(reference, FPS_ACTUATION_MM);
-        settings.rapid_trigger_enabled = true;
-        settings.rapid_trigger.press = distance(reference, FPS_RAPID_TRIGGER_MM);
-        settings.rapid_trigger.release = None;
-        for key in [movement.up, movement.left, movement.down, movement.right]
-            .into_iter()
-            .flatten()
-        {
-            set_actuation(overrides, key, distance(key, FPS_MOVEMENT_ACTUATION_MM));
-        }
-        if let Some(key) = movement.windows {
-            set_actuation(overrides, key, distance(key, FPS_WINDOWS_KEY_ACTUATION_MM));
+        match self {
+            Self::Fps => {
+                settings.actuation = distance(reference, FPS_ACTUATION_MM);
+                settings.rapid_trigger_enabled = true;
+                settings.rapid_trigger.press = distance(reference, FPS_RAPID_TRIGGER_MM);
+                settings.rapid_trigger.release = None;
+                for key in [movement.up, movement.left, movement.down, movement.right]
+                    .into_iter()
+                    .flatten()
+                {
+                    set_actuation(overrides, key, distance(key, FPS_MOVEMENT_ACTUATION_MM));
+                }
+                if let Some(key) = movement.windows {
+                    set_actuation(overrides, key, distance(key, FPS_WINDOWS_KEY_ACTUATION_MM));
+                }
+            }
+            Self::Typing => {
+                settings.actuation = distance(reference, TYPING_ACTUATION_MM);
+                settings.rapid_trigger_enabled = false;
+                overrides
+                    .iter_mut()
+                    .for_each(|entry| *entry = Override::default());
+            }
+            Self::AnalogMovement | Self::Racing | Self::Custom => {}
         }
     }
 
@@ -116,7 +166,7 @@ impl Preset {
                 Control::LeftTrigger,
                 Control::LeftStickRight,
             ],
-            Self::Fps | Self::Custom => return,
+            Self::Fps | Self::Typing | Self::Custom => return,
         };
         mapping
             .bindings
@@ -246,6 +296,39 @@ mod tests {
     }
 
     #[test]
+    fn typing_preset_turns_rapid_trigger_off_and_clears_key_overrides() {
+        let mut settings = keys::Settings {
+            actuation: hundredths(0.4),
+            rapid_trigger_enabled: true,
+            rapid_trigger: RapidTrigger {
+                press: hundredths(0.2),
+                release: None,
+                continuous: false,
+            },
+            tap_duration: TapDuration::FortyMilliseconds,
+            scan_mode: ScanMode::Parallel,
+            keyboard_in_gamepad_mode: false,
+        };
+        let mut overrides: keys::Overrides = heapless::Vec::new();
+        for _ in 0..6 {
+            let tuned = Override {
+                actuation: Some(hundredths(0.1)),
+                rapid_trigger: RapidTriggerOverride::On,
+            };
+            assert!(overrides.push(tuned).is_ok());
+        }
+        Preset::Typing.tune_keys(
+            &mut settings,
+            &mut overrides,
+            Movement::find(&keymap()),
+            |_, mm| hundredths(mm),
+        );
+        assert_eq!(settings.actuation, hundredths(1.5));
+        assert!(!settings.rapid_trigger_enabled);
+        assert!(overrides.iter().all(|entry| *entry == Override::default()));
+    }
+
+    #[test]
     fn racing_preset_binds_only_the_driving_keys() {
         let mut mapping = gamepad::Mapping {
             bindings: heapless::Vec::new(),
@@ -266,5 +349,25 @@ mod tests {
                 Some(Control::LeftStickRight),
             ]
         );
+    }
+
+    #[test]
+    fn typing_preset_replaces_the_effects_with_a_blue_wave() {
+        let mut settings = lighting::Settings {
+            brightness: 200,
+            indicators: lighting::Indicators {
+                caps_lock: lighting::Color::TRANSPARENT,
+                scroll_lock: lighting::Color::TRANSPARENT,
+                num_lock: lighting::Color::TRANSPARENT,
+                layer_lock: lighting::Color::TRANSPARENT,
+            },
+            effects: heapless::Vec::new(),
+        };
+        Preset::Fps.tune_lighting(&mut settings);
+        let unchanged: [Effect; 0] = [];
+        assert_eq!(settings.effects.as_slice(), &unchanged);
+        Preset::Typing.tune_lighting(&mut settings);
+        assert_eq!(settings.effects.as_slice(), &[TYPING_WAVE]);
+        assert_eq!(settings.brightness, 200);
     }
 }

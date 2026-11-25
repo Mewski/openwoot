@@ -3,54 +3,10 @@ use openwoot_protocol::keys::{Distance, Override, RapidTrigger, RapidTriggerOver
 const TRAVEL_FULL: u16 = 4095;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RapidTriggerMode {
-    Profile,
-    Off,
-    On,
-    Custom,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Selected<T> {
     Nothing,
     Same(T),
     Mixed(T),
-}
-
-impl RapidTriggerMode {
-    pub(super) const ALL: [Self; 4] = [Self::Profile, Self::Off, Self::On, Self::Custom];
-
-    pub(super) const fn of(rapid_trigger: RapidTriggerOverride) -> Self {
-        match rapid_trigger {
-            RapidTriggerOverride::Profile => Self::Profile,
-            RapidTriggerOverride::Off => Self::Off,
-            RapidTriggerOverride::On => Self::On,
-            RapidTriggerOverride::With(_) => Self::Custom,
-        }
-    }
-
-    pub(super) const fn label(self) -> &'static str {
-        match self {
-            Self::Profile => "Profile",
-            Self::Off => "Off",
-            Self::On => "On",
-            Self::Custom => "Custom",
-        }
-    }
-
-    pub(super) const fn apply(
-        self,
-        current: RapidTriggerOverride,
-        profile: RapidTrigger,
-    ) -> RapidTriggerOverride {
-        match (self, current) {
-            (Self::Profile, _) => RapidTriggerOverride::Profile,
-            (Self::Off, _) => RapidTriggerOverride::Off,
-            (Self::On, _) => RapidTriggerOverride::On,
-            (Self::Custom, RapidTriggerOverride::With(own)) => RapidTriggerOverride::With(own),
-            (Self::Custom, _) => RapidTriggerOverride::With(profile),
-        }
-    }
 }
 
 impl<T: PartialEq + Copy> Selected<T> {
@@ -60,24 +16,6 @@ impl<T: PartialEq + Copy> Selected<T> {
             None => Self::Nothing,
             Some(first) if values.all(|value| value == first) => Self::Same(first),
             Some(first) => Self::Mixed(first),
-        }
-    }
-
-    pub(super) const fn first(self) -> Option<T> {
-        match self {
-            Self::Nothing => None,
-            Self::Same(first) | Self::Mixed(first) => Some(first),
-        }
-    }
-
-    pub(super) const fn is_mixed(self) -> bool {
-        matches!(self, Self::Mixed(_))
-    }
-
-    pub(super) const fn same(self) -> Option<T> {
-        match self {
-            Self::Same(value) => Some(value),
-            Self::Nothing | Self::Mixed(_) => None,
         }
     }
 }
@@ -104,10 +42,6 @@ pub(super) const fn parameters(settings: &Settings, key: &Override) -> RapidTrig
             settings.rapid_trigger
         }
     }
-}
-
-pub(super) fn has_own_settings(key: &Override) -> bool {
-    *key != Override::default()
 }
 
 pub(super) fn travel_fraction(travel: u16) -> f32 {
@@ -158,7 +92,6 @@ mod tests {
     #[test]
     fn a_key_without_overrides_follows_the_profile() {
         let entry = Override::default();
-        assert!(!has_own_settings(&entry));
         assert_eq!(
             actuation(&settings(true), &entry),
             Distance::from_fraction(20_000)
@@ -176,7 +109,6 @@ mod tests {
             actuation: Some(Distance::from_fraction(3000)),
             rapid_trigger: RapidTriggerOverride::Off,
         };
-        assert!(has_own_settings(&own));
         assert_eq!(
             actuation(&settings(true), &own),
             Distance::from_fraction(3000)
@@ -200,33 +132,11 @@ mod tests {
     }
 
     #[test]
-    fn custom_rapid_trigger_starts_from_the_profile_and_keeps_own_parameters() {
-        assert_eq!(
-            RapidTriggerMode::Custom.apply(RapidTriggerOverride::Off, PROFILE_RAPID_TRIGGER),
-            RapidTriggerOverride::With(PROFILE_RAPID_TRIGGER)
-        );
-        assert_eq!(
-            RapidTriggerMode::Custom.apply(
-                RapidTriggerOverride::With(OWN_RAPID_TRIGGER),
-                PROFILE_RAPID_TRIGGER
-            ),
-            RapidTriggerOverride::With(OWN_RAPID_TRIGGER)
-        );
-        for mode in RapidTriggerMode::ALL {
-            let applied = mode.apply(RapidTriggerOverride::On, PROFILE_RAPID_TRIGGER);
-            assert_eq!(RapidTriggerMode::of(applied), mode);
-        }
-    }
-
-    #[test]
     fn selected_values_are_the_same_mixed_or_nothing() {
         assert_eq!(Selected::<u8>::of([]), Selected::Nothing);
         assert_eq!(Selected::of([3, 3, 3]), Selected::Same(3));
         assert_eq!(Selected::of([3, 4, 3]), Selected::Mixed(3));
-        assert!(Selected::of([1, 2]).is_mixed());
-        assert_eq!(Selected::of([7, 7]).first(), Some(7));
-        assert_eq!(Selected::of([7, 7]).same(), Some(7));
-        assert_eq!(Selected::of([7, 8]).same(), None);
+        assert_eq!(Selected::of([1, 2]), Selected::Mixed(1));
     }
 
     #[test]

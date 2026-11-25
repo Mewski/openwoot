@@ -3,7 +3,7 @@ use postcard_rpc::endpoints;
 use crate::{
     Version, advanced,
     configuration::{Capabilities, Rejection},
-    device::{self, Layout},
+    device::{self, Layout, LayoutState},
     diagnostics, gamepad, geometry, global, host_lighting, keys, lightbar, lighting,
     profile::{self, Change, LayerChange, LayerRef, Slot, Summary},
     sensors, switches,
@@ -14,13 +14,16 @@ type DiagnosticsReport = diagnostics::Report;
 type CapabilitiesReply = Result<Capabilities, Rejection>;
 type DeviceSettingsReply = Result<device::Settings, Rejection>;
 type DeviceSettings = device::Settings;
-type LayoutReply = Result<Layout, Rejection>;
+type LayoutReply = Result<LayoutState, Rejection>;
 type KeyGeometryReply = Result<geometry::Keys, Rejection>;
+type KeymapLayer = keys::Layer;
 type GlobalSettingsReply = Result<global::Settings, Rejection>;
 type GlobalSettings = global::Settings;
 type ProfilesReply = Result<Summary, Rejection>;
 type CreatedProfileReply = Result<Slot, Rejection>;
 type ProfileInfoReply = Result<profile::Info, Rejection>;
+type ProfileSwap = profile::Swap;
+type ProfileMove = profile::Move;
 type ProfileInfoChange = Change<profile::Info>;
 type ProfileRevisionReply = Result<u32, Rejection>;
 type KeySettingsReply = Result<keys::Settings, Rejection>;
@@ -35,6 +38,7 @@ type GamepadMappingReply = Result<gamepad::Mapping, Rejection>;
 type GamepadMappingChange = Change<gamepad::Mapping>;
 type GamepadSettingsReply = Result<gamepad::Settings, Rejection>;
 type GamepadSettingsChange = Change<gamepad::Settings>;
+type GamepadStateReply = Result<gamepad::State, Rejection>;
 type LightingReply = Result<lighting::Settings, Rejection>;
 type LightingChange = Change<lighting::Settings>;
 type KeyColorsReply = Result<Option<lighting::KeyColors>, Rejection>;
@@ -67,12 +71,15 @@ endpoints! {
     | GetLayout           | ()                    | LayoutReply          | "openwoot/layout"                      |
     | SetLayout           | Layout                | Done                 | "openwoot/layout/set"                  |
     | GetKeyGeometry      | ()                    | KeyGeometryReply     | "openwoot/geometry"                    |
+    | GetDefaultKeymap    | KeymapLayer           | KeymapReply          | "openwoot/default-keymap"              |
     | GetGlobalSettings   | ()                    | GlobalSettingsReply  | "openwoot/global"                      |
     | SetGlobalSettings   | GlobalSettings        | Done                 | "openwoot/global/set"                  |
     | GetProfiles         | ()                    | ProfilesReply        | "openwoot/profiles"                    |
     | CreateProfile       | ()                    | CreatedProfileReply  | "openwoot/profiles/create"             |
     | DeleteProfile       | Slot                  | Done                 | "openwoot/profiles/delete"             |
     | ActivateProfile     | Slot                  | Done                 | "openwoot/profiles/activate"           |
+    | SwapProfiles        | ProfileSwap           | Done                 | "openwoot/profiles/swap"               |
+    | MoveProfile         | ProfileMove           | Done                 | "openwoot/profiles/move"               |
     | GetProfileInfo      | Slot                  | ProfileInfoReply     | "openwoot/profile/info"                |
     | SetProfileInfo      | ProfileInfoChange     | Done                 | "openwoot/profile/info/set"            |
     | GetProfileRevision  | Slot                  | ProfileRevisionReply | "openwoot/profile/revision"            |
@@ -102,6 +109,7 @@ endpoints! {
     | SetSwitches         | Switches              | Done                 | "openwoot/switches/set"                |
     | GetSwitchModels     | ()                    | SwitchModelsReply    | "openwoot/switches/models"             |
     | SetKeyReports       | bool                  | Done                 | "openwoot/key-reports/set"             |
+    | GetGamepadState     | ()                    | GamepadStateReply    | "openwoot/gamepad"                     |
     | SetGamepadDetection | bool                  | Done                 | "openwoot/gamepad-detection/set"       |
     | GetSensorValues     | SensorReading         | SensorValuesReply    | "openwoot/sensors"                     |
     | SetRawScanning      | bool                  | Done                 | "openwoot/sensors/raw-scanning/set"    |

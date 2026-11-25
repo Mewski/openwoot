@@ -1,11 +1,16 @@
 mod assets;
+mod color_picker;
 mod connection;
 mod device;
+mod dropdown;
+mod history;
 mod keyboard;
 mod page;
 mod panel;
+mod profile_parts;
 mod shell;
 mod store;
+mod switch;
 mod theme;
 mod usage;
 
@@ -35,6 +40,7 @@ fn main() -> ExitCode {
         .run(move |cx| {
             gpui_kit::init(cx);
             theme::apply(cx);
+            shell::bind_keys(cx);
             let store = cx.new(|cx| Store::new(device, presence, cx));
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::centered(

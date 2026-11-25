@@ -5,7 +5,7 @@ use gpui_kit::{Context, EventEmitter, SharedString, Task};
 use openwoot_protocol::{
     Endpoint, Version,
     configuration::{Capabilities, Rejection},
-    device::Layout,
+    device::{Layout, LayoutState},
     endpoints::{
         ActivateProfile, CreateProfile, DeleteProfile, GetCapabilities, GetKeyGeometry, GetKeymap,
         GetLayout, GetProfileInfo, GetProfiles, GetSwitchModels, GetSwitches, Revert, Save,
@@ -18,7 +18,10 @@ use openwoot_protocol::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::device::{Device, Failure, Presence};
+use crate::{
+    device::{Device, Failure, Presence},
+    history::{History, Replay},
+};
 
 const PROFILE_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const MILLIMETRES_PER_TRAVEL_STEP: f32 = 0.05;
@@ -29,6 +32,7 @@ pub(crate) struct Store {
     link: Link,
     keyboard: Option<Keyboard>,
     searching: bool,
+    history: History,
     _presence: Task<()>,
     _poll: Task<()>,
 }
@@ -107,6 +111,7 @@ impl Store {
             link: Link::Searching,
             keyboard: None,
             searching: false,
+            history: History::default(),
             _presence: presence_task,
             _poll: poll,
         }
@@ -183,6 +188,55 @@ impl Store {
         })
     }
 
+    pub(crate) fn change<E>(
+        &mut self,
+        before: &E::Request,
+        after: E::Request,
+        scope: Scope,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), Failure>>
+    where
+        E: Endpoint<Response = Result<(), Rejection>>,
+        E::Request: Clone + Serialize + Send + 'static,
+    {
+        self.history.record::<E>(before, &after, scope);
+        cx.notify();
+        self.apply::<E>(after, scope, cx)
+    }
+
+    pub(crate) fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    pub(crate) fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    pub(crate) fn undo(&mut self, cx: &mut Context<Self>) {
+        if let Some(restore) = self.history.undo() {
+            self.replay(&restore, cx);
+        }
+    }
+
+    pub(crate) fn redo(&mut self, cx: &mut Context<Self>) {
+        if let Some(reapply) = self.history.redo() {
+            self.replay(&reapply, cx);
+        }
+    }
+
+    fn replay(&self, replay: &Replay, cx: &mut Context<Self>) {
+        let sent = replay(self, cx);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            if sent.await.is_ok()
+                && let Ok(reload) = this.update(cx, |store, cx| store.reload(cx))
+            {
+                reload.await;
+            }
+        })
+        .detach();
+    }
+
     pub(crate) fn save(&self, cx: &mut Context<Self>) -> Task<Result<(), Failure>> {
         let call = self.device.configure::<Save, ()>(());
         cx.spawn(async move |this, cx| {
@@ -209,7 +263,10 @@ impl Store {
             let answer = call.await;
             match &answer {
                 Ok(()) => {
-                    if let Ok(reload) = this.update(cx, |store, cx| store.reload(cx)) {
+                    if let Ok(reload) = this.update(cx, |store, cx| {
+                        store.forget_changes(cx);
+                        store.reload(cx)
+                    }) {
                         reload.await;
                     }
                 }
@@ -256,7 +313,8 @@ impl Store {
         })
     }
 
-    pub(crate) fn delete_profile(&self, profile: Slot, cx: &mut Context<Self>) -> Task<()> {
+    pub(crate) fn delete_profile(&mut self, profile: Slot, cx: &mut Context<Self>) -> Task<()> {
+        self.history.clear();
         let call = self.device.configure::<DeleteProfile, ()>(profile);
         cx.spawn(async move |this, cx| {
             if let Err(error) = call.await {
@@ -271,20 +329,41 @@ impl Store {
         })
     }
 
+    pub(crate) fn forget_changes(&mut self, cx: &mut Context<Self>) {
+        self.history.clear();
+        if let Some(keyboard) = &mut self.keyboard {
+            keyboard.unsaved = false;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn clear_history(&mut self, cx: &mut Context<Self>) {
+        self.history.clear();
+        cx.notify();
+    }
+
     pub(crate) fn set_profile_info(
-        &self,
+        &mut self,
         profile: Slot,
         info: profile::Info,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), Failure>> {
-        let applied = self.apply::<SetProfileInfo>(
-            Change {
-                profile,
-                value: info.clone(),
-            },
-            Scope::Profile(profile),
-            cx,
-        );
+        let after = Change {
+            profile,
+            value: info.clone(),
+        };
+        let before = self
+            .keyboard
+            .as_ref()
+            .and_then(|keyboard| keyboard.profiles.get(usize::from(profile.get())))
+            .cloned()
+            .map(|value| Change { profile, value });
+        let applied = match before {
+            Some(before) => {
+                self.change::<SetProfileInfo>(&before, after, Scope::Profile(profile), cx)
+            }
+            None => self.apply::<SetProfileInfo>(after, Scope::Profile(profile), cx),
+        };
         cx.spawn(async move |this, cx| {
             let answer = applied.await;
             if answer.is_ok() {
@@ -317,7 +396,8 @@ impl Store {
             let loaded = snapshot.await;
             this.update(cx, |store, cx| {
                 match loaded {
-                    Ok(keyboard) => {
+                    Ok(mut keyboard) => {
+                        keyboard.unsaved = store.keyboard.as_ref().is_some_and(|kept| kept.unsaved);
                         store.keyboard = Some(keyboard);
                         store.link = Link::Connected;
                         cx.emit(StoreEvent::Reloaded);
@@ -379,6 +459,7 @@ impl Store {
             }
             Presence::Absent(reason) => {
                 let was_connected = self.keyboard.take().is_some();
+                self.history.clear();
                 self.link =
                     reason.map_or(Link::Searching, |reason| Link::Unreachable(reason.into()));
                 if was_connected {
@@ -531,7 +612,11 @@ async fn load_snapshot(
         .configure::<GetKeyGeometry, geometry::Keys>(())
         .await
         .ok();
-    let layout = device.configure::<GetLayout, Layout>(()).await.ok();
+    let layout = device
+        .configure::<GetLayout, LayoutState>(())
+        .await
+        .ok()
+        .map(|layout| layout.active);
     let switches = device
         .configure::<GetSwitches, switches::Settings>(())
         .await

@@ -1,22 +1,22 @@
 use gpui_kit::{
-    Context, Div, IntoElement, Modifiers, ParentElement as _, Styled as _, Window,
-    component::{
-        Disableable as _, Sizable as _,
-        button::{Button, ButtonVariants as _},
-        h_flex,
-        menu::{DropdownMenu as _, PopupMenuItem},
-    },
-    div,
+    Context, Div, Hsla, MouseButton, ParentElement as _, Styled as _, Window, component::h_flex,
+    div, hsla,
 };
-use openwoot_protocol::{keys::Layer, lighting::KeyColors};
+use openwoot_protocol::{
+    keys::Layer,
+    lighting::{Color, KeyColors, Rgb},
+};
 
-use super::{BLACK, LightingPage, hsla_of, key_colors, palette::PRESETS, select};
+use super::{LightingPage, key_colors, palette::PRESETS};
 use crate::{
+    color_picker::{ColorPicker, hsla_of},
     keyboard::{KeyFace, KeyboardView},
     panel,
     store::Keyboard,
     usage,
 };
+
+const INHERITED_OPACITY: f32 = 0.45;
 
 impl LightingPage {
     pub(super) fn key_map(&self, window: &Window, cx: &Context<Self>) -> Div {
@@ -24,24 +24,54 @@ impl LightingPage {
             return div();
         };
         let (colors, inherited) = self.shown_colors();
-        let page = cx.entity().downgrade();
-        let view = KeyboardView::new("key-colors", keyboard, |index| KeyFace {
-            legend: usage::legend(keyboard.legends.get(index).copied().unwrap_or_default()).into(),
-            detail: None,
-            fill: Some(hsla_of(
-                colors
-                    .and_then(|colors| colors.get(index))
-                    .copied()
-                    .unwrap_or(BLACK),
-            )),
-            travel: None,
-            dimmed: inherited,
+        let indicators = self.settings.as_ref().map(|settings| settings.indicators);
+        let locks = self.locks;
+        let clicked = cx.entity().downgrade();
+        let swept = clicked.clone();
+        let picked = clicked.clone();
+        let pressed = clicked.clone();
+        let view = KeyboardView::new("key-colors", keyboard, |index| {
+            let color = colors
+                .and_then(|colors| colors.get(index))
+                .copied()
+                .unwrap_or(key_colors::BLACK);
+            let fill = hsla_of(color);
+            KeyFace {
+                legend: usage::legend(keyboard.legends.get(index).copied().unwrap_or_default())
+                    .into(),
+                fill: Some(if inherited {
+                    fill.opacity(INHERITED_OPACITY)
+                } else {
+                    fill
+                }),
+                dimmed: inherited,
+                marker: locks
+                    .lock_on(index)
+                    .zip(indicators)
+                    .map(|(lock, indicators)| marker_of(lock.color(&indicators))),
+                tooltip: locks.lock_on(index).map(|lock| lock.name().into()),
+                ..KeyFace::default()
+            }
         })
-        .selection(&self.selection)
         .fit_width(panel::content_width_beside_side(window))
-        .on_key_click(move |key, event, window, cx| {
-            let modifiers = event.modifiers();
-            page.update(cx, |page, cx| page.click_key(key, modifiers, window, cx))
+        .on_key_click(move |key, _, window, cx| {
+            clicked
+                .update(cx, |page, cx| page.click_key(key, window, cx))
+                .ok();
+        })
+        .on_key_sweep(move |key, window, cx| {
+            swept
+                .update(cx, |page, cx| page.paint_key(key, window, cx))
+                .ok();
+        })
+        .on_key_secondary_click(move |key, window, cx| {
+            picked
+                .update(cx, |page, cx| page.pick_key(key, window, cx))
+                .ok();
+        })
+        .on_marker_press(move |key, button, window, cx| {
+            pressed
+                .update(cx, |page, cx| page.press_marker(key, button, window, cx))
                 .ok();
         });
         div().child(view)
@@ -51,12 +81,10 @@ impl LightingPage {
         self.maps.as_ref()?;
         let text = if self.picking {
             "Click a key to pick its colour"
-        } else if !self.selection.is_empty() {
-            return None;
         } else if self.layer != Layer::Base && self.map(self.layer).is_none() {
-            "Select keys to give this layer its own colours"
+            "Paint keys to give this layer its own colours"
         } else {
-            "Select keys to change their colour"
+            return None;
         };
         Some(
             h_flex()
@@ -66,116 +94,12 @@ impl LightingPage {
         )
     }
 
-    pub(super) fn heading_actions(&self, cx: &Context<Self>) -> Div {
-        h_flex()
-            .gap_2()
-            .child(
-                Button::new("select-all-keys")
-                    .label("Select all keys")
-                    .small()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        if let Some(keyboard) = this.store.read(cx).keyboard() {
-                            let mut selection = this.selection.clone();
-                            selection.select_all(keyboard);
-                            this.selection = selection;
-                            cx.notify();
-                        }
-                    })),
-            )
-            .child(
-                Button::new("discard-selection")
-                    .label("Discard selection")
-                    .ghost()
-                    .small()
-                    .disabled(self.selection.is_empty())
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.selection.clear();
-                        cx.notify();
-                    })),
-            )
-    }
-
-    pub(super) fn preset_menu(cx: &Context<Self>) -> impl IntoElement + use<> {
-        let page = cx.entity().downgrade();
-        select("color-presets", "Pick a preset").dropdown_menu(move |menu, _, _| {
-            PRESETS
-                .iter()
-                .enumerate()
-                .fold(menu, |menu, (index, preset)| {
-                    let page = page.clone();
-                    menu.item(
-                        PopupMenuItem::new(preset.name).on_click(move |_, window, cx| {
-                            page.update(cx, |page, cx| page.apply_preset(index, window, cx))
-                                .ok();
-                        }),
-                    )
-                })
-        })
-    }
-
-    pub(super) fn clear_layer(
+    pub(super) fn apply_preset(
         &mut self,
-        layer: Layer,
+        index: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(slot) = self.map_slot(layer) else {
-            return;
-        };
-        if slot.take().is_some() {
-            self.mark_layer(layer, window, cx);
-        }
-    }
-
-    pub(super) fn paint_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selection.is_empty() || self.maps.is_none() {
-            return;
-        }
-        let Some(keyboard) = self.store.read(cx).keyboard() else {
-            return;
-        };
-        let reached = key_colors::reach(keyboard, self.selection.iter());
-        let color = self.brush.rgb();
-        self.edit_map(
-            |colors| key_colors::paint(colors, &reached, color),
-            window,
-            cx,
-        );
-    }
-
-    fn shown_colors(&self) -> (Option<&KeyColors>, bool) {
-        match (self.map(self.layer), self.layer) {
-            (Some(colors), _) => (Some(colors), false),
-            (None, Layer::Base) => (None, false),
-            (None, _) => (self.map(Layer::Base), true),
-        }
-    }
-
-    fn click_key(
-        &mut self,
-        key: usize,
-        modifiers: Modifiers,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.maps.is_none() {
-            return;
-        }
-        if self.picking {
-            let (colors, _) = self.shown_colors();
-            let color = colors
-                .and_then(|colors| colors.get(key))
-                .copied()
-                .unwrap_or(BLACK);
-            self.picking = false;
-            self.pick_brush(color, window, cx);
-        } else {
-            self.selection.click(key, modifiers);
-        }
-        cx.notify();
-    }
-
-    fn apply_preset(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(keyboard) = self.store.read(cx).keyboard() else {
             return;
         };
@@ -186,6 +110,140 @@ impl LightingPage {
         };
         let painted = preset.key_colors(rows, columns);
         self.edit_map(|colors| *colors = painted, window, cx);
+    }
+
+    pub(super) fn copy_layer(&mut self, layer: Layer, cx: &mut Context<Self>) {
+        self.copied = self.colors_of(layer).cloned();
+        cx.notify();
+    }
+
+    pub(super) fn paste_layer(
+        &mut self,
+        layer: Layer,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(copied) = self.copied.clone() else {
+            return;
+        };
+        let Some(slot) = self.map_slot(layer) else {
+            return;
+        };
+        if slot.as_ref() == Some(&copied) {
+            return;
+        }
+        *slot = Some(copied);
+        self.mark_layer(layer, window, cx);
+    }
+
+    pub(super) fn clear_layer(
+        &mut self,
+        layer: Layer,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if layer == Layer::Base {
+            return;
+        }
+        let Some(slot) = self.map_slot(layer) else {
+            return;
+        };
+        if slot.take().is_some() {
+            self.mark_layer(layer, window, cx);
+        }
+    }
+
+    pub(super) fn shown_colors(&self) -> (Option<&KeyColors>, bool) {
+        match (self.map(self.layer), self.layer) {
+            (Some(colors), _) => (Some(colors), false),
+            (None, Layer::Base) => (None, false),
+            (None, _) => (self.map(Layer::Base), true),
+        }
+    }
+
+    fn colors_of(&self, layer: Layer) -> Option<&KeyColors> {
+        self.map(layer).or_else(|| self.map(Layer::Base))
+    }
+
+    fn click_key(&mut self, key: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.picking {
+            self.pick_key(key, window, cx);
+        } else {
+            self.paint_key(key, window, cx);
+        }
+    }
+
+    fn paint_key(&mut self, key: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.maps.is_none() || self.picking {
+            return;
+        }
+        let Some(keyboard) = self.store.read(cx).keyboard() else {
+            return;
+        };
+        let reached = key_colors::reach(keyboard, [key]);
+        let brush = self.brush.read(cx).value();
+        let color = brush.unwrap_or(key_colors::BLACK);
+        self.edit_map(
+            |colors| key_colors::paint(colors, &reached, color),
+            window,
+            cx,
+        );
+        if let Some(color) = brush {
+            ColorPicker::remember(color, cx);
+        }
+    }
+
+    fn pick_key(&mut self, key: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let (colors, _) = self.shown_colors();
+        let color = colors
+            .and_then(|colors| colors.get(key))
+            .copied()
+            .unwrap_or(key_colors::BLACK);
+        self.set_picking(false, cx);
+        self.brush
+            .update(cx, |brush, cx| brush.set_value(color, window, cx));
+        cx.notify();
+    }
+
+    fn press_marker(
+        &mut self,
+        key: usize,
+        button: MouseButton,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(lock) = self.locks.lock_on(key) else {
+            return;
+        };
+        match button {
+            MouseButton::Right => {
+                let Some(color) = self
+                    .settings
+                    .as_ref()
+                    .map(|settings| lock.color(&settings.indicators))
+                else {
+                    return;
+                };
+                let picked = (color.alpha != 0).then_some(color.rgb());
+                self.set_picking(false, cx);
+                self.brush
+                    .update(cx, |brush, cx| brush.set_value(picked, window, cx));
+                cx.notify();
+            }
+            MouseButton::Left => {
+                let brush = self.brush.read(cx).value();
+                let color = brush.map_or(Color::TRANSPARENT, Rgb::opaque);
+                self.edit_settings(
+                    |settings| lock.set(&mut settings.indicators, color),
+                    window,
+                    cx,
+                );
+                if let Some(color) = brush {
+                    ColorPicker::remember(color, cx);
+                }
+            }
+            MouseButton::Middle | MouseButton::Navigate(_) => {}
+        }
     }
 
     fn edit_map(
@@ -202,11 +260,22 @@ impl LightingPage {
             Layer::Base => None,
             Layer::One | Layer::Two | Layer::Three => self.map(Layer::Base).cloned(),
         }
-        .unwrap_or_else(|| key_colors::uniform(count, BLACK));
+        .unwrap_or_else(|| key_colors::uniform(count, key_colors::BLACK));
         let Some(slot) = self.map_slot(layer) else {
             return;
         };
+        let before = slot.clone();
         change(slot.get_or_insert(start));
-        self.mark_layer(layer, window, cx);
+        if *slot != before {
+            self.mark_layer(layer, window, cx);
+        }
+    }
+}
+
+fn marker_of(color: Color) -> Hsla {
+    if color.alpha == 0 {
+        hsla(0.0, 0.0, 0.0, 0.0)
+    } else {
+        hsla_of(color.rgb())
     }
 }

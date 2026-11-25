@@ -42,16 +42,16 @@ impl Field {
         fields
     }
 
-    pub(super) const fn step(self) -> f64 {
+    pub(super) const fn unit(self) -> &'static str {
         match self {
-            Self::Time(_) | Self::Period => 100.0,
+            Self::Time(_) | Self::Period => "s",
             Self::Maximum
             | Self::MeterHost
             | Self::Constant(_)
             | Self::SignalHost(_)
             | Self::OperandHost(_)
             | Self::HostId
-            | Self::HostValue => 1.0,
+            | Self::HostValue => "",
         }
     }
 
@@ -66,18 +66,19 @@ impl Field {
     pub(super) fn parse(self, text: &str) -> Result<Number, String> {
         let text = text.trim();
         match self {
-            Self::Time(_) => text
-                .parse::<u16>()
-                .ok()
+            Self::Time(_) => seconds(text)
                 .filter(|time| (1..=MAX_HOLD_MS).contains(time))
                 .map(Number::Milliseconds)
-                .ok_or_else(|| format!("`{text}` is not a time from 1 to {MAX_HOLD_MS} ms")),
-            Self::Period => text
-                .parse::<u16>()
-                .ok()
+                .ok_or_else(|| {
+                    format!(
+                        "`{text}` is not a time from 0.001 to {} s",
+                        MAX_HOLD_MS / 1000
+                    )
+                }),
+            Self::Period => seconds(text)
                 .filter(|period| *period > 0)
                 .map(Number::Milliseconds)
-                .ok_or_else(|| format!("`{text}` is not a period from 1 to {} ms", u16::MAX)),
+                .ok_or_else(|| format!("`{text}` is not a speed from 0.001 to 65 s")),
             Self::Maximum => text
                 .parse::<f32>()
                 .ok()
@@ -100,11 +101,9 @@ impl Field {
     pub(super) fn text(self, entry: &Entry) -> Option<String> {
         match self {
             Self::Maximum => meter(entry).map(|meter| meter.maximum.to_string()),
-            Self::Period => blink(entry).map(|blink| blink.period_ms.to_string()),
+            Self::Period => blink(entry).map(|blink| seconds_text(blink.period_ms)),
             Self::MeterHost => meter(entry).and_then(|meter| host_id(meter.signal)),
-            Self::Time(spot) => term(entry, spot)
-                .and_then(term_time)
-                .map(|time| time.to_string()),
+            Self::Time(spot) => term(entry, spot).and_then(term_time).map(seconds_text),
             Self::Constant(spot) => {
                 comparison(entry, spot).and_then(|comparison| match comparison.operand {
                     Operand::Constant(constant) => Some(constant.to_string()),
@@ -176,6 +175,34 @@ impl Field {
     }
 }
 
+pub(super) fn seconds_text(milliseconds: u16) -> String {
+    let text = format!("{:.3}", f32::from(milliseconds) / 1000.0);
+    let trimmed = text.trim_end_matches('0');
+    if trimmed.ends_with('.') {
+        format!("{trimmed}0")
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+pub(super) fn millis(value: f32) -> u16 {
+    let clamped = value.round().clamp(0.0, f32::from(u16::MAX));
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "the value is rounded and clamped to the u16 range"
+    )]
+    let milliseconds = clamped as u16;
+    milliseconds
+}
+
+fn seconds(text: &str) -> Option<u16> {
+    let value = text.trim_end_matches('s').trim().parse::<f32>().ok()?;
+    let milliseconds = (value * 1000.0).round();
+    (milliseconds.is_finite() && milliseconds >= 0.5 && milliseconds <= f32::from(u16::MAX))
+        .then(|| millis(milliseconds))
+}
+
 const fn meter(entry: &Entry) -> Option<&Meter> {
     match &entry.effect {
         Effect::Meter(meter) => Some(meter),
@@ -237,17 +264,22 @@ mod tests {
     #[test]
     fn times_and_periods_refuse_zero_and_out_of_range_values() {
         assert_eq!(
-            Field::Time(FIRST).parse(" 1500 "),
+            Field::Time(FIRST).parse(" 1.5 "),
             Ok(Number::Milliseconds(1500))
         );
+        assert_eq!(
+            Field::Time(FIRST).parse("0.25 s"),
+            Ok(Number::Milliseconds(250))
+        );
         assert!(Field::Time(FIRST).parse("0").is_err());
-        assert!(Field::Time(FIRST).parse("60001").is_err());
+        assert!(Field::Time(FIRST).parse("60.001").is_err());
         assert!(Field::Time(FIRST).parse("soon").is_err());
         assert_eq!(
-            Field::Period.parse("65535"),
+            Field::Period.parse("65.535"),
             Ok(Number::Milliseconds(65535))
         );
         assert!(Field::Period.parse("0").is_err());
+        assert!(Field::Period.parse("66").is_err());
         assert!(Field::Maximum.parse("0").is_err());
         assert!(Field::Maximum.parse("-3").is_err());
         assert!(Field::Maximum.parse("inf").is_err());
@@ -261,7 +293,7 @@ mod tests {
     fn fields_read_and_write_the_entry() {
         let mut entry =
             conditional(Timing::Matched.apply(&compare(Signal::Host(7), Comparator::Less, 3.0)));
-        assert_eq!(Field::Time(FIRST).text(&entry).as_deref(), Some("1500"));
+        assert_eq!(Field::Time(FIRST).text(&entry).as_deref(), Some("1.5"));
         assert_eq!(Field::Constant(FIRST).text(&entry).as_deref(), Some("3"));
         assert_eq!(Field::SignalHost(FIRST).text(&entry).as_deref(), Some("7"));
         assert_eq!(Field::OperandHost(FIRST).text(&entry), None);
@@ -270,7 +302,7 @@ mod tests {
         Field::Constant(FIRST).apply(&mut entry, Number::Value(0.5));
         Field::SignalHost(FIRST).apply(&mut entry, Number::Id(9));
         Field::Maximum.apply(&mut entry, Number::Value(30.0));
-        assert_eq!(Field::Time(FIRST).text(&entry).as_deref(), Some("200"));
+        assert_eq!(Field::Time(FIRST).text(&entry).as_deref(), Some("0.2"));
         assert_eq!(Field::Constant(FIRST).text(&entry).as_deref(), Some("0.5"));
         assert_eq!(Field::SignalHost(FIRST).text(&entry).as_deref(), Some("9"));
         assert_eq!(Field::Maximum.text(&entry).as_deref(), Some("30"));
@@ -300,5 +332,15 @@ mod tests {
         );
         assert_eq!(Field::MeterHost.text(&entry), None);
         assert_eq!(Field::Time(FIRST).text(&entry), None);
+    }
+
+    #[test]
+    fn seconds_read_like_wootility() {
+        assert_eq!(seconds_text(3000), "3.0");
+        assert_eq!(seconds_text(1500), "1.5");
+        assert_eq!(seconds_text(1250), "1.25");
+        assert_eq!(seconds_text(1), "0.001");
+        assert_eq!(millis(-3.0), 0);
+        assert_eq!(millis(1e9), u16::MAX);
     }
 }

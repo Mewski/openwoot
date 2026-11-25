@@ -1,7 +1,7 @@
 use openwoot_protocol::{
     advanced,
     configuration::{Capabilities, Rejection},
-    device::{self, Layout},
+    device::{self, Layout, LayoutState},
     gamepad, geometry, global,
     keys::{self, Layer},
     lightbar, lighting,
@@ -26,7 +26,7 @@ pub trait Configuration {
         Err(Rejection::Unsupported)
     }
 
-    async fn layout(&mut self) -> Result<Layout, Rejection> {
+    async fn layout(&mut self) -> Result<LayoutState, Rejection> {
         Err(Rejection::Unsupported)
     }
 
@@ -35,6 +35,14 @@ pub trait Configuration {
     }
 
     async fn key_geometry(&mut self, _keys: &mut geometry::Keys) -> Result<(), Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    async fn default_keymap(
+        &mut self,
+        _layer: Layer,
+        _keymap: &mut keys::Keymap,
+    ) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 
@@ -59,6 +67,14 @@ pub trait Configuration {
     }
 
     async fn activate_profile(&mut self, _profile: Slot) -> Result<(), Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    async fn swap_profiles(&mut self, _first: Slot, _second: Slot) -> Result<(), Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    async fn move_profile(&mut self, _from: Slot, _to: Slot) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 

@@ -1,6 +1,6 @@
 use openwoot_protocol::lighting::{KeyColors, Rgb};
 
-use super::color::BLACK;
+use super::key_colors::BLACK;
 
 const ROWS: usize = 6;
 const SIXTY_COLUMNS: usize = 14;

@@ -1,260 +1,301 @@
 mod catalog;
-
-use std::{collections::BTreeSet, mem};
+mod fitting;
+mod glyph;
 
 use gpui_kit::{
-    App, AppContext as _, Context, Div, Entity, FontWeight, Hsla, IntoElement, Modifiers,
-    ParentElement as _, Render, SharedString, Styled as _, Subscription, Window,
+    AnyElement, App, AppContext as _, Context, Div, Entity, FontWeight, Hsla,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Subscription, Window,
+    assets::IconName,
     component::{
-        ActiveTheme as _, Disableable as _, Sizable as _,
-        button::Button,
-        h_flex,
-        select::{SearchableVec, Select, SelectEvent, SelectGroup, SelectItem, SelectState},
-        slider::{Slider, SliderEvent, SliderState},
-        tab::{Tab, TabBar},
+        ActiveTheme as _, Icon, Sizable as _, WindowExt as _, h_flex,
+        input::{Input, InputEvent, InputState},
+        notification::Notification,
+        tooltip::Tooltip,
         v_flex,
     },
-    div, hsla,
+    div,
     prelude::FluentBuilder as _,
     px,
 };
 use openwoot_protocol::{
-    configuration::{Capabilities, Validate as _},
+    configuration::Validate as _,
     endpoints::SetSwitches,
-    switches::{self, MAX_TUNED, Switch},
+    switches::{self, MAX_TUNED, Model, Switch},
 };
 
+use super::{
+    Page,
+    performance::{Committed, DistanceField, Shown, Span, actions, millimetres_text, stage},
+};
 use crate::{
-    keyboard::{KeyFace, KeyboardView, Selection},
-    page::Page,
+    dropdown::{Dropdown, Item},
+    keyboard::{Glyph, KeyFace, KeyboardView, Selection},
     panel,
     store::{Keyboard, Scope, Store, StoreEvent},
+    switch::Switch as Toggle,
     usage,
 };
 
-const MILLIMETRES_PER_STEP: f32 = 0.05;
-const READOUT_WIDTH: f32 = 60.0;
-const MENU_HEIGHT: f32 = 360.0;
-const HUE_STEP: f32 = 0.618_034;
-const MODEL_SATURATION: f32 = 0.45;
-const MODEL_LIGHTNESS: f32 = 0.38;
-const FACTORY_MODEL: u8 = 0;
-const EDITION_FACTORY_MODEL: u8 = 1;
 const FIRST_BRAND: &str = "Wooting";
-const OTHER_BRAND: &str = "Other";
-const LABELS: [KeyLabels; 2] = [KeyLabels::Switch, KeyLabels::Travel];
-
-type ModelChoices = SearchableVec<SelectGroup<ModelChoice>>;
+const ALL_BRANDS: &str = "All brands";
+const SPACER_DEFAULT_MM: f32 = 0.5;
+const GRID_COLUMNS: u16 = 4;
+const CARD_HEIGHT: f32 = 128.0;
+const CARD_GLYPH: f32 = 44.0;
+const SPACERS_WIDTH: f32 = 340.0;
+const KEY_GLYPH_SHARE: f32 = 0.62;
+const TOOLTIP_GLYPH: f32 = 18.0;
+const BRAND_WIDTH: f32 = 200.0;
+const PROMPT: &str = "To adjust your switches, select one or more keys first";
+const HELP: &str = "Assign the switches installed in your keyboard. Each switch brings its calibrated analog curve and total travel, so the keyboard knows the precise position of every key.";
+const SPACERS_HELP: &str = "Spacers are thin inserts inside your switches that physically shorten the total travel, making keystrokes feel quicker and more responsive.";
 
 pub(crate) struct SwitchesPage {
     store: Entity<Store>,
     selection: Selection,
-    labels: KeyLabels,
-    model_select: Entity<SelectState<ModelChoices>>,
-    spacer: Entity<SliderState>,
-    shown: Option<Shown>,
-    problem: Option<SharedString>,
+    search: Entity<InputState>,
+    brand: Option<&'static str>,
+    spacer: Entity<DistanceField>,
+    spacers_hovered: bool,
     _subscriptions: Vec<Subscription>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum KeyLabels {
-    Switch,
-    Travel,
+enum Spacers {
+    Off,
+    On,
+    Mixed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Shown {
-    selection: Selection,
-    switches: Option<switches::Settings>,
-    models: switches::Models,
-    available: u8,
-}
-
-#[derive(Debug, Clone)]
-struct ModelChoice {
+#[derive(Clone, Copy)]
+struct SwitchCard {
     model: u8,
-    title: SharedString,
-    name: SharedString,
-    variants: Option<SharedString>,
-    travel: SharedString,
-}
-
-struct Controls {
-    model: Option<u8>,
-    spacer: f32,
-    spacer_max: f32,
+    product: &'static catalog::Product,
+    travel: f32,
+    current: bool,
+    selectable: bool,
+    housing: Hsla,
 }
 
 impl SwitchesPage {
     pub(crate) fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let model_select = cx.new(|cx| {
-            SelectState::new(ModelChoices::new(Vec::new()), None, window, cx).searchable(true)
-        });
-        let spacer = cx.new(|_| {
-            SliderState::new()
-                .min(0.0)
-                .max(MILLIMETRES_PER_STEP)
-                .step(MILLIMETRES_PER_STEP)
-                .default_value(0.0)
-        });
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search for a switch"));
+        let spacer = cx.new(|cx| DistanceField::plain(window, cx));
         let subscriptions = vec![
             cx.subscribe_in(&store, window, |this, _, event, window, cx| match event {
                 StoreEvent::Connected => {
                     this.selection.clear();
-                    this.problem = None;
-                    this.shown = None;
-                    this.sync_controls(window, cx);
+                    this.sync(window, cx);
                 }
                 StoreEvent::Disconnected
                 | StoreEvent::ProfileChanged
                 | StoreEvent::Reloaded
                 | StoreEvent::Failed(_) => {}
             }),
-            cx.observe_in(&store, window, |this, _, window, cx| {
-                this.sync_controls(window, cx);
+            cx.observe_in(&store, window, |this, _, window, cx| this.sync(window, cx)),
+            cx.subscribe(&search, |_, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
             }),
-            cx.subscribe_in(
-                &model_select,
-                window,
-                |this, _, event: &SelectEvent<ModelChoices>, window, cx| {
-                    if let SelectEvent::Confirm(Some(model)) = event {
-                        this.assign_model(*model, window, cx);
-                    }
-                },
-            ),
             cx.subscribe_in(
                 &spacer,
                 window,
-                |this, _, event: &SliderEvent, window, cx| match event {
-                    SliderEvent::Change(_) => cx.notify(),
-                    SliderEvent::Release(value) => this.set_spacer(value.end(), window, cx),
+                |this, _, Committed(millimetres): &Committed, window, cx| {
+                    this.set_spacer_size(*millimetres, window, cx);
                 },
             ),
         ];
         let mut page = Self {
             store,
             selection: Selection::default(),
-            labels: KeyLabels::Switch,
-            model_select,
+            search,
+            brand: None,
             spacer,
-            shown: None,
-            problem: None,
+            spacers_hovered: false,
             _subscriptions: subscriptions,
         };
-        page.sync_controls(window, cx);
+        page.sync(window, cx);
         page
     }
 
-    fn sync_controls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (shown, choices, controls) = {
+    fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let shown = {
             let Some(keyboard) = self.store.read(cx).keyboard() else {
                 return;
             };
-            let shown = Shown {
-                selection: self.selection.clone(),
-                switches: keyboard.switches.clone(),
-                models: keyboard.models.clone(),
-                available: keyboard.capabilities.switch_models,
-            };
-            if self.shown.as_ref() == Some(&shown) {
-                return;
-            }
-            let rebuild = self
-                .shown
-                .as_ref()
-                .is_none_or(|old| old.models != shown.models || old.available != shown.available);
-            (
-                shown,
-                rebuild.then(|| choices(keyboard)),
-                Controls::of(keyboard, &self.selection),
-            )
-        };
-        if let Some(choices) = choices {
-            self.model_select
-                .update(cx, |select, cx| select.set_items(choices, window, cx));
-        }
-        self.model_select
-            .update(cx, |select, cx| match controls.model {
-                Some(model) => select.set_selected_value(&model, window, cx),
-                None => select.set_selected_index(None, window, cx),
+            let targets = self.targets(keyboard);
+            let travel = targets
+                .iter()
+                .filter_map(|switch| keyboard.models.get(usize::from(switch.model)))
+                .map(|model| fitting::millimetres(model.travel))
+                .reduce(f32::min)
+                .unwrap_or(0.0);
+            let fitted: Vec<f32> = targets
+                .iter()
+                .filter(|switch| switch.is_tuned())
+                .map(|switch| fitting::millimetres(switch.travel_offset))
+                .collect();
+            let mixed = fitted.iter().any(|size| {
+                millimetres_text(*size)
+                    != fitted
+                        .first()
+                        .map_or_default(|first| millimetres_text(*first))
             });
-        let spacer_max = controls.spacer_max.max(MILLIMETRES_PER_STEP);
-        self.spacer.update(cx, |slider, cx| {
-            let current = mem::replace(slider, SliderState::new());
-            *slider = current.min(0.0).max(spacer_max);
-            slider.set_value(controls.spacer.clamp(0.0, spacer_max), window, cx);
-        });
-        self.shown = Some(shown);
+            Shown {
+                millimetres: fitted.first().copied().unwrap_or(SPACER_DEFAULT_MM),
+                span: Span::spacer(travel),
+                default: Some(SPACER_DEFAULT_MM),
+                mixed,
+                disabled: spacers(&targets) != Spacers::On || self.selection.is_empty(),
+            }
+        };
+        self.spacer
+            .update(cx, |field, cx| field.show(shown, window, cx));
         cx.notify();
     }
 
-    fn click_key(
-        &mut self,
-        key: usize,
-        modifiers: Modifiers,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.selection.click(key, modifiers);
-        self.sync_controls(window, cx);
+    fn targets(&self, keyboard: &Keyboard) -> Vec<Switch> {
+        let Some(settings) = &keyboard.switches else {
+            return Vec::new();
+        };
+        let factory = fitting::factory(&keyboard.capabilities);
+        self.selection
+            .iter()
+            .map(|key| fitting::of_key(settings, factory, key))
+            .collect()
+    }
+
+    fn shown_switches(&self, keyboard: &Keyboard) -> Vec<Switch> {
+        if !self.selection.is_empty() {
+            return self.targets(keyboard);
+        }
+        let Some(settings) = &keyboard.switches else {
+            return Vec::new();
+        };
+        let factory = fitting::factory(&keyboard.capabilities);
+        (0..keyboard.key_count())
+            .filter(|key| keyboard.has_key(*key))
+            .map(|key| fitting::of_key(settings, factory, key))
+            .collect()
+    }
+
+    fn toggle_key(&mut self, key: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.selection.toggle(key);
+        self.sync(window, cx);
+    }
+
+    fn sweep_key(&mut self, key: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.selection.contains(key) {
+            self.selection.insert(key);
+            self.sync(window, cx);
+        }
     }
 
     fn select_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(keyboard) = self.store.read(cx).keyboard() {
             self.selection.select_all(keyboard);
         }
-        self.sync_controls(window, cx);
+        self.sync(window, cx);
     }
 
     fn clear_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.selection.clear();
-        self.sync_controls(window, cx);
+        self.sync(window, cx);
     }
 
-    fn show_labels(&mut self, labels: KeyLabels, cx: &mut Context<Self>) {
-        self.labels = labels;
+    fn filter_brand(&mut self, brand: Option<&'static str>, cx: &mut Context<Self>) {
+        self.brand = brand;
         cx.notify();
+    }
+
+    fn hover_spacers(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        if self.spacers_hovered != hovered {
+            self.spacers_hovered = hovered;
+            cx.notify();
+        }
+    }
+
+    fn assign_model(&mut self, model: u8, window: &mut Window, cx: &mut Context<Self>) {
+        self.change(
+            |settings, keys, factory, models| {
+                fitting::assign(settings, keys, factory, model, models);
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn set_spacers(&mut self, enabled: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.change(
+            |settings, keys, factory, models| {
+                fitting::set_spacers(settings, keys, factory, |current| {
+                    if !enabled {
+                        0
+                    } else if current.is_tuned() {
+                        current.travel_offset
+                    } else {
+                        spacer_steps(SPACER_DEFAULT_MM, current, models)
+                    }
+                });
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn set_spacer_size(&mut self, millimetres: f32, window: &mut Window, cx: &mut Context<Self>) {
+        self.change(
+            |settings, keys, factory, models| {
+                fitting::set_spacers(settings, keys, factory, |current| {
+                    spacer_steps(millimetres, current, models)
+                });
+            },
+            window,
+            cx,
+        );
     }
 
     fn change(
         &mut self,
-        edit: impl FnOnce(&mut switches::Settings, &Selection, Switch, &[switches::Model]),
+        edit: impl FnOnce(&mut switches::Settings, &[usize], Switch, &[Model]),
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.selection.is_empty() {
+            return;
+        }
         let checked = {
             let Some(keyboard) = self.store.read(cx).keyboard() else {
                 return;
             };
-            let Some(current) = &keyboard.switches else {
+            let Some(before) = keyboard.switches.clone() else {
                 return;
             };
-            let mut settings = current.clone();
-            edit(
-                &mut settings,
-                &self.selection,
-                factory_switch(&keyboard.capabilities),
-                &keyboard.models,
-            );
-            if settings == *current {
-                return;
-            }
-            settings
+            let factory = fitting::factory(&keyboard.capabilities);
+            let keys: Vec<usize> = self.selection.iter().collect();
+            let present: Vec<usize> = (0..keyboard.key_count())
+                .filter(|key| keyboard.has_key(*key))
+                .collect();
+            let mut after = before.clone();
+            edit(&mut after, &keys, factory, &keyboard.models);
+            fitting::fold(&mut after, &present, factory);
+            after
                 .validate(&keyboard.capabilities)
-                .and_then(|()| settings.check_models(&keyboard.models))
-                .map(|()| settings)
+                .and_then(|()| after.check_models(&keyboard.models))
+                .map(|()| (before, after))
         };
         match checked {
             Err(invalid) => {
-                self.problem = Some(invalid.to_string().into());
-                self.shown = None;
-                self.sync_controls(window, cx);
+                let message = format!("could not change the switches: {invalid}");
+                window.push_notification(Notification::error(message), cx);
+                self.sync(window, cx);
             }
-            Ok(settings) => {
-                self.problem = None;
+            Ok((before, after)) if before == after => {}
+            Ok((before, after)) => {
                 let applied = self.store.update(cx, |store, cx| {
-                    store.apply::<SetSwitches>(settings, Scope::Keyboard, cx)
+                    store.change::<SetSwitches>(&before, after, Scope::Keyboard, cx)
                 });
                 cx.spawn_in(window, async move |this, cx| {
                     let applied = applied.await.is_ok();
@@ -264,8 +305,7 @@ impl SwitchesPage {
                                 .update(cx, |store, cx| store.reload_switches(cx))
                                 .detach();
                         } else {
-                            page.shown = None;
-                            page.sync_controls(window, cx);
+                            page.sync(window, cx);
                         }
                     })
                     .ok();
@@ -273,238 +313,201 @@ impl SwitchesPage {
                 .detach();
             }
         }
-        cx.notify();
-    }
-
-    fn assign_model(&mut self, model: u8, window: &mut Window, cx: &mut Context<Self>) {
-        self.change(
-            |settings, selection, factory, models| {
-                let travel = models
-                    .get(usize::from(model))
-                    .map_or(0, |entry| entry.travel);
-                if selection.is_empty() {
-                    let offset = settings.default.unwrap_or(factory).travel_offset;
-                    settings.default = Some(fitted(model, travel, offset));
-                } else {
-                    for key in selection.iter() {
-                        let offset = settings.of_key(key).unwrap_or(factory).travel_offset;
-                        if let Some(slot) = settings.keys.get_mut(key) {
-                            *slot = Some(fitted(model, travel, offset));
-                        }
-                    }
-                }
-            },
-            window,
-            cx,
-        );
-    }
-
-    fn use_default_switch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.change(
-            |settings, selection, _, _| {
-                for key in selection.iter() {
-                    if let Some(slot) = settings.keys.get_mut(key) {
-                        *slot = None;
-                    }
-                }
-            },
-            window,
-            cx,
-        );
-    }
-
-    fn set_spacer(&mut self, millimetres: f32, window: &mut Window, cx: &mut Context<Self>) {
-        let offset = steps_of(millimetres);
-        self.change(
-            |settings, selection, factory, _| {
-                if selection.is_empty() {
-                    let current = settings.default.unwrap_or(factory);
-                    if current.travel_offset != offset {
-                        settings.default = Some(Switch {
-                            model: current.model,
-                            travel_offset: offset,
-                        });
-                    }
-                } else {
-                    for key in selection.iter() {
-                        let current = settings.of_key(key).unwrap_or(factory);
-                        if current.travel_offset != offset
-                            && let Some(slot) = settings.keys.get_mut(key)
-                        {
-                            *slot = Some(Switch {
-                                model: current.model,
-                                travel_offset: offset,
-                            });
-                        }
-                    }
-                }
-            },
-            window,
-            cx,
-        );
-    }
-
-    fn heading(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
-        let selected_own = keyboard.switches.as_ref().is_some_and(|switches| {
-            self.selection
-                .iter()
-                .any(|key| switches.keys.get(key).copied().flatten().is_some())
-        });
-        panel::heading(
-            Page::Switches.title(),
-            Some("Assign the switches installed in your keyboard for precise key travel.".into()),
-            h_flex()
-                .gap_2()
-                .items_center()
-                .child(
-                    TabBar::new("switch-labels")
-                        .segmented()
-                        .small()
-                        .children([Tab::new().label("Switch"), Tab::new().label("Travel")])
-                        .when_some(
-                            LABELS.iter().position(|labels| *labels == self.labels),
-                            TabBar::selected_index,
-                        )
-                        .on_click(cx.listener(|this, index: &usize, _, cx| {
-                            if let Some(labels) = LABELS.get(*index) {
-                                this.show_labels(*labels, cx);
-                            }
-                        })),
-                )
-                .when(selected_own, |this| {
-                    this.child(
-                        Button::new("use-default-switch")
-                            .small()
-                            .label("Use default")
-                            .tooltip("Use the default switch for the selected keys")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.use_default_switch(window, cx);
-                            })),
-                    )
-                })
-                .child(
-                    Button::new("select-all")
-                        .small()
-                        .label("Select all keys")
-                        .on_click(cx.listener(|this, _, window, cx| this.select_all(window, cx))),
-                )
-                .child(
-                    Button::new("clear-selection")
-                        .small()
-                        .label("Discard selection")
-                        .disabled(self.selection.is_empty())
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.clear_selection(window, cx);
-                        })),
-                ),
-            cx,
-        )
     }
 
     fn keyboard(&self, keyboard: &Keyboard, window: &Window, cx: &Context<Self>) -> Div {
-        let labels = self.labels;
+        let housing = cx.theme().muted_foreground.opacity(0.45);
         let page = cx.weak_entity();
-        v_flex()
-            .w_full()
-            .gap_4()
-            .child(panel::stage(
-                KeyboardView::new("switch-keys", keyboard, |key| face(keyboard, labels, key))
-                    .selection(&self.selection)
-                    .fit_width(panel::content_width(window))
-                    .on_key_click(move |key, event, window, cx| {
-                        page.update(cx, |page, cx| {
-                            page.click_key(key, event.modifiers(), window, cx);
-                        })
-                        .ok();
-                    }),
-            ))
-            .when(self.selection.is_empty(), |this| {
-                this.child(h_flex().w_full().justify_center().child(panel::label(
-                    "Select keys to give them their own switch",
-                    cx,
-                )))
+        let swept = cx.weak_entity();
+        let view = KeyboardView::new("switch-keys", keyboard, |key| {
+            self.face(keyboard, key, housing)
+        })
+        .selection(&self.selection)
+        .fit_width(panel::content_width(window))
+        .on_key_click(move |key, _, window, cx| {
+            page.update(cx, |page, cx| page.toggle_key(key, window, cx))
+                .ok();
+        })
+        .on_key_sweep(move |key, window, cx| {
+            swept
+                .update(cx, |page, cx| page.sweep_key(key, window, cx))
+                .ok();
+        });
+        stage(view, self.selection.len(), PROMPT, cx)
+    }
+
+    fn face(&self, keyboard: &Keyboard, key: usize, housing: Hsla) -> KeyFace {
+        let legend = keyboard
+            .legends
+            .get(key)
+            .map_or_default(|action| SharedString::from(usage::legend(*action)));
+        let Some(settings) = &keyboard.switches else {
+            return KeyFace {
+                legend,
+                ..KeyFace::default()
+            };
+        };
+        let switch = fitting::of_key(settings, fitting::factory(&keyboard.capabilities), key);
+        if self.spacers_hovered {
+            return KeyFace {
+                legend,
+                detail: switch
+                    .is_tuned()
+                    .then(|| millimetres_text(fitting::millimetres(switch.travel_offset))),
+                ..KeyFace::default()
+            };
+        }
+        let stem = glyph::stem_color(switch.model);
+        KeyFace {
+            legend,
+            glyph: Some(Glyph::new(move |height| {
+                glyph::switch(height * KEY_GLYPH_SHARE, stem, housing).into_any_element()
+            })),
+            tooltip: Some(product_name(switch.model)),
+            ..KeyFace::default()
+        }
+    }
+
+    fn assign_card(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
+        let query = self.search.read(cx).value().to_lowercase();
+        let models = models(keyboard);
+        let brands = brands(&models);
+        let shown: Vec<(u8, &'static catalog::Product)> = models
+            .into_iter()
+            .filter(|(_, product)| self.brand.is_none_or(|brand| product.brand == brand))
+            .filter(|(_, product)| query.is_empty() || matches(product, &query))
+            .collect();
+        panel::section(
+            "Assign switches",
+            Some("Select keys on the keyboard, then pick the switches installed in them.".into()),
+            cx,
+        )
+        .child(
+            h_flex()
+                .w_full()
+                .gap_2()
+                .child(
+                    div().flex_1().min_w_0().child(
+                        Input::new(&self.search)
+                            .prefix(Icon::new(IconName::Search).small())
+                            .cleanable(true),
+                    ),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(BRAND_WIDTH))
+                        .child(self.brand_filter(brands, cx)),
+                ),
+        )
+        .child(self.grid(keyboard, shown, cx))
+    }
+
+    fn brand_filter(&self, brands: Vec<&'static str>, cx: &Context<Self>) -> Dropdown {
+        let page = cx.weak_entity();
+        let selected = self
+            .brand
+            .and_then(|brand| brands.iter().position(|known| *known == brand))
+            .map(|index| index + 1);
+        Dropdown::new("brand-filter")
+            .placeholder("Filter by brand")
+            .items(
+                std::iter::once(Item::new(ALL_BRANDS))
+                    .chain(brands.iter().map(|brand| Item::new(*brand))),
+            )
+            .selected(selected)
+            .on_select(move |index, _, cx| {
+                let brand = index
+                    .checked_sub(1)
+                    .and_then(|index| brands.get(index).copied());
+                page.update(cx, |page, cx| page.filter_brand(brand, cx))
+                    .ok();
             })
     }
 
-    fn switch_card(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
-        let targets = targets(keyboard, &self.selection);
-        let travel = same(targets.iter().map(|switch| {
-            keyboard
-                .models
-                .get(usize::from(switch.model))
-                .map(|model| model.travel)
-        }))
-        .flatten()
-        .map_or_else(
-            || "Mixed".into(),
-            |travel| millimetres_text(millimetres(travel)),
+    fn grid(
+        &self,
+        keyboard: &Keyboard,
+        shown: Vec<(u8, &'static catalog::Product)>,
+        cx: &Context<Self>,
+    ) -> Div {
+        let theme = cx.theme();
+        if shown.is_empty() {
+            return v_flex()
+                .gap_1()
+                .py_4()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.foreground)
+                        .child("Switch not found"),
+                )
+                .child(
+                    div().text_sm().text_color(theme.muted_foreground).child(
+                        "Pick a switch of the same brand, or one with the same total travel.",
+                    ),
+                );
+        }
+        let current = same(
+            self.shown_switches(keyboard)
+                .iter()
+                .map(|switch| switch.model),
         );
-        let (description, scope) = if self.selection.is_empty() {
-            (
-                "Keys without their own switch use the default switch.",
-                SharedString::from("Default switch"),
-            )
-        } else {
-            (
-                "Choose the switch installed in the selected keys.",
-                keys_text(self.selection.len()),
-            )
-        };
-        panel::section("Switch", Some(description.into()), cx)
-            .child(scope_label("Changing switch for", scope, cx))
-            .child(panel::field(
-                "Model",
-                Select::new(&self.model_select)
-                    .w_full()
-                    .placeholder("Mixed")
-                    .search_placeholder("Search switches")
-                    .menu_max_h(px(MENU_HEIGHT)),
-                cx,
-            ))
-            .child(panel::field(
-                "Total travel",
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().foreground)
-                    .child(travel),
-                cx,
-            ))
+        let selectable = !self.selection.is_empty();
+        let housing = theme.muted_foreground.opacity(0.45);
+        div()
+            .grid()
+            .grid_cols(GRID_COLUMNS)
+            .gap_2()
+            .children(shown.into_iter().map(|(model, product)| {
+                SwitchCard {
+                    model,
+                    product,
+                    travel: keyboard
+                        .models
+                        .get(usize::from(model))
+                        .map_or(0.0, |entry| fitting::millimetres(entry.travel)),
+                    current: current == Some(model),
+                    selectable,
+                    housing,
+                }
+                .render(cx)
+            }))
     }
 
-    fn spacer_card(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
-        let targets = targets(keyboard, &self.selection);
-        let size = if same(targets.iter().map(|switch| switch.travel_offset)).is_some() {
-            millimetres_text(self.spacer.read(cx).value().end())
-        } else {
-            "Mixed".into()
-        };
-        let tuned = keyboard.switches.as_ref().map_or(0, tuned_pairs);
-        panel::section(
+    fn spacers_card(&self, keyboard: &Keyboard, cx: &Context<Self>) -> Div {
+        let targets = self.targets(keyboard);
+        let state = spacers(&targets);
+        let selectable = !self.selection.is_empty();
+        let tuned = keyboard.switches.as_ref().map_or(0, fitting::tuned_pairs);
+        let page = cx.weak_entity();
+        panel::section_with_help(
             "Spacers",
-            Some("Enter the exact size of the spacers installed in these keys.".into()),
+            SPACERS_HELP,
+            Some(
+                "If you have spacers installed, select those keys and enter their exact size."
+                    .into(),
+            ),
+            Some(
+                Toggle::new("spacers")
+                    .checked(state == Spacers::On)
+                    .mixed(state == Spacers::Mixed)
+                    .disabled(!selectable)
+                    .on_change(move |enabled: &bool, window, cx| {
+                        page.update(cx, |page, cx| page.set_spacers(*enabled, window, cx))
+                            .ok();
+                    })
+                    .into_any_element(),
+            ),
             cx,
         )
-        .child(panel::field(
-            "Size",
-            h_flex()
-                .w_full()
-                .gap_3()
-                .items_center()
-                .child(div().flex_1().min_w_0().child(Slider::new(&self.spacer)))
-                .child(readout_text(size, cx)),
+        .child(panel::field("Size", self.spacer.clone(), cx))
+        .child(panel::note(
+            format!("{tuned} of {MAX_TUNED} spacer combinations used"),
             cx,
         ))
-        .child(panel::field(
-            "Spacer combinations",
-            div()
-                .text_sm()
-                .text_color(cx.theme().foreground)
-                .child(format!("{tuned} of {MAX_TUNED} used")),
-            cx,
-        ))
-        .when_some(self.problem.clone(), |this, problem| {
-            this.child(div().text_xs().text_color(cx.theme().danger).child(problem))
-        })
+        .when(!selectable, |this| this.opacity(0.5))
     }
 }
 
@@ -517,281 +520,225 @@ impl Render for SwitchesPage {
         if keyboard.switches.is_none() {
             return page.child(panel::note("Switches unavailable", cx));
         }
-        page.child(self.keyboard(keyboard, window, cx))
-            .child(self.heading(keyboard, cx))
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_stretch()
-                    .gap_4()
-                    .child(self.switch_card(keyboard, cx).flex_1().min_w_0())
-                    .child(self.spacer_card(keyboard, cx).flex_1().min_w_0()),
-            )
+        let selecting = cx.weak_entity();
+        let discarding = cx.weak_entity();
+        let total = (0..keyboard.key_count())
+            .filter(|key| keyboard.has_key(*key))
+            .count();
+        panel::page_with_stage(
+            "switch-page",
+            self.keyboard(keyboard, window, cx),
+            v_flex()
+                .w_full()
+                .gap_5()
+                .child(panel::heading(
+                    Page::Switches.title(),
+                    Some(HELP.into()),
+                    actions(
+                        self.selection.len(),
+                        total,
+                        move |window, cx| {
+                            selecting
+                                .update(cx, |page, cx| page.select_all(window, cx))
+                                .ok();
+                        },
+                        move |window, cx| {
+                            discarding
+                                .update(cx, |page, cx| page.clear_selection(window, cx))
+                                .ok();
+                        },
+                    ),
+                    cx,
+                ))
+                .child(
+                    h_flex()
+                        .w_full()
+                        .items_start()
+                        .gap_4()
+                        .child(self.assign_card(keyboard, cx).flex_1().min_w_0())
+                        .child(
+                            self.spacers_card(keyboard, cx)
+                                .id("spacers-card")
+                                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                                    this.hover_spacers(*hovered, cx);
+                                }))
+                                .flex_none()
+                                .w(px(SPACERS_WIDTH)),
+                        ),
+                ),
+        )
     }
 }
 
-impl ModelChoice {
-    fn new(model: u8, entry: switches::Model) -> Self {
-        let product = catalog::product(model);
-        Self {
+impl SwitchCard {
+    fn render(self, cx: &Context<SwitchesPage>) -> AnyElement {
+        let theme = cx.theme();
+        let Self {
             model,
-            title: product_name(model),
-            name: product.map_or_else(|| unknown_name(model).into(), |product| product.name.into()),
-            variants: product
-                .filter(|product| !product.variants.is_empty())
-                .map(|product| product.variants.join(", ").into()),
-            travel: millimetres_text(millimetres(entry.travel)),
-        }
-    }
-}
-
-impl SelectItem for ModelChoice {
-    type Value = u8;
-
-    fn title(&self) -> SharedString {
-        self.title.clone()
-    }
-
-    fn render(&self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let muted = cx.theme().muted_foreground;
-        h_flex()
+            product,
+            travel,
+            current,
+            selectable,
+            housing,
+        } = self;
+        let hover = theme.muted_foreground;
+        let stem = glyph::stem_color(model);
+        div()
+            .id(("switch-card", u32::from(model)))
             .w_full()
-            .gap_3()
-            .justify_between()
+            .h(px(CARD_HEIGHT))
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_1()
+            .px_2()
+            .rounded(theme.radius)
+            .bg(theme.tab_active)
+            .border_1()
+            .border_color(if current { theme.primary } else { theme.border })
+            .when(selectable, |this| {
+                this.cursor_pointer()
+                    .hover(move |style| {
+                        if current {
+                            style
+                        } else {
+                            style.border_color(hover)
+                        }
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.assign_model(model, window, cx);
+                    }))
+            })
+            .child(glyph::switch(px(CARD_GLYPH), stem, housing))
             .child(
-                v_flex()
-                    .min_w_0()
-                    .child(self.name.clone())
-                    .when_some(self.variants.clone(), |this, variants| {
-                        this.child(div().text_xs().text_color(muted).child(variants))
-                    }),
+                div()
+                    .w_full()
+                    .text_center()
+                    .truncate()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .when(current, |this| this.font_weight(FontWeight::SEMIBOLD))
+                    .child(product.brand),
             )
             .child(
                 div()
-                    .flex_none()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(self.travel.clone()),
+                    .w_full()
+                    .text_center()
+                    .truncate()
+                    .text_sm()
+                    .text_color(theme.foreground)
+                    .child(product.name),
             )
-    }
-
-    fn value(&self) -> &Self::Value {
-        &self.model
-    }
-
-    fn matches(&self, query: &str) -> bool {
-        let query = query.to_lowercase();
-        self.title.to_lowercase().contains(&query)
-            || self
-                .variants
-                .as_ref()
-                .is_some_and(|variants| variants.to_lowercase().contains(&query))
+            .tooltip(move |window, cx| {
+                Tooltip::element(move |_, cx| switch_tooltip(product, travel, stem, housing, cx))
+                    .build(window, cx)
+            })
+            .into_any_element()
     }
 }
 
-impl Controls {
-    fn of(keyboard: &Keyboard, selection: &Selection) -> Self {
-        let targets = targets(keyboard, selection);
-        let shortest = targets
-            .iter()
-            .filter_map(|switch| keyboard.models.get(usize::from(switch.model)))
-            .map(|model| model.travel)
-            .min()
-            .unwrap_or(0);
-        Self {
-            model: same(targets.iter().map(|switch| switch.model)),
-            spacer: targets
-                .first()
-                .map_or(0.0, |switch| millimetres(switch.travel_offset)),
-            spacer_max: millimetres(shortest.saturating_sub(1)),
-        }
+fn switch_tooltip(
+    product: &'static catalog::Product,
+    travel: f32,
+    stem: Hsla,
+    housing: Hsla,
+    cx: &App,
+) -> Div {
+    let theme = cx.theme();
+    v_flex()
+        .gap_2()
+        .py_1()
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.foreground)
+                .child(format!("{} {}", product.brand, product.name)),
+        )
+        .child(
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(Icon::new(IconName::ArrowUpDown).small())
+                .child(format!("Total travel: {travel:.1} mm")),
+        )
+        .when(!product.variants.is_empty(), |this| {
+            this.child(panel::label("Supported variants", cx)).children(
+                product.variants.iter().map(|variant| {
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(glyph::switch(px(TOOLTIP_GLYPH), stem, housing))
+                        .child(div().text_sm().text_color(theme.foreground).child(*variant))
+                }),
+            )
+        })
+}
+
+fn spacers(targets: &[Switch]) -> Spacers {
+    match same(targets.iter().map(Switch::is_tuned)) {
+        Some(true) => Spacers::On,
+        Some(false) => Spacers::Off,
+        None if targets.is_empty() => Spacers::Off,
+        None => Spacers::Mixed,
     }
 }
 
-fn choices(keyboard: &Keyboard) -> ModelChoices {
-    let mut groups: Vec<SelectGroup<ModelChoice>> = Vec::new();
+fn spacer_steps(millimetres: f32, switch: Switch, models: &[Model]) -> u8 {
+    let travel = models
+        .get(usize::from(switch.model))
+        .map_or(0.0, |model| fitting::millimetres(model.travel));
+    fitting::steps_of(Span::spacer(travel).snap(millimetres))
+}
+
+fn models(keyboard: &Keyboard) -> Vec<(u8, &'static catalog::Product)> {
     let available = usize::from(keyboard.capabilities.switch_models);
-    for (model, entry) in (0..=u8::MAX).zip(&keyboard.models).take(available) {
-        let choice = ModelChoice::new(model, *entry);
-        let brand = catalog::product(model).map_or(OTHER_BRAND, |product| product.brand);
-        if let Some(group) = groups.iter_mut().find(|group| &*group.title == brand) {
-            group.items.push(choice);
-        } else {
-            groups.push(SelectGroup::new(brand).item(choice));
+    let mut models: Vec<(u8, &'static catalog::Product)> = (0..=u8::MAX)
+        .zip(&keyboard.models)
+        .take(available)
+        .filter_map(|(model, _)| catalog::product(model).map(|product| (model, product)))
+        .collect();
+    models.sort_by_key(|(model, product)| {
+        (
+            product.brand != FIRST_BRAND,
+            product.brand.to_lowercase(),
+            *model,
+        )
+    });
+    models
+}
+
+fn brands(models: &[(u8, &'static catalog::Product)]) -> Vec<&'static str> {
+    let mut brands: Vec<&'static str> = Vec::new();
+    for (_, product) in models {
+        if !brands.contains(&product.brand) {
+            brands.push(product.brand);
         }
     }
-    groups.sort_by_cached_key(|group| (&*group.title != FIRST_BRAND, group.title.to_lowercase()));
-    for group in &mut groups {
-        group
-            .items
-            .sort_by(|first, second| first.name.cmp(&second.name));
-    }
-    ModelChoices::new(groups)
+    brands
 }
 
-fn face(keyboard: &Keyboard, labels: KeyLabels, key: usize) -> KeyFace {
-    let legend = keyboard
-        .legends
-        .get(key)
-        .map_or_default(|action| SharedString::from(usage::legend(*action)));
-    let Some(switches) = &keyboard.switches else {
-        return KeyFace {
-            legend,
-            ..KeyFace::default()
-        };
-    };
-    let switch = effective(keyboard, key);
-    let detail = match labels {
-        KeyLabels::Switch => Some(short_name(switch.model)),
-        KeyLabels::Travel => keyboard.models.get(usize::from(switch.model)).map(|model| {
-            let travel = millimetres(model.travel.saturating_sub(switch.travel_offset));
-            SharedString::from(format!("{travel:.2}"))
-        }),
-    };
-    KeyFace {
-        legend,
-        detail,
-        fill: switches
-            .keys
-            .get(key)
-            .copied()
-            .flatten()
-            .map(|own| model_color(own.model)),
-        travel: None,
-        dimmed: false,
-    }
-}
-
-fn scope_label(prefix: &'static str, value: SharedString, cx: &Context<SwitchesPage>) -> Div {
-    v_flex().gap_1().child(panel::label(prefix, cx)).child(
-        div()
-            .text_sm()
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(cx.theme().primary)
-            .child(value),
-    )
-}
-
-fn keys_text(count: usize) -> SharedString {
-    if count == 1 {
-        "1 key".into()
-    } else {
-        format!("{count} keys").into()
-    }
-}
-
-fn readout_text(text: SharedString, cx: &Context<SwitchesPage>) -> Div {
-    div()
-        .w(px(READOUT_WIDTH))
-        .text_right()
-        .text_sm()
-        .text_color(cx.theme().muted_foreground)
-        .child(text)
-}
-
-fn targets(keyboard: &Keyboard, selection: &Selection) -> Vec<Switch> {
-    let Some(switches) = &keyboard.switches else {
-        return Vec::new();
-    };
-    let factory = factory_switch(&keyboard.capabilities);
-    if selection.is_empty() {
-        vec![switches.default.unwrap_or(factory)]
-    } else {
-        selection
+fn matches(product: &catalog::Product, query: &str) -> bool {
+    product.brand.to_lowercase().contains(query)
+        || product.name.to_lowercase().contains(query)
+        || product
+            .variants
             .iter()
-            .map(|key| switches.of_key(key).unwrap_or(factory))
-            .collect()
-    }
+            .any(|variant| variant.to_lowercase().contains(query))
 }
 
-fn effective(keyboard: &Keyboard, key: usize) -> Switch {
-    let factory = factory_switch(&keyboard.capabilities);
-    keyboard
-        .switches
-        .as_ref()
-        .and_then(|switches| switches.of_key(key))
-        .unwrap_or(factory)
-}
-
-const fn factory_switch(capabilities: &Capabilities) -> Switch {
-    Switch {
-        model: if capabilities.edition.is_some() {
-            EDITION_FACTORY_MODEL
-        } else {
-            FACTORY_MODEL
-        },
-        travel_offset: 0,
-    }
-}
-
-const fn fitted(model: u8, travel: u8, offset: u8) -> Switch {
-    Switch {
-        model,
-        travel_offset: if offset < travel { offset } else { 0 },
-    }
-}
-
-fn tuned_pairs(switches: &switches::Settings) -> usize {
-    switches
-        .switches()
-        .filter(|switch| switch.is_tuned())
-        .map(|switch| (switch.model, switch.travel_offset))
-        .collect::<BTreeSet<_>>()
-        .len()
+fn product_name(model: u8) -> SharedString {
+    catalog::product(model).map_or_else(
+        || format!("Switch model {model}").into(),
+        |product| format!("{} {}", product.brand, product.name).into(),
+    )
 }
 
 fn same<T: PartialEq>(values: impl IntoIterator<Item = T>) -> Option<T> {
     let mut values = values.into_iter();
     let first = values.next()?;
     values.all(|value| value == first).then_some(first)
-}
-
-fn product_name(model: u8) -> SharedString {
-    catalog::product(model).map_or_else(
-        || unknown_name(model).into(),
-        |product| format!("{} {}", product.brand, product.name).into(),
-    )
-}
-
-fn short_name(model: u8) -> SharedString {
-    catalog::product(model).map_or_else(
-        || format!("#{model}").into(),
-        |product| product.short.into(),
-    )
-}
-
-fn unknown_name(model: u8) -> String {
-    format!("Switch model {model}")
-}
-
-fn model_color(model: u8) -> Hsla {
-    hsla(
-        (f32::from(model) * HUE_STEP).fract(),
-        MODEL_SATURATION,
-        MODEL_LIGHTNESS,
-        1.0,
-    )
-}
-
-fn millimetres(steps: u8) -> f32 {
-    f32::from(steps) * MILLIMETRES_PER_STEP
-}
-
-fn millimetres_text(value: f32) -> SharedString {
-    format!("{value:.2} mm").into()
-}
-
-fn steps_of(millimetres: f32) -> u8 {
-    let steps = (millimetres / MILLIMETRES_PER_STEP)
-        .round()
-        .clamp(0.0, f32::from(u8::MAX));
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "the value is rounded and clamped to 0..=255"
-    )]
-    let steps = steps as u8;
-    steps
 }
 
 #[cfg(test)]
@@ -805,67 +752,45 @@ mod tests {
         }
     }
 
-    fn capabilities(edition: Option<u8>) -> Capabilities {
-        Capabilities {
-            key_rows: 1,
-            key_columns: 4,
-            profiles: 1,
-            layouts: std::iter::empty().collect(),
-            lightbar_leds: 0,
-            host_signals: false,
-            switch_models: 49,
-            edition,
-        }
+    #[test]
+    fn spacers_read_on_off_or_mixed_over_the_selected_keys() {
+        assert_eq!(spacers(&[]), Spacers::Off);
+        assert_eq!(spacers(&[switch(0, 10), switch(2, 4)]), Spacers::On);
+        assert_eq!(spacers(&[switch(0, 0)]), Spacers::Off);
+        assert_eq!(spacers(&[switch(0, 10), switch(0, 0)]), Spacers::Mixed);
     }
 
     #[test]
-    fn spacer_sizes_round_to_steps_of_five_hundredths_of_a_millimetre() {
-        assert_eq!(steps_of(0.5), 10);
-        assert_eq!(steps_of(0.524), 10);
-        assert_eq!(steps_of(0.53), 11);
-        assert_eq!(steps_of(-1.0), 0);
-        assert_eq!(steps_of(100.0), u8::MAX);
-        assert!((millimetres(10) - 0.5).abs() < f32::EPSILON);
+    fn a_spacer_stays_a_millimetre_shorter_than_the_switch() {
+        let models = [Model {
+            travel: 80,
+            group: 0,
+        }];
+        assert_eq!(spacer_steps(0.5, switch(0, 0), &models), 10);
+        assert_eq!(spacer_steps(9.0, switch(0, 0), &models), 60);
     }
 
     #[test]
-    fn each_tuned_pair_of_switch_and_spacer_counts_once() {
-        let settings = switches::Settings {
-            default: Some(switch(0, 10)),
-            keys: [
-                Some(switch(0, 10)),
-                Some(switch(2, 10)),
-                None,
-                Some(switch(2, 0)),
-            ]
+    fn search_finds_brands_names_and_variants() {
+        let product = catalog::product(1).expect("the catalogue lists the Lekker Tikken");
+        assert!(matches(product, "wooting"));
+        assert!(matches(product, "tikken"));
+        assert!(matches(product, "tenz"));
+        assert!(!matches(product, "jade"));
+    }
+
+    #[test]
+    fn brands_keep_their_first_appearance_order() {
+        let models: Vec<(u8, &'static catalog::Product)> = [0, 2, 1, 3]
             .into_iter()
-            .collect(),
-        };
-        assert_eq!(tuned_pairs(&settings), 2);
+            .filter_map(|model| catalog::product(model).map(|product| (model, product)))
+            .collect();
+        assert_eq!(brands(&models), ["Wooting", "Gateron", "GEON"]);
     }
 
     #[test]
-    fn a_new_switch_keeps_a_spacer_only_while_it_is_shorter_than_its_travel() {
-        assert_eq!(fitted(2, 66, 10), switch(2, 10));
-        assert_eq!(fitted(2, 66, 66), switch(2, 0));
-    }
-
-    #[test]
-    fn keys_without_a_switch_use_the_factory_switch_of_the_unit() {
-        assert_eq!(
-            factory_switch(&capabilities(None)),
-            switch(FACTORY_MODEL, 0)
-        );
-        assert_eq!(
-            factory_switch(&capabilities(Some(9))),
-            switch(EDITION_FACTORY_MODEL, 0)
-        );
-    }
-
-    #[test]
-    fn a_shared_value_needs_every_value_to_agree() {
-        assert_eq!(same([4, 4, 4]), Some(4));
-        assert_eq!(same([4, 5]), None);
-        assert_eq!(same(Vec::<u8>::new()), None);
+    fn unknown_models_still_have_a_name() {
+        assert_eq!(product_name(200), "Switch model 200");
+        assert_eq!(product_name(2), "Gateron Jade");
     }
 }

@@ -1,10 +1,11 @@
+mod active;
 mod bar;
-mod condition_editor;
+mod conditions;
 mod entry;
-mod entry_editor;
-mod entry_list;
 mod host;
+mod led_range;
 mod number;
+mod parameters;
 mod preset;
 mod preview;
 mod swatch;
@@ -15,47 +16,67 @@ use gpui_kit::{
     AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, SharedString,
     Styled as _, Subscription, Task, Window,
     component::{
-        ActiveTheme as _,
-        color_picker::{ColorPickerEvent, ColorPickerState},
+        ActiveTheme as _, h_flex,
         input::{InputEvent, InputState},
         slider::{SliderEvent, SliderState},
         v_flex,
     },
     div,
     prelude::FluentBuilder as _,
+    px,
 };
 use openwoot_protocol::{
     configuration::{Capabilities, Validate as _},
-    endpoints::{GetGlobalLightbar, GetHostSignals, GetLightbar, SetGlobalLightbar, SetLightbar},
+    endpoints::{
+        GetGlobalLightbar, GetHostSignals, GetLightbar, GetLighting, SetGlobalLightbar, SetLightbar,
+    },
     lightbar::{self, Entries, Entry, HostSignal, HostSignalIds},
+    lighting::Rgb,
     profile::{Change, Slot},
 };
 
-use self::{entry::Matrix, number::Field, swatch::Swatch};
-use super::{
-    Page,
-    lighting::{hsla_of, level_of, opaque_of, percent_of},
-};
+use self::{entry::Matrix, led_range::Grip, number::Field, swatch::Swatch};
+use super::lighting::{level_of, percent_of};
 use crate::{
+    color_picker::{ColorPicker, ColorPickerEvent},
     panel,
     store::{Scope, Store, StoreEvent},
 };
 
 const SEND_DELAY: Duration = Duration::from_millis(150);
+const PRESETS_WIDTH: f32 = 260.0;
+const ACTIVE_WIDTH: f32 = 280.0;
+const CREATOR_ACTIVE_WIDTH: f32 = 340.0;
+const PERIOD_STEP_MS: f32 = 100.0;
+const PERIOD_MAX_MS: f32 = 10_000.0;
+const WHITE: Rgb = Rgb {
+    red: u8::MAX,
+    green: u8::MAX,
+    blue: u8::MAX,
+};
 
 pub(crate) struct LightbarPage {
     store: Entity<Store>,
     profile: Option<Slot>,
     settings: Option<lightbar::Settings>,
     global: Option<Entries>,
+    sent: Sent,
+    key_brightness: Option<u8>,
     chosen: Option<Chosen>,
+    owner: Owner,
+    tab: Tab,
+    define: bool,
+    custom_source: bool,
+    inherit_open: bool,
     led: u8,
+    grip: Option<Grip>,
     host_ids: Option<HostSignalIds>,
     host_sent: Vec<HostSignal>,
     problem: Option<SharedString>,
     brightness: Entity<SliderState>,
-    range: Option<RangeSlider>,
-    swatches: Vec<(Swatch, Entity<ColorPickerState>)>,
+    period: Entity<SliderState>,
+    search: Entity<InputState>,
+    pickers: Vec<(Swatch, Entity<ColorPicker>)>,
     fields: Vec<(Field, Entity<InputState>)>,
     generation: u64,
     pending: Pending,
@@ -69,9 +90,21 @@ enum Owner {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Presets,
+    Creator,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Chosen {
     owner: Owner,
     index: usize,
+}
+
+#[derive(Default)]
+struct Sent {
+    settings: Option<lightbar::Settings>,
+    global: Option<Entries>,
 }
 
 #[derive(Default)]
@@ -79,11 +112,6 @@ struct Pending {
     profile: bool,
     global: bool,
     timer: Option<Task<()>>,
-}
-
-struct RangeSlider {
-    state: Entity<SliderState>,
-    _subscription: Subscription,
 }
 
 impl LightbarPage {
@@ -95,36 +123,82 @@ impl LightbarPage {
                 .step(1.0)
                 .default_value(100.0)
         });
-        let swatches: Vec<(Swatch, Entity<ColorPickerState>)> = Swatch::ALL
-            .into_iter()
-            .map(|swatch| (swatch, cx.new(|cx| ColorPickerState::new(window, cx))))
-            .collect();
+        let period = cx.new(|_| {
+            SliderState::new()
+                .min(PERIOD_STEP_MS)
+                .max(PERIOD_MAX_MS)
+                .step(PERIOD_STEP_MS)
+        });
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search effects"));
+        let pickers = Self::color_pickers(window, cx);
         let fields: Vec<(Field, Entity<InputState>)> = Field::all()
             .into_iter()
             .map(|field| {
-                let state = cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .step(field.step())
-                        .placeholder(field.placeholder())
-                });
+                let state =
+                    cx.new(|cx| InputState::new(window, cx).placeholder(field.placeholder()));
                 (field, state)
             })
             .collect();
-        let subscriptions =
-            Self::subscriptions(&store, &brightness, &swatches, &fields, window, cx);
+        let mut subscriptions = vec![
+            cx.subscribe_in(&store, window, |this, _, event, window, cx| match event {
+                StoreEvent::Connected | StoreEvent::Reloaded | StoreEvent::ProfileChanged => {
+                    this.load(window, cx);
+                }
+                StoreEvent::Disconnected => this.forget(cx),
+                StoreEvent::Failed(_) => {}
+            }),
+            cx.subscribe_in(
+                &brightness,
+                window,
+                |this, _, event: &SliderEvent, window, cx| {
+                    let level = level_of(slid(event));
+                    this.edit_settings(
+                        |settings| {
+                            if settings.brightness.is_some() {
+                                settings.brightness = Some(level);
+                            }
+                        },
+                        window,
+                        cx,
+                    );
+                },
+            ),
+            cx.subscribe_in(
+                &period,
+                window,
+                |this, _, event: &SliderEvent, window, cx| {
+                    this.set_period(slid(event), window, cx);
+                },
+            ),
+            cx.subscribe_in(&search, window, |_, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            }),
+        ];
+        subscriptions.extend(Self::control_subscriptions(&pickers, &fields, window, cx));
         let mut page = Self {
             store,
             profile: None,
             settings: None,
             global: None,
+            sent: Sent::default(),
+            key_brightness: None,
             chosen: None,
+            owner: Owner::Profile,
+            tab: Tab::Presets,
+            define: true,
+            custom_source: false,
+            inherit_open: true,
             led: 0,
+            grip: None,
             host_ids: None,
             host_sent: Vec::new(),
             problem: None,
             brightness,
-            range: None,
-            swatches,
+            period,
+            search,
+            pickers,
             fields,
             generation: 0,
             pending: Pending::default(),
@@ -134,46 +208,41 @@ impl LightbarPage {
         page
     }
 
-    fn subscriptions(
-        store: &Entity<Store>,
-        brightness: &Entity<SliderState>,
-        swatches: &[(Swatch, Entity<ColorPickerState>)],
+    fn color_pickers(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<(Swatch, Entity<ColorPicker>)> {
+        Swatch::ALL
+            .into_iter()
+            .map(|swatch| {
+                let picker = cx.new(|cx| {
+                    let picker = ColorPicker::new(WHITE, window, cx);
+                    if swatch.allows_none() {
+                        picker.allow_no_color()
+                    } else {
+                        picker
+                    }
+                });
+                (swatch, picker)
+            })
+            .collect()
+    }
+
+    fn control_subscriptions(
+        pickers: &[(Swatch, Entity<ColorPicker>)],
         fields: &[(Field, Entity<InputState>)],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<Subscription> {
-        let mut subscriptions = vec![
-            cx.subscribe_in(store, window, |this, _, event, window, cx| match event {
-                StoreEvent::Connected | StoreEvent::Reloaded | StoreEvent::ProfileChanged => {
-                    this.load(window, cx);
-                }
-                StoreEvent::Disconnected => this.forget(cx),
-                StoreEvent::Failed(_) => {}
-            }),
-            cx.subscribe_in(
-                brightness,
-                window,
-                |this, _, event: &SliderEvent, window, cx| match event {
-                    SliderEvent::Change(_) => cx.notify(),
-                    SliderEvent::Release(value) => {
-                        let level = level_of(value.end());
-                        this.edit_settings(
-                            |settings| settings.brightness = Some(level),
-                            window,
-                            cx,
-                        );
-                    }
-                },
-            ),
-        ];
-        for (swatch, picker) in swatches {
+        let mut subscriptions = Vec::new();
+        for (swatch, picker) in pickers {
             let swatch = *swatch;
             subscriptions.push(cx.subscribe_in(
                 picker,
                 window,
                 move |this, _, event: &ColorPickerEvent, window, cx| {
-                    if let ColorPickerEvent::Change(Some(color)) = event {
-                        let color = opaque_of(*color);
+                    if let ColorPickerEvent::Change(color) = event {
+                        let color = *color;
                         let (led, leds) = (this.led, this.leds(cx));
                         this.edit_chosen(
                             |entry| swatch.set(&mut entry.effect, led, leds, color),
@@ -189,11 +258,12 @@ impl LightbarPage {
             subscriptions.push(cx.subscribe_in(
                 state,
                 window,
-                move |this, state, event: &InputEvent, window, cx| {
-                    if matches!(event, InputEvent::Change) {
+                move |this, state, event: &InputEvent, window, cx| match event {
+                    InputEvent::PressEnter { .. } | InputEvent::Blur => {
                         let text = state.read(cx).value();
                         this.field_changed(field, &text, window, cx);
                     }
+                    InputEvent::Change | InputEvent::Focus => {}
                 },
             ));
         }
@@ -207,16 +277,15 @@ impl LightbarPage {
         let keyboard = self.store.read(cx).keyboard();
         let host_signals = keyboard.is_some_and(|keyboard| keyboard.capabilities.host_signals);
         let leds = keyboard.map_or(0, |keyboard| keyboard.capabilities.lightbar_leds);
-        let has_bar = leds > 0;
-        self.prepare_range(leds, window, cx);
-        self.profile = self.store.read(cx).active();
-        self.settings = None;
-        self.global = None;
-        self.chosen = None;
-        self.host_ids = None;
+        let profile = self.store.read(cx).active().filter(|_| leds > 0);
+        if profile != self.profile {
+            self.chosen = None;
+        }
+        self.profile = profile;
         self.problem = None;
         cx.notify();
-        let Some(profile) = self.profile.filter(|_| has_bar) else {
+        let Some(profile) = profile else {
+            self.forget(cx);
             return;
         };
         let settings = self
@@ -225,6 +294,9 @@ impl LightbarPage {
         let global = self
             .store
             .update(cx, |store, cx| store.fetch::<GetGlobalLightbar, _>((), cx));
+        let lighting = self
+            .store
+            .update(cx, |store, cx| store.fetch::<GetLighting, _>(profile, cx));
         let ids = host_signals.then(|| {
             self.store
                 .update(cx, |store, cx| store.fetch::<GetHostSignals, _>((), cx))
@@ -232,6 +304,7 @@ impl LightbarPage {
         cx.spawn_in(window, async move |this, cx| {
             let settings = settings.await.ok();
             let global = global.await.ok();
+            let key_brightness = lighting.await.ok().map(|lighting| lighting.brightness);
             let ids = match ids {
                 Some(ids) => ids.await.ok(),
                 None => None,
@@ -240,11 +313,15 @@ impl LightbarPage {
                 if page.generation != generation {
                     return;
                 }
-                page.chosen = first_entry(settings.as_ref(), global.as_ref());
                 page.settings = settings;
                 page.global = global;
+                page.sent = Sent {
+                    settings: page.settings.clone(),
+                    global: page.global.clone(),
+                };
+                page.key_brightness = key_brightness;
                 page.host_ids = ids;
-                page.led = 0;
+                page.keep_chosen();
                 page.sync_controls(window, cx);
                 cx.notify();
             })
@@ -259,55 +336,11 @@ impl LightbarPage {
         self.profile = None;
         self.settings = None;
         self.global = None;
+        self.sent = Sent::default();
         self.chosen = None;
         self.host_ids = None;
         self.problem = None;
         cx.notify();
-    }
-
-    fn prepare_range(&mut self, leds: u8, window: &mut Window, cx: &mut Context<Self>) {
-        let last = leds.saturating_sub(1);
-        if last == 0 {
-            self.range = None;
-            return;
-        }
-        let maximum = f32::from(last);
-        if self
-            .range
-            .as_ref()
-            .is_some_and(|range| (range.state.read(cx).max_value() - maximum).abs() < f32::EPSILON)
-        {
-            return;
-        }
-        let state = cx.new(|_| {
-            SliderState::new()
-                .min(0.0)
-                .max(maximum)
-                .step(1.0)
-                .default_value((0.0, maximum))
-        });
-        let subscription = cx.subscribe_in(
-            &state,
-            window,
-            |this, _, event: &SliderEvent, window, cx| match event {
-                SliderEvent::Change(_) => cx.notify(),
-                SliderEvent::Release(value) => {
-                    let (first, last) = (led_of(value.start()), led_of(value.end()));
-                    this.edit_range(
-                        move |range| {
-                            range.first = first;
-                            range.last = last;
-                        },
-                        window,
-                        cx,
-                    );
-                }
-            },
-        );
-        self.range = Some(RangeSlider {
-            state,
-            _subscription: subscription,
-        });
     }
 
     fn capabilities(&self, cx: &Context<Self>) -> Option<Capabilities> {
@@ -358,6 +391,16 @@ impl LightbarPage {
         self.entries(chosen.owner)?.get(chosen.index)
     }
 
+    fn keep_chosen(&mut self) {
+        if let Some(chosen) = self.chosen
+            && self
+                .entries(chosen.owner)
+                .is_none_or(|entries| chosen.index >= entries.len())
+        {
+            self.chosen = None;
+        }
+    }
+
     fn field(&self, field: Field) -> Option<&Entity<InputState>> {
         self.fields
             .iter()
@@ -365,19 +408,20 @@ impl LightbarPage {
             .map(|(_, state)| state)
     }
 
-    fn swatch(&self, swatch: Swatch) -> Option<&Entity<ColorPickerState>> {
-        self.swatches
+    fn picker(&self, swatch: Swatch) -> Option<&Entity<ColorPicker>> {
+        self.pickers
             .iter()
             .find(|(other, _)| *other == swatch)
             .map(|(_, picker)| picker)
     }
 
     fn sync_controls(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(level) = self
+        let level = self
             .settings
             .as_ref()
             .and_then(|settings| settings.brightness)
-        {
+            .or(self.key_brightness);
+        if let Some(level) = level {
             let percent = percent_of(level);
             self.brightness
                 .update(cx, |slider, cx| slider.set_value(percent, window, cx));
@@ -387,14 +431,11 @@ impl LightbarPage {
 
     fn sync_entry_controls(&self, window: &mut Window, cx: &mut Context<Self>) {
         let entry = self.chosen_entry().cloned();
-        for (swatch, picker) in &self.swatches {
-            if let Some(color) = entry
-                .as_ref()
-                .and_then(|entry| swatch.color(&entry.effect, self.led))
+        for (swatch, picker) in &self.pickers {
+            if let Some(entry) = &entry
+                && let Some(shade) = swatch.color(&entry.effect, self.led)
             {
-                picker.update(cx, |picker, cx| {
-                    picker.set_value(hsla_of(color.rgb()), window, cx);
-                });
+                picker.update(cx, |picker, cx| picker.set_value(shade.rgb(), window, cx));
             }
         }
         for (field, state) in &self.fields {
@@ -407,16 +448,13 @@ impl LightbarPage {
                 .unwrap_or_default();
             state.update(cx, |state, cx| state.set_value(text, window, cx));
         }
-        if let (Some(range), Some(slider)) = (
-            entry
-                .as_ref()
-                .and_then(|entry| entry::lightbar_range(&entry.effect)),
-            &self.range,
-        ) {
-            let value = (f32::from(range.first), f32::from(range.last));
-            slider
-                .state
-                .update(cx, |state, cx| state.set_value(value, window, cx));
+        if let Some(period) = entry
+            .as_ref()
+            .and_then(|entry| entry::period_ms(&entry.effect))
+        {
+            let value = f32::from(period).clamp(PERIOD_STEP_MS, PERIOD_MAX_MS);
+            self.period
+                .update(cx, |slider, cx| slider.set_value(value, window, cx));
         }
     }
 
@@ -428,6 +466,7 @@ impl LightbarPage {
         cx: &mut Context<Self>,
     ) {
         if text.trim().is_empty() {
+            self.sync_entry_controls(window, cx);
             return;
         }
         match field.parse(text) {
@@ -442,7 +481,21 @@ impl LightbarPage {
             Ok(number) => {
                 self.problem = None;
                 self.edit_chosen(|entry| field.apply(entry, number), window, cx);
+                self.sync_entry_controls(window, cx);
             }
+        }
+    }
+
+    fn set_period(&mut self, value: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let period = number::millis(value.clamp(PERIOD_STEP_MS, PERIOD_MAX_MS));
+        self.edit_chosen(
+            |entry| entry::set_period_ms(&mut entry.effect, period),
+            window,
+            cx,
+        );
+        if let Some(state) = self.field(Field::Period).cloned() {
+            let text = number::seconds_text(period);
+            state.update(cx, |state, cx| state.set_value(text, window, cx));
         }
     }
 
@@ -455,7 +508,11 @@ impl LightbarPage {
         let Some(settings) = &mut self.settings else {
             return;
         };
+        let before = settings.clone();
         change(settings);
+        if *settings == before {
+            return;
+        }
         self.pending.profile = true;
         self.schedule(window, cx);
         cx.notify();
@@ -471,7 +528,11 @@ impl LightbarPage {
         let Some(entries) = self.entries_mut(owner) else {
             return;
         };
+        let before = entries.clone();
         change(entries);
+        if *entries == before {
+            return;
+        }
         match owner {
             Owner::Profile => self.pending.profile = true,
             Owner::Global => self.pending.global = true,
@@ -520,26 +581,40 @@ impl LightbarPage {
         };
         let mut problem = None;
         let mut sent = Vec::new();
-        if profile_changed && let Some(settings) = self.settings.clone() {
-            match settings.validate(&capabilities) {
-                Ok(()) => sent.push(self.store.update(cx, |store, cx| {
-                    store.apply::<SetLightbar>(
-                        Change {
-                            profile,
-                            value: settings,
-                        },
-                        Scope::Profile(profile),
-                        cx,
-                    )
-                })),
+        if profile_changed
+            && let (Some(before), Some(after)) = (self.sent.settings.clone(), self.settings.clone())
+        {
+            match after.validate(&capabilities) {
+                Ok(()) => {
+                    self.sent.settings = Some(after.clone());
+                    sent.push(self.store.update(cx, |store, cx| {
+                        store.change::<SetLightbar>(
+                            &Change {
+                                profile,
+                                value: before,
+                            },
+                            Change {
+                                profile,
+                                value: after,
+                            },
+                            Scope::Profile(profile),
+                            cx,
+                        )
+                    }));
+                }
                 Err(invalid) => problem = Some(invalid),
             }
         }
-        if global_changed && let Some(global) = self.global.clone() {
-            match global.validate(&capabilities) {
-                Ok(()) => sent.push(self.store.update(cx, |store, cx| {
-                    store.apply::<SetGlobalLightbar>(global, Scope::Keyboard, cx)
-                })),
+        if global_changed
+            && let (Some(before), Some(after)) = (self.sent.global.clone(), self.global.clone())
+        {
+            match after.validate(&capabilities) {
+                Ok(()) => {
+                    self.sent.global = Some(after.clone());
+                    sent.push(self.store.update(cx, |store, cx| {
+                        store.change::<SetGlobalLightbar>(&before, after, Scope::Keyboard, cx)
+                    }));
+                }
                 Err(invalid) => problem = Some(invalid),
             }
         }
@@ -566,54 +641,55 @@ impl LightbarPage {
 
 impl Render for LightbarPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        panel::page()
+        let cards = match self.tab {
+            Tab::Presets => h_flex()
+                .w_full()
+                .gap_4()
+                .items_start()
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(PRESETS_WIDTH))
+                        .children(self.presets_card(cx)),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(ACTIVE_WIDTH))
+                        .children(self.active_card(cx)),
+                )
+                .child(div().flex_1().min_w_0().children(self.parameters_card(cx))),
+            Tab::Creator => h_flex()
+                .w_full()
+                .gap_4()
+                .items_start()
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(CREATOR_ACTIVE_WIDTH))
+                        .children(self.active_card(cx)),
+                )
+                .child(div().flex_1().min_w_0().children(self.parameters_card(cx))),
+        };
+        let stage = v_flex()
+            .gap_4()
             .children(self.preview(window, cx))
-            .child(panel::heading(
-                Page::Lightbar.title(),
-                Some("The LED strip along the top edge of the keyboard.".into()),
-                div(),
-                cx,
-            ))
+            .children(self.brightness_row(cx));
+        let body = v_flex()
+            .w_full()
+            .gap_5()
+            .children(self.heading(cx))
             .when_some(self.problem.clone(), |this, problem| {
                 this.child(div().text_xs().text_color(cx.theme().danger).child(problem))
             })
-            .child(panel::columns(
-                v_flex()
-                    .gap_4()
-                    .children(self.bar_card(cx))
-                    .children(self.effects_card(cx)),
-                v_flex()
-                    .gap_4()
-                    .children(self.effect_card(cx))
-                    .children(self.condition_card(cx))
-                    .children(self.host_card(cx)),
-            ))
+            .when(self.settings.is_some(), |this| this.child(cards))
+            .children(self.host_card(cx));
+        panel::page_with_stage("lightbar-body", stage, body)
     }
 }
 
-fn first_entry(settings: Option<&lightbar::Settings>, global: Option<&Entries>) -> Option<Chosen> {
-    if settings.is_some_and(|settings| !settings.entries.is_empty()) {
-        Some(Chosen {
-            owner: Owner::Profile,
-            index: 0,
-        })
-    } else if global.is_some_and(|global| !global.is_empty()) {
-        Some(Chosen {
-            owner: Owner::Global,
-            index: 0,
-        })
-    } else {
-        None
+fn slid(event: &SliderEvent) -> f32 {
+    match event {
+        SliderEvent::Change(value) | SliderEvent::Release(value) => value.end(),
     }
-}
-
-fn led_of(position: f32) -> u8 {
-    let clamped = position.round().clamp(0.0, f32::from(u8::MAX));
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "the value is rounded and clamped to 0..=255"
-    )]
-    let led = clamped as u8;
-    led
 }

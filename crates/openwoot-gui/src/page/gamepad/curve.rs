@@ -130,24 +130,35 @@ pub(super) fn travel_level(travel: u16) -> f32 {
 }
 
 pub(super) fn output(curve: Curve, level: f32) -> f32 {
-    if level <= 0.0 {
+    let normalized = normalize(curve, level);
+    if normalized <= 0.0 {
         return 0.0;
     }
-    let level = level.min(1.0);
-    let [dead_zone, knee_low, knee_high, saturation] = curve;
+    respond(curve, normalized)
+}
+
+pub(super) fn normalize(curve: Curve, level: f32) -> f32 {
+    let level = level.clamp(0.0, 1.0);
+    let [dead_zone, .., saturation] = curve;
     if saturation.travel <= dead_zone.travel {
         return level;
     }
     let start = f32::from(dead_zone.travel) / POINT_SCALE;
     let end = f32::from(saturation.travel) / POINT_SCALE;
-    if level <= start {
-        return 0.0;
-    }
-    let level = if level > end {
+    if level < start {
+        0.0
+    } else if level > end {
         1.0
     } else {
         (level - start) / (end - start)
-    };
+    }
+}
+
+pub(super) fn respond(curve: Curve, level: f32) -> f32 {
+    let [dead_zone, knee_low, knee_high, saturation] = curve;
+    if saturation.travel <= dead_zone.travel {
+        return level;
+    }
     let span =
         |point: CurvePoint| f32::from(point.travel.wrapping_sub(dead_zone.travel)) / POINT_SCALE;
     let range = span(saturation);
@@ -168,17 +179,6 @@ pub(super) fn output(curve: Curve, level: f32) -> f32 {
         }
     };
     shaped.min(1.0)
-}
-
-pub(super) fn percent(value: f32) -> u8 {
-    let rounded = (value * 100.0).round().clamp(0.0, 100.0);
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "the value is rounded and clamped to 0..=100"
-    )]
-    let percent = rounded as u8;
-    percent
 }
 
 pub(super) fn point_value(value: f32) -> u8 {
@@ -297,8 +297,8 @@ mod tests {
     #[test]
     fn the_linear_preset_saturates_before_full_travel() {
         let linear = PRESETS.first().map(|preset| preset.curve);
-        assert_eq!(linear.map(|curve| percent(output(curve, 0.995))), Some(100));
-        assert_eq!(linear.map(|curve| percent(output(curve, 0.001))), Some(8));
+        assert!(linear.is_some_and(|curve| (output(curve, 0.995) - 1.0).abs() < 1e-6));
+        assert!(linear.is_some_and(|curve| (output(curve, 0.001) - 20.0 / 255.0).abs() < 0.01));
     }
 
     #[test]

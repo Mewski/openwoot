@@ -4,40 +4,40 @@ const REDRAW_INTERVAL: Duration = Duration::from_millis(250);
 const HIDDEN_AFTER: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct Visibility {
+pub(crate) struct Visibility {
     rendered_at: Instant,
     notified_at: Option<Instant>,
 }
 
 impl Visibility {
-    pub(super) const fn new(now: Instant) -> Self {
+    pub(crate) const fn new(now: Instant) -> Self {
         Self {
             rendered_at: now,
             notified_at: None,
         }
     }
 
-    pub(super) const fn rendered(&mut self, now: Instant) {
+    pub(crate) const fn rendered(&mut self, now: Instant) {
         self.rendered_at = now;
     }
 
-    pub(super) const fn restart(&mut self, now: Instant) {
+    pub(crate) const fn restart(&mut self, now: Instant) {
         self.rendered_at = now;
         self.notified_at = None;
     }
 
-    pub(super) fn is_shown(&self, now: Instant) -> bool {
+    pub(crate) fn is_shown(&self, now: Instant) -> bool {
         self.notified_at.is_none_or(|notified| {
             self.rendered_at >= notified || now.duration_since(notified) < HIDDEN_AFTER
         })
     }
 
-    pub(super) fn redraw_due(&self, now: Instant) -> bool {
+    pub(crate) fn redraw_due(&self, now: Instant) -> bool {
         self.notified_at
             .is_none_or(|notified| now.duration_since(notified) >= REDRAW_INTERVAL)
     }
 
-    pub(super) fn notified(&mut self, now: Instant) {
+    pub(crate) fn notified(&mut self, now: Instant) {
         if self
             .notified_at
             .is_none_or(|notified| self.rendered_at >= notified)
