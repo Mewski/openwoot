@@ -15,7 +15,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libfontconfig-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev
       - run: rustup toolchain install
       - run: rustup toolchain install "$OPENWOOT_NIGHTLY" --profile minimal --component rustfmt
@@ -28,7 +28,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends libfontconfig-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev
       - run: rustup toolchain install
       - run: cargo test --workspace --locked
@@ -36,7 +36,7 @@ jobs:
   pac:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: rustup toolchain install
       - run: rustup toolchain install "$OPENWOOT_NIGHTLY" --profile minimal --component rustfmt
       - run: cargo install --locked svd2rust@0.37.1 form@0.13.0
@@ -48,7 +48,7 @@ jobs:
     outputs:
       boards: ${{ steps.list.outputs.boards }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: rustup toolchain install
       - id: list
         run: |
@@ -62,7 +62,7 @@ jobs:
       matrix:
         board: ${{ fromJSON(needs.boards.outputs.boards) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: rustup toolchain install
       - run: cargo xtask build ${{ matrix.board }}
       - run: cargo xtask flash ${{ matrix.board }} --dry-run
