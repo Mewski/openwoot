@@ -327,3 +327,91 @@ fn blocks_of_another_size_are_not_sent() {
     assert_eq!(result, Err(Error::BlockSizeUnsupported(128)));
     assert_eq!(bootloader.0.borrow().commands, Vec::<u8>::new());
 }
+
+#[test]
+fn a_bootloader_with_256_byte_reports_takes_each_block_in_one_report() {
+    let bootloader = Bootloader::new();
+    let state = block_on(Session::new(bootloader.clone()).state()).unwrap();
+    assert_eq!(state.report_len, 256);
+    let (result, _) = install(&bootloader);
+    result.unwrap();
+    assert_eq!(bootloader.0.borrow().outputs, [256; BLOCKS]);
+}
+
+#[test]
+fn a_bootloader_with_64_byte_reports_answers_in_four_and_takes_each_block_in_four() {
+    let upload = Upload::new(&image(), BLOCK_SIZE);
+    let bootloader = Bootloader::with_split_reports();
+    let mut session = Session::new(bootloader.clone());
+    let state = block_on(session.state()).unwrap();
+    assert_eq!(
+        state.flags.unwrap().to_string(),
+        "0x02 (update mode requested by the firmware)"
+    );
+    assert_eq!(state.version.as_deref(), Some("2.0"));
+    assert_eq!(state.serial.as_deref(), Some("A02B2437W08T00100S03H00250"));
+    assert_eq!(state.session_crc, Some(0));
+    assert_eq!(state.report_len, 64);
+    assert_eq!(bootloader.0.borrow().timeouts.len(), 5 * 4);
+    let mut progress = Vec::new();
+    block_on(session.install(&upload, |written| progress.push(written))).unwrap();
+    assert_eq!(progress, (1..=BLOCKS).collect::<Vec<_>>());
+    let state = bootloader.0.borrow();
+    assert_eq!(state.flash[..upload.bytes.len()], upload.bytes);
+    assert_eq!(state.outputs, [64; BLOCKS * 4]);
+    assert_eq!(state.marker, 0);
+    assert_eq!(state.rebooted_with, Some(1));
+}
+
+#[test]
+fn a_reply_in_reports_of_another_size_than_before_is_refused() {
+    let bootloader = Bootloader::with_split_reports();
+    bootloader.0.borrow_mut().faults.report_lens_to = Some((1, vec![64, 128, 64]));
+    assert_eq!(
+        block_on(Session::new(bootloader).state()),
+        Err(Error::ReportSizeChanged {
+            command: Command::Version,
+            len: 128,
+            expected: 64
+        })
+    );
+}
+
+#[test]
+fn a_whole_reply_after_split_replies_is_refused() {
+    let bootloader = Bootloader::with_split_reports();
+    bootloader.0.borrow_mut().faults.report_lens_to = Some((9, vec![256]));
+    assert_eq!(
+        block_on(Session::new(bootloader).state()),
+        Err(Error::ReportSizeChanged {
+            command: Command::Serial,
+            len: 256,
+            expected: 64
+        })
+    );
+}
+
+#[test]
+fn a_report_longer_than_a_reply_is_refused() {
+    let bootloader = Bootloader::new();
+    bootloader.0.borrow_mut().faults.report_lens_to = Some((1, vec![300]));
+    assert_eq!(
+        block_on(Session::new(bootloader).state()),
+        Err(Error::ReportTooLong {
+            command: Command::Version
+        })
+    );
+}
+
+#[test]
+fn reports_of_a_size_the_bootloader_protocol_does_not_use_are_refused() {
+    let bootloader = Bootloader::new();
+    bootloader.0.borrow_mut().faults.report_lens_to = Some((0, vec![128, 128]));
+    assert_eq!(
+        block_on(Session::new(bootloader).state()),
+        Err(Error::ReportSizeUnsupported {
+            command: Command::Ping,
+            len: 128
+        })
+    );
+}

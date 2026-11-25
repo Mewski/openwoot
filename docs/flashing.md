@@ -7,9 +7,10 @@ or to the stock firmware. This guide is about the Wooting 80HE: its bootloader a
 protocol are known. For the Wooting 60HE+ they are not, its image descriptor names no update mode,
 and `openwoot flash` refuses it before it touches a device.
 
-The firmware runs on one Wooting 80HE; other units and bootloader versions are untested. Before
-you flash it, practise the [recovery key combination](#recovery-with-the-key-combination); it is
-the way back from an image that does not start.
+The firmware runs on two Wooting 80HE units, a TenZ edition and a regular one; other units and
+bootloader versions are untested. Before you flash it, practise the [recovery key
+combination](#recovery-with-the-key-combination); it is the way back from an image that does not
+start.
 
 ## What you need
 
@@ -73,7 +74,8 @@ cargo run --release -p openwoot-cli -- flash build/wooting-80he/openwoot-wooting
 The command repeats the checks of the dry run, then finds the keyboard by the USB ids in the
 image descriptor:
 
-1. **Keyboard in update mode** (`31e3:140f`, "Wooting Restore (80HE)"): it is used as it is.
+1. **Keyboard in update mode** (`31e3:140f`, "Wooting Restore (80HE)" or "Wooting Restore",
+   see [bootloader versions](#bootloader-versions)): it is used as it is.
 2. **Keyboard running openwoot**: the tool reads the version over the configuration channel and
    sends the request `EnterUpdateMode`; the firmware answers and resets into update mode. An
    openwoot build that answers either request with an error, such as a build with another protocol
@@ -89,15 +91,15 @@ Either way the keyboard appears in update mode within a few seconds (the tool wa
 until the transfer starts nothing in flash has changed.
 
 In update mode the tool prints what the bootloader reports (why it is in update mode, its version,
-the serial number, the CRC of this session; `not reported` where the bootloader refuses a value),
-then:
+the size of its reports, the serial number, the CRC of this session; `not reported` where the
+bootloader refuses a value), then:
 
 1. unlocks the write commands and starts the upload. **From this moment the installed firmware
    counts as invalid**: until an update completes, the bootloader stays in update mode at every
    start, also after unplugging;
-2. sends the blocks in ascending order, each as one 256-byte output report followed by the write
-   command; a progress bar on stderr shows them. The bootloader erases each 4 KiB page when its
-   first block arrives;
+2. sends the blocks in ascending order, each as one 256-byte output report or four 64-byte ones
+   ([bootloader versions](#bootloader-versions)) followed by the write command; a progress bar on
+   stderr shows them. The bootloader erases each 4 KiB page when its first block arrives;
 3. asks the bootloader for the index of the block written last and the CRC-24 over what was
    written, and compares both with the image. The bootloader verifies nothing itself; this
    comparison is the only check of the transfer;
@@ -118,6 +120,32 @@ touched by an update.
 `openwoot version` then prints the firmware and protocol version that openwoot reports over its
 configuration channel (interface 2, usage page `0xff55`), and names the tool's own protocol version
 when the two differ.
+
+## Bootloader versions
+
+Two versions of the factory bootloader are known. Both take every command as a 7-byte feature
+report with report id 0 (`df db`, the command, its parameter as 4 bytes little endian), answer it
+with a reply of 256 bytes (`df db`, an echo byte, the status, the body length, the body, zero
+padding) in input reports, and take each 256-byte block in output reports with report id 0. They
+differ in the size of those reports:
+
+| | version 2.3 | version 2.0 |
+| --- | --- | --- |
+| found on | Wooting 80HE TenZ edition | Wooting 80HE |
+| product string in update mode | "Wooting Restore (80HE)" | "Wooting Restore" |
+| input and output reports | 256 bytes | 64 bytes |
+| a reply | one input report | four input reports: the first 64 bytes of the reply, then three of zero padding |
+| a block | one output report | four output reports of 64 bytes, in order |
+| echo byte | the command number | always `0xff` |
+
+The tool takes the report size from the first input report of a session, the answer to the ping:
+64 or 256 bytes, any other size ends the session before anything is written. It then assembles
+every reply from input reports until it holds 256 bytes, refuses a report of another size than
+the first one, and sends every block as output reports of that size; both versions use one size
+for input and output reports. It takes `0xff` as the echo of any command. Wootility chooses by the
+size of the output report in the report descriptor, which `async-hid` does not expose: 256 bytes,
+64 bytes in four parts, or, with 128 bytes, an older protocol that openwoot does not implement.
+`openwoot flash` prints the size it found as `report size`.
 
 ## An interrupted update
 
@@ -142,7 +170,8 @@ firmware, so this works whatever the installed image does:
 1. unplug the keyboard;
 2. press the **top-right key** and the **Right arrow key** all the way down and hold them;
 3. plug the keyboard in while holding them; both keys must be fully down before the plug goes in;
-4. the two keys light blue and the keyboard appears as "Wooting Restore (80HE)"; release the keys;
+4. the two keys light blue and the keyboard appears in update mode ("Wooting Restore (80HE)" or
+   "Wooting Restore"); release the keys;
 5. run `openwoot flash` with a known good image.
 
 If the firmware starts instead, the keys were not fully down in time: unplug and try again. To
@@ -188,5 +217,6 @@ the bootloader.
 - **The CRC-24 is weak.** The bootloader defines it: each 16-bit word is combined with the CRC
   shifted by one bit, so some two-bit errors cancel out (bit 0 of one word with bit 1 of the next).
   It is still the only check of the transfer: the bootloader has no command that reads flash back.
-- **One keyboard, one bootloader version.** The protocol is confirmed on a Wooting 80HE with
-  bootloader version 2.3; `openwoot flash` prints the version it finds.
+- **Two keyboards, two bootloader versions.** The protocol is confirmed on a Wooting 80HE TenZ
+  edition with bootloader version 2.3 and on a regular Wooting 80HE with version 2.0;
+  `openwoot flash` prints the version and the report size it finds.

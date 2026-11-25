@@ -3,7 +3,7 @@ use std::time::Duration;
 use async_io::Timer;
 
 use crate::{
-    bootloader::{Port, REQUEST_LEN, Reply, Request},
+    bootloader::{Port, REQUEST_LEN, Request},
     transfer::{self, Reports},
 };
 
@@ -31,17 +31,17 @@ impl<R: Reports> Port for UpdateMode<R> {
         self.0.write_feature(&report).await
     }
 
-    async fn send_block(&mut self, block: &[u8]) -> Result<(), transfer::Error> {
-        let report: Vec<u8> = [NO_REPORT_ID].iter().chain(block).copied().collect();
+    async fn send_report(&mut self, report: &[u8]) -> Result<(), transfer::Error> {
+        let report: Vec<u8> = [NO_REPORT_ID].iter().chain(report).copied().collect();
         self.0.write_output(&report).await
     }
 
-    async fn receive_reply(
+    async fn receive_report(
         &mut self,
-        reply: &mut Reply,
+        report: &mut [u8],
         timeout: Duration,
     ) -> Result<Option<usize>, transfer::Error> {
-        self.0.read_input(reply, timeout).await
+        self.0.read_input(report, timeout).await
     }
 
     async fn pause(&mut self, duration: Duration) {
@@ -99,7 +99,7 @@ mod tests {
         let block: Vec<u8> = (0..=255).collect();
         let mut port = UpdateMode::new(Recorded::default());
         block_on(port.send_request(&request)).unwrap();
-        block_on(port.send_block(&block)).unwrap();
+        block_on(port.send_report(&block)).unwrap();
         let Recorded { outputs, features } = port.0;
         assert_eq!(features, [vec![0, 0xDF, 0xDB, 6, 0xBB, 0xFF, 0xAA, 0xFF]]);
         let mut report = vec![0];

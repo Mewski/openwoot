@@ -211,6 +211,7 @@ impl Console {
                         .version
                         .map_or_else(not_reported, |version| format!("version {version}")),
                 )?;
+                show("report size", format!("{} bytes", state.report_len))?;
                 show("serial", state.serial.unwrap_or_else(not_reported))?;
                 show(
                     "session crc",

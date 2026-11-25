@@ -1,7 +1,7 @@
-use std::{cell::RefCell, future::ready, rc::Rc, time::Duration};
+use std::{cell::RefCell, collections::VecDeque, future::ready, rc::Rc, time::Duration};
 
 use openwoot_host::{
-    bootloader::{Port, REPLY_LEN, Reply, Request},
+    bootloader::{Port, REPLY_LEN, Request, SPLIT_REPORT_LEN},
     transfer,
 };
 
@@ -30,6 +30,7 @@ pub(super) struct Faults {
     pub repeated_reply_to: Option<u8>,
     pub last_block_off_by_one: bool,
     pub failed_restart: bool,
+    pub report_lens_to: Option<(u8, Vec<usize>)>,
 }
 
 #[derive(Debug)]
@@ -37,7 +38,11 @@ pub(super) struct State {
     pub flash: Vec<u8>,
     pub marker: u32,
     pub flags: u8,
+    pub version: [u8; 2],
     pub serial: Option<String>,
+    pub report_len: usize,
+    pub echoes_command: bool,
+    pub outputs: Vec<usize>,
     pub commands: Vec<u8>,
     pub parameters: Vec<u32>,
     pub timeouts: Vec<Duration>,
@@ -49,7 +54,7 @@ pub(super) struct State {
     current: Vec<u8>,
     last_block: u32,
     crc_end: usize,
-    pending: Option<Reply>,
+    pending: VecDeque<(u8, Vec<u8>)>,
     disconnected: bool,
 }
 
@@ -62,7 +67,11 @@ impl Bootloader {
             flash: vec![0xA5; APPLICATION_BLOCKS as usize * BLOCK_LEN],
             marker: 0,
             flags: 0x02,
+            version: [2, 3],
             serial: Some("A1B2C3D4E5F6".to_owned()),
+            report_len: REPLY_LEN,
+            echoes_command: true,
+            outputs: Vec::new(),
             commands: Vec::new(),
             parameters: Vec::new(),
             timeouts: Vec::new(),
@@ -74,9 +83,21 @@ impl Bootloader {
             current: vec![0; BLOCK_LEN],
             last_block: 0,
             crc_end: 0,
-            pending: None,
+            pending: VecDeque::new(),
             disconnected: false,
         })))
+    }
+
+    pub(super) fn with_split_reports() -> Self {
+        let bootloader = Self::new();
+        {
+            let mut state = bootloader.0.borrow_mut();
+            state.version = [2, 0];
+            state.serial = Some("A02B2437W08T00100S03H00250".to_owned());
+            state.report_len = SPLIT_REPORT_LEN;
+            state.echoes_command = false;
+        }
+        bootloader
     }
 }
 
@@ -119,7 +140,7 @@ impl State {
                 }
                 (EXECUTED, vec![!parameter.to_le_bytes()[0], self.flags])
             }
-            1 => (EXECUTED, vec![2, 3]),
+            1 => (EXECUTED, self.version.to_vec()),
             2 if (1..=0xFFFF).contains(&parameter) => {
                 self.marker = u32::MAX;
                 (EXECUTED, Vec::new())
@@ -195,13 +216,13 @@ impl State {
         let Ok(length) = u8::try_from(body.len()) else {
             return;
         };
-        if self.pending.is_some() {
+        if !self.pending.is_empty() {
             return;
         }
-        let echo = if self.faults.echo_any_to == Some(command) {
-            ECHO_ANY
-        } else {
+        let echo = if self.echoes_command && self.faults.echo_any_to != Some(command) {
             command
+        } else {
+            ECHO_ANY
         };
         let second = if self.faults.wrong_magic_to == Some(command) {
             MAGIC[1] ^ 0x01
@@ -209,11 +230,27 @@ impl State {
             MAGIC[1]
         };
         let header = [MAGIC[0], second, echo, status, length];
-        let mut reply = [0; REPLY_LEN];
-        for (cell, byte) in reply.iter_mut().zip(header.iter().chain(body)) {
-            *cell = *byte;
+        let lens = match &self.faults.report_lens_to {
+            Some((faulty, lens)) if *faulty == command => lens.clone(),
+            _ => vec![self.report_len; REPLY_LEN / self.report_len],
+        };
+        let copies = if self.faults.repeated_reply_to == Some(command) {
+            self.faults.repeated_reply_to = None;
+            2
+        } else {
+            1
+        };
+        for _ in 0..copies {
+            let mut reply = header
+                .iter()
+                .chain(body)
+                .copied()
+                .chain(std::iter::repeat(0));
+            for &len in &lens {
+                self.pending
+                    .push_back((command, reply.by_ref().take(len).collect()));
+            }
         }
-        self.pending = Some(reply);
     }
 
     fn accept_request(&mut self, request: Request) -> Result<(), transfer::Error> {
@@ -235,9 +272,16 @@ impl State {
         Ok(())
     }
 
-    fn accept_block(&mut self, block: &[u8]) -> Result<(), transfer::Error> {
+    fn accept_report(&mut self, report: &[u8]) -> Result<(), transfer::Error> {
         self.connected()?;
-        for &byte in block {
+        if report.len() != self.report_len {
+            return Err(transfer::Error::Failed(format!(
+                "an output report of {} bytes",
+                report.len()
+            )));
+        }
+        self.outputs.push(report.len());
+        for &byte in report {
             self.staging.push(byte);
             if self.staging.len() == BLOCK_LEN {
                 self.current = std::mem::take(&mut self.staging);
@@ -246,33 +290,31 @@ impl State {
         Ok(())
     }
 
-    fn take_reply(
+    fn take_report(
         &mut self,
-        reply: &mut Reply,
+        report: &mut [u8],
         timeout: Duration,
     ) -> Result<Option<usize>, transfer::Error> {
         self.connected()?;
         self.timeouts.push(timeout);
-        let Some(pending) = self.pending.take() else {
+        let Some((command, pending)) = self.pending.pop_front() else {
             return Ok(None);
         };
-        let [_, _, command, ..] = pending;
         if self.faults.empty_reply_to == Some(command) {
+            self.pending.clear();
             return Ok(Some(0));
         }
-        if self.faults.repeated_reply_to == Some(command) {
-            self.faults.repeated_reply_to = None;
-            self.pending = Some(pending);
+        for (cell, byte) in report.iter_mut().zip(&pending) {
+            *cell = *byte;
         }
-        *reply = pending;
-        Ok(Some(REPLY_LEN))
+        Ok(Some(pending.len()))
     }
 }
 
 impl Port for Bootloader {
     fn discard_replies(&mut self) -> impl Future<Output = Result<(), transfer::Error>> {
         let mut state = self.0.borrow_mut();
-        state.pending = None;
+        state.pending.clear();
         ready(state.connected())
     }
 
@@ -283,16 +325,16 @@ impl Port for Bootloader {
         ready(self.0.borrow_mut().accept_request(*request))
     }
 
-    fn send_block(&mut self, block: &[u8]) -> impl Future<Output = Result<(), transfer::Error>> {
-        ready(self.0.borrow_mut().accept_block(block))
+    fn send_report(&mut self, report: &[u8]) -> impl Future<Output = Result<(), transfer::Error>> {
+        ready(self.0.borrow_mut().accept_report(report))
     }
 
-    fn receive_reply(
+    fn receive_report(
         &mut self,
-        reply: &mut Reply,
+        report: &mut [u8],
         timeout: Duration,
     ) -> impl Future<Output = Result<Option<usize>, transfer::Error>> {
-        ready(self.0.borrow_mut().take_reply(reply, timeout))
+        ready(self.0.borrow_mut().take_report(report, timeout))
     }
 
     fn pause(&mut self, _duration: Duration) -> impl Future<Output = ()> {

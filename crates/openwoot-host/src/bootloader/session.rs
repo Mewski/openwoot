@@ -3,7 +3,8 @@ use std::{fmt, time::Duration};
 use openwoot_image::Hex;
 
 use super::{
-    BLOCK_LEN, Command, FIRST_BLOCK_ADDRESS, MAX_BLOCKS, Port, REPLY_LEN, REQUEST_LEN, Upload,
+    BLOCK_LEN, Command, FIRST_BLOCK_ADDRESS, MAX_BLOCKS, Port, REPLY_LEN, REQUEST_LEN,
+    SPLIT_REPORT_LEN, Upload,
 };
 use crate::{report, transfer};
 
@@ -19,6 +20,7 @@ const MARK_COMPLETE: u32 = 1;
 const CRC_LEN: usize = 3;
 const BLOCK_INDEX_LEN: usize = 4;
 const SHOWN_REPLY_LEN: usize = 16;
+const REPORT_BUFFER_LEN: usize = REPLY_LEN + 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
@@ -30,6 +32,24 @@ pub enum Error {
     UnexpectedReply { command: Command, reply: String },
     #[error("the reply to {command} holds {len} bytes, expected at least {expected}")]
     ShortReply {
+        command: Command,
+        len: usize,
+        expected: usize,
+    },
+    #[error("the reply to {command} arrived in a report longer than {max} bytes", max = REPLY_LEN)]
+    ReportTooLong { command: Command },
+    #[error(
+        "the reply to {command} arrived in reports of {len} bytes; the bootloader sends reports of \
+         {split} or {whole} bytes",
+        split = SPLIT_REPORT_LEN,
+        whole = REPLY_LEN
+    )]
+    ReportSizeUnsupported { command: Command, len: usize },
+    #[error(
+        "the reply to {command} holds a report of {len} bytes; the bootloader sent reports of \
+         {expected} bytes before"
+    )]
+    ReportSizeChanged {
         command: Command,
         len: usize,
         expected: usize,
@@ -81,10 +101,17 @@ pub struct State {
     pub version: Option<String>,
     pub serial: Option<String>,
     pub session_crc: Option<u32>,
+    pub report_len: usize,
 }
 
 pub struct Session<P> {
     port: P,
+    report_len: Option<usize>,
+}
+
+struct Answer {
+    body: Vec<u8>,
+    report_len: usize,
 }
 
 impl Flags {
@@ -113,12 +140,15 @@ impl fmt::Display for Flags {
 
 impl<P: Port> Session<P> {
     pub const fn new(port: P) -> Self {
-        Self { port }
+        Self {
+            port,
+            report_len: None,
+        }
     }
 
     pub async fn state(&mut self) -> Result<State, Error> {
         let ping = self.ping().await?;
-        let flags = ping.get(1).copied().map(Flags);
+        let flags = ping.body.get(1).copied().map(Flags);
         let version = unless_refused(self.request(Command::Version, 0).await)?.map(|version| {
             version
                 .iter()
@@ -140,6 +170,7 @@ impl<P: Port> Session<P> {
             version,
             serial,
             session_crc,
+            report_len: ping.report_len,
         })
     }
 
@@ -163,10 +194,14 @@ impl<P: Port> Session<P> {
             .filter(|&blocks| (1..=MAX_BLOCKS).contains(&usize::from(blocks)))
             .ok_or(Error::BlockCountOutOfRange(count))?;
         self.request(Command::Unlock, UNLOCK_KEY).await?;
-        self.request(Command::StartUpload, u32::from(blocks))
-            .await?;
+        let report_len = self
+            .exchange(Command::StartUpload, u32::from(blocks), REPLY_TIMEOUT)
+            .await?
+            .report_len;
         for (index, block) in (0..blocks).zip(upload.blocks()) {
-            self.port.send_block(block).await?;
+            for report in block.chunks(report_len) {
+                self.port.send_report(report).await?;
+            }
             self.request(Command::WriteBlock, u32::from(index)).await?;
             on_block(usize::from(index) + 1);
         }
@@ -176,10 +211,10 @@ impl<P: Port> Session<P> {
             .map_err(Error::Restart)
     }
 
-    async fn ping(&mut self) -> Result<Vec<u8>, Error> {
+    async fn ping(&mut self) -> Result<Answer, Error> {
         let mut attempt = 1;
         loop {
-            match self.request_within(Command::Ping, 0, PING_TIMEOUT).await {
+            match self.exchange(Command::Ping, 0, PING_TIMEOUT).await {
                 Err(error)
                     if attempt < PING_ATTEMPTS
                         && error != Error::Transfer(transfer::Error::Disconnected) =>
@@ -227,41 +262,60 @@ impl<P: Port> Session<P> {
     }
 
     async fn request(&mut self, command: Command, parameter: u32) -> Result<Vec<u8>, Error> {
-        self.request_within(command, parameter, REPLY_TIMEOUT).await
+        Ok(self.exchange(command, parameter, REPLY_TIMEOUT).await?.body)
     }
 
-    async fn request_within(
+    async fn exchange(
         &mut self,
         command: Command,
         parameter: u32,
         timeout: Duration,
-    ) -> Result<Vec<u8>, Error> {
+    ) -> Result<Answer, Error> {
         self.send(command, parameter).await?;
-        let mut reply = [0; REPLY_LEN];
-        let len = self
-            .port
-            .receive_reply(&mut reply, timeout)
-            .await?
-            .filter(|&len| len > 0)
-            .ok_or(Error::NoReply { command, timeout })?;
-        let reply = reply.get(..len).unwrap_or(&reply);
-        match reply {
-            [first, second, echo, status, length, body @ ..]
-                if [*first, *second] == MAGIC
-                    && (*echo == command.number() || *echo == ECHO_ANY) =>
-            {
-                if *status == STATUS_EXECUTED {
-                    body.get(..usize::from(*length))
-                        .map(<[u8]>::to_vec)
-                        .ok_or_else(|| unexpected(command, reply))
-                } else {
-                    Err(Error::Refused {
-                        command,
-                        status: *status,
-                    })
-                }
+        let (reply, report_len) = self.receive(command, timeout).await?;
+        Ok(Answer {
+            body: parse_reply(command, &reply)?,
+            report_len,
+        })
+    }
+
+    async fn receive(
+        &mut self,
+        command: Command,
+        timeout: Duration,
+    ) -> Result<(Vec<u8>, usize), Error> {
+        let mut reply = Vec::with_capacity(REPLY_LEN);
+        let mut report = [0; REPORT_BUFFER_LEN];
+        let mut report_len = 0;
+        while reply.len() < REPLY_LEN {
+            let len = self
+                .port
+                .receive_report(&mut report, timeout)
+                .await?
+                .filter(|&len| len > 0)
+                .ok_or(Error::NoReply { command, timeout })?;
+            report_len = self.check_report_len(command, len)?;
+            reply.extend_from_slice(report.get(..len).unwrap_or(&report));
+        }
+        Ok((reply, report_len))
+    }
+
+    fn check_report_len(&mut self, command: Command, len: usize) -> Result<usize, Error> {
+        if len > REPLY_LEN {
+            return Err(Error::ReportTooLong { command });
+        }
+        match self.report_len {
+            Some(expected) if expected != len => Err(Error::ReportSizeChanged {
+                command,
+                len,
+                expected,
+            }),
+            Some(_) => Ok(len),
+            None if [SPLIT_REPORT_LEN, REPLY_LEN].contains(&len) => {
+                self.report_len = Some(len);
+                Ok(len)
             }
-            _ => Err(unexpected(command, reply)),
+            None => Err(Error::ReportSizeUnsupported { command, len }),
         }
     }
 
@@ -280,6 +334,26 @@ fn unless_refused<T>(reply: Result<T, Error>) -> Result<Option<T>, Error> {
         Ok(body) => Ok(Some(body)),
         Err(Error::Refused { .. }) => Ok(None),
         Err(error) => Err(error),
+    }
+}
+
+fn parse_reply(command: Command, reply: &[u8]) -> Result<Vec<u8>, Error> {
+    match reply {
+        [first, second, echo, status, length, body @ ..]
+            if [*first, *second] == MAGIC && (*echo == command.number() || *echo == ECHO_ANY) =>
+        {
+            if *status == STATUS_EXECUTED {
+                body.get(..usize::from(*length))
+                    .map(<[u8]>::to_vec)
+                    .ok_or_else(|| unexpected(command, reply))
+            } else {
+                Err(Error::Refused {
+                    command,
+                    status: *status,
+                })
+            }
+        }
+        _ => Err(unexpected(command, reply)),
     }
 }
 
