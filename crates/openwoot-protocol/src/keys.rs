@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     configuration::{Capabilities, Invalid, MAX_KEYS, Validate},
     gamepad::Control,
+    macros,
     profile::Slot,
     wire::{Decode, Encode},
 };
@@ -60,6 +61,7 @@ pub enum Action {
     Gamepad(Control),
     Layer(Layer),
     Function(Function),
+    Macro(u8),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
@@ -260,6 +262,7 @@ impl Validate for Action {
             }
             Self::Layer(Layer::Base) => Err(Invalid::MomentaryBaseLayer),
             Self::Function(Function::Profile(profile)) => profile.check_onboard(capabilities),
+            Self::Macro(index) => macros::check_index(index),
             _ => Ok(()),
         }
     }

@@ -21,7 +21,7 @@ xtask (host)         ── openwoot-image
 
 | Crate | Holds today |
 | --- | --- |
-| `crates/openwoot` | `hid` (report descriptors and typed reports), `xinput` (the XInput report, LED command and interface descriptors), `usb` (the stock-like USB face, `Negotiated`: descriptors of the negotiated speed, `HostState`: what the host set), `protocol` (configuration channel on interface 2, the stock identification responder, `UpdateMode`: what the channel needs to hand over to the bootloader), `diagnostics` (counters, bus transfer counts and the `GetDiagnostics` readout), `analog` (the hall-sensor model), `scan` (the scan state machine), `keys` (the key engine; `keys::Key` is a key by row and column of the key matrix, with its one-byte key code: row in the upper three bits, column in the lower five), `layout` (keymaps and the standard key functions), `lighting` (the lighting engine, effects, light bar and signals), `profile` (profiles, the configuration model, editions), `storage` (settings in the external flash), `runtime` (the tasks' logic and `Firmware::new` that builds them at start-up) |
+| `crates/openwoot` | `hid` (report descriptors and typed reports), `xinput` (the XInput report, LED command and interface descriptors), `usb` (the stock-like USB face, `Negotiated`: descriptors of the negotiated speed, `HostState`: what the host set), `protocol` (configuration channel on interface 2, the stock identification responder, `UpdateMode`: what the channel needs to hand over to the bootloader), `diagnostics` (counters, bus transfer counts and the `GetDiagnostics` readout), `analog` (the hall-sensor model), `scan` (the scan state machine), `keys` (the key engine; `keys::Key` is a key by row and column of the key matrix, with its one-byte key code: row in the upper three bits, column in the lower five), `macros` (the macro player of the key engine, the playback buffer thread mode loads a macro into, the characters' keys per layout), `layout` (keymaps and the standard key functions), `lighting` (the lighting engine, effects, light bar and signals), `profile` (profiles, the configuration model, editions), `storage` (settings in the external flash), `runtime` (the tasks' logic and `Firmware::new` that builds them at start-up) |
 | `crates/openwoot-protocol` | the configuration protocol: postcard-rpc endpoints (`GetVersion`, `EnterUpdateMode`, `GetDiagnostics`, the configuration model), HID report framing, the frame magic and the largest frame, `stock` (the stock feature-command framing), `wire` (the firmware's codec of the postcard format, derived per type) |
 | `crates/openwoot-derive` | the `wire::Encode` and `wire::Decode` derive macros |
 | `crates/openwoot-drivers` | `Is31fl3741` over `embedded_hal_async::i2c::I2c`, `SpiNor` over `embedded_hal_async::spi::SpiDevice` |
@@ -64,12 +64,12 @@ the configuration side, the one part that writes the flash.
 
 | Task | Runs |
 | --- | --- |
-| `scanning` | `runtime::KeyTask::run`: calibration, then scan cycles (`scan::Shared::begin`, `Shared::finished`), each followed by one pass of the key engine (`keys::Keys`); in the single-input scan, while no transfer to the LED driver waits, the next cycle starts right after the pass and the results go out while it runs; otherwise the results go out first, then one waiting transfer runs (`runtime::LedWindow::grant`), then the next cycle starts; publishes the reports into `runtime::KeyReports`, key events and notices for the lighting task, and asks for a remote wake-up when a key is pressed while the host sleeps |
+| `scanning` | `runtime::KeyTask::run`: calibration, then scan cycles (`scan::Shared::begin`, `Shared::finished`), each followed by one pass of the key engine (`keys::Keys`) and one step of the macro player (`Keys::play`, `macros::Player`); in the single-input scan, while no transfer to the LED driver waits, the next cycle starts right after the pass and the results go out while it runs; otherwise the results go out first, then one waiting transfer runs (`runtime::LedWindow::grant`), then the next cycle starts; publishes the reports into `runtime::KeyReports`, key events and notices for the lighting task, and asks for a remote wake-up when a key is pressed while the host sleeps |
 | `device` | builds the USB device from its `Send` parts (`runtime::UsbParts::build`, which gives `runtime::UsbTasks { device, channel, reports }`), passes the configuration channel to thread mode (`configuration::hand_over`, a static `Signal`), spawns `reports` with the device executor's `SendSpawner` it was given, then runs `runtime::Device::run`: enumeration, control requests, suspend and resume; while the host sleeps it waits for the bus to resume or for a wake-up request, and wakes the host if the host armed remote wake-up |
 | `channel` | waits for the channel from `device`, then serves the configuration channel on interface 2 (`runtime::Channel`): requests through the interrupt endpoints and stock feature reports, answered by `protocol::Handler`; owns the chip HAL's `Bootloader` (`protocol::UpdateMode`) for update mode |
 | `reports` | `runtime::Reports::run`: each time the host configures the device, one idle report on every HID input endpoint, then one forwarder per endpoint (keyboard; system, consumer and mouse; key states; gamepad or XInput) that sends what `KeyReports` holds for it; the LED pattern on the XInput output endpoint sets the player (`usb::HostState::xinput_player`, which `GetGamepadState` reports) |
 | `lights` | the lighting engine on the LED driver (`runtime::Lighting`), woken by key events, notices and host-lighting requests, every 4 ms and when its next frame falls due; it renders a frame at most every 16 ms, and each write to the LED driver waits for a gap between two scan cycles |
-| `profiles` | `profile::Configurator::serve`: activates the profile the keys request and saves the brightness after the brightness keys |
+| `profiles` | `profile::Configurator::serve`: activates the profile the keys request, saves the brightness after the brightness keys and loads the macro the keys trigger into the playback buffer (`profile::Model::load_macro`) |
 
 `KeyReports` keeps, per report type, the report the key task offered last and the reports its
 forwarder has not sent yet: up to four keyboard, system, consumer and mouse reports, so that a
@@ -96,10 +96,12 @@ thread-mode tasks call them, so a settings write blocks only thread mode, and ev
 pre-empts it. The profile model lies in a `RefCell` that `channel` and `profiles` borrow, never
 across an await; a borrow that fails answers `StorageInaccessible`. The model reaches the
 executors only through `keys::Shared` and `profile::Shared`, whose critical-section blocking
-mutexes are held only to copy a value in or out, atomics, `Signal`s (profile requests from the
-keys, the saved brightness from lighting) and the host-control mailboxes. No lock is held across
-flash I/O, and no interrupt executor ever waits on thread mode: the key task takes a changed
-profile between two scan cycles, and lighting takes changed settings at its next step.
+mutexes are held only to copy a value in or out, atomics, `Signal`s (profile and macro requests
+from the keys, the saved brightness from lighting) and the host-control mailboxes. No lock is
+held across flash I/O, and no interrupt executor ever waits on thread mode: the key task takes a
+changed profile between two scan cycles, plays a macro once thread mode has copied its steps
+into the playback buffer (`macros::Shared` in `keys::Shared`), and lighting takes changed
+settings at its next step.
 
 Optional lighting features plug into the engine as its hooks type (`lighting::Lightbar` and
 `lighting::Signals`, `()` for none). The Wooting 80HE binds `lighting::Bar`: the light-bar

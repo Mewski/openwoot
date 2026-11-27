@@ -10,7 +10,10 @@ use embassy_sync::{
 use openwoot_protocol::{configuration::Invalid, switches};
 
 use super::{FittedSwitches, Parts, Profile, fitting::tune};
-use crate::analog::{self, SwitchModel};
+use crate::{
+    analog::{self, SwitchModel},
+    macros,
+};
 
 const NONE_SELECTED: u8 = 0xFF;
 
@@ -29,6 +32,7 @@ pub struct Shared<M: RawMutex> {
     rebound_filter: AtomicBool,
     switches: Mutex<M, RefCell<FittedSwitches>>,
     switch_change: AtomicBool,
+    macros: macros::Shared<M>,
 }
 
 impl<M: RawMutex> Shared<M> {
@@ -45,7 +49,13 @@ impl<M: RawMutex> Shared<M> {
             rebound_filter: AtomicBool::new(false),
             switches: Mutex::new(RefCell::new(FittedSwitches::new())),
             switch_change: AtomicBool::new(false),
+            macros: macros::Shared::new(),
         }
+    }
+
+    #[must_use]
+    pub const fn macros(&self) -> &macros::Shared<M> {
+        &self.macros
     }
 
     pub fn edit<R>(&self, edit: impl FnOnce(&mut Profile) -> R) -> R {

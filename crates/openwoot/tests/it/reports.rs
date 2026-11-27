@@ -153,10 +153,12 @@ fn controls_reports_start_with_their_report_id() {
         MouseReport {
             buttons: 0xFF,
             x: -1,
-            y: 5
+            y: 5,
+            wheel: i8::MIN,
+            pan: 127,
         }
         .to_bytes(),
-        [3, 0x1F, 0xFF, 0x05]
+        [3, 0x1F, 0xFF, 0x05, 0x81, 0x7F]
     );
 }
 
@@ -187,6 +189,8 @@ fn the_controls_descriptor_reads_each_report_behind_its_report_id() {
         buttons: 0x05,
         x: i8::MIN,
         y: 7,
+        wheel: -3,
+        pan: 2,
     }
     .to_bytes();
     assert_eq!(mouse[0], 3);
@@ -196,10 +200,18 @@ fn the_controls_descriptor_reads_each_report_behind_its_report_id() {
     assert_eq!(read(BUTTON_PAGE | 3), Some(1));
     assert_eq!(read(DESKTOP_PAGE | 0x30), Some(-127));
     assert_eq!(read(DESKTOP_PAGE | 0x31), Some(7));
-    assert_eq!(
-        parsed.logical_range(Direction::Input, 3, DESKTOP_PAGE | 0x30),
-        Some((-127, 127))
-    );
+    assert_eq!(read(DESKTOP_PAGE | 0x38), Some(-3));
+    assert_eq!(read(CONSUMER_PAGE | 0x0238), Some(2));
+    for axis in [
+        DESKTOP_PAGE | 0x30,
+        DESKTOP_PAGE | 0x38,
+        CONSUMER_PAGE | 0x0238,
+    ] {
+        assert_eq!(
+            parsed.logical_range(Direction::Input, 3, axis),
+            Some((-127, 127))
+        );
+    }
 }
 
 #[test]

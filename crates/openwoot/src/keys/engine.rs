@@ -1,3 +1,4 @@
+use embassy_sync::blocking_mutex::raw::RawMutex;
 use heapless::Vec;
 use openwoot_protocol::{
     gamepad::{self, Control},
@@ -15,6 +16,7 @@ use crate::{
     keys::Pending,
     layout::{LAYERS, Layers, Profiles},
     lighting::{Indicator, KeyEvent},
+    macros::{self, Drained, Player},
     usb::Mode,
 };
 
@@ -56,6 +58,7 @@ pub struct Keys<F: Functions, const ROWS: usize, const COLUMNS: usize> {
     gamepad_detection: bool,
     xinput_player: Option<u8>,
     elapsed_ms: u16,
+    player: Player,
 }
 
 impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMNS> {
@@ -84,6 +87,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
             gamepad_detection: false,
             xinput_player: None,
             elapsed_ms: 0,
+            player: Player::default(),
         }
     }
 
@@ -295,6 +299,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
     pub fn reset_keys(&mut self) {
         self.layers.reset();
         self.held.clear();
+        self.player.stop();
         self.restart_advanced();
         self.output.notify(Notice::ShowLayer(0));
         let mut lifted: Vec<Key, NOTICE_CAPACITY> = Vec::new();
@@ -381,7 +386,34 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
         self.elapsed_ms = elapsed_ms;
         if core::mem::replace(&mut self.reporting, self.key_reports) && !self.key_reports {
             self.restart_advanced();
+            self.player.stop();
         }
+    }
+
+    pub fn play<M: RawMutex>(&mut self, macros: &macros::Shared<M>, drained: Drained) {
+        if !self.key_reports {
+            self.player.stop();
+            return;
+        }
+        self.player.run(macros, u32::from(self.elapsed_ms), drained);
+        for action in self.player.actions() {
+            match action {
+                Action::Keyboard(usage) => self.output.press_keyboard(usage),
+                Action::Consumer(usage) => self.output.press_consumer(usage),
+                Action::System(control) => self.output.press_system(control),
+                Action::Mouse(button) => self.output.press_mouse(button),
+                Action::None
+                | Action::Gamepad(_)
+                | Action::Layer(_)
+                | Action::Function(_)
+                | Action::Macro(_) => {}
+            }
+        }
+        self.output.move_mouse(self.player.motion());
+    }
+
+    pub fn stop_macro(&mut self) {
+        self.player.stop();
     }
 
     fn finish_pass(&mut self) -> &Output {
@@ -1007,6 +1039,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
                     .gamepad_input_mut()
                     .apply(mode, control, travel, pressed);
             }
+            Action::Macro(index) => self.player.hold(index),
         }
     }
 
@@ -1051,6 +1084,7 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
     }
 
     fn call(&mut self, call: Call) {
+        let layer = self.layers.active();
         let mut effects = Effects {
             layers: &mut self.layers,
             profiles: &mut self.profiles,
@@ -1058,6 +1092,9 @@ impl<F: Functions, const ROWS: usize, const COLUMNS: usize> Keys<F, ROWS, COLUMN
             output: &mut self.output,
         };
         self.functions.call(call, &mut effects);
+        if call.pressed && self.layers.active() != layer {
+            self.player.stop();
+        }
     }
 }
 

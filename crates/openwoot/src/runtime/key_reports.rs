@@ -9,6 +9,7 @@ use heapless::Deque;
 use crate::{
     hid::{ConsumerReport, KeyStateReport, MouseReport, SystemReport},
     keys::{GamepadReport, Keyboard, Output},
+    macros::Drained,
 };
 
 const EDGE_BACKLOG: usize = 4;
@@ -190,6 +191,21 @@ impl<M: RawMutex> KeyReports<M> {
             queue
                 .try_borrow_mut()
                 .map_or_else(|_| Pending::default(), |mut queue| queue.take_newest())
+        })
+    }
+
+    #[must_use]
+    pub fn drained(&self) -> Drained {
+        self.queue.lock(|queue| {
+            queue.try_borrow().map_or_else(
+                |_| Drained::default(),
+                |queue| Drained {
+                    keyboard: queue.keyboard.waiting.is_empty(),
+                    controls: queue.system.waiting.is_empty()
+                        && queue.consumer.waiting.is_empty()
+                        && queue.mouse.waiting.is_empty(),
+                },
+            )
         })
     }
 

@@ -7,8 +7,8 @@ use openwoot_protocol::{
     gamepad::{self, CurvePoint, Normalization, StickBias},
     heapless::Vec,
     keys::{
-        self, Action, Distance, Index, Layer, Override, RapidTrigger, RapidTriggerOverride,
-        ScanMode, TapDuration,
+        self, Action, Distance, Index, Layer, MouseButton, Override, RapidTrigger,
+        RapidTriggerOverride, ScanMode, SystemControl, TapDuration,
     },
     lightbar::{
         self, Background, Builtin, Comparator, Comparison, Condition, Custom, Entry, Group, Logic,
@@ -18,6 +18,7 @@ use openwoot_protocol::{
         self, AnalogLevel, Color, Effect, Indicators, ReactiveColoring, ReactiveFade, Rgb, Scanner,
         ScannerDirection,
     },
+    macros::{self, MAX_ENCODED_LEN, Macro, Step},
     switches::{self, Switch},
     wire::{self, Decode, Encode},
 };
@@ -121,6 +122,64 @@ pub(crate) fn widest_advanced_key() -> advanced::Key {
             bottom_out: Some(Distance::FULL_TRAVEL),
         }),
     }
+}
+
+#[expect(
+    clippy::unwrap_used,
+    reason = "the name and texts of the example fit their capacities"
+)]
+pub(crate) fn sample_macro() -> Macro {
+    Macro {
+        name: macros::Name::try_from("Sign-off ✍").unwrap(),
+        mode: macros::Mode::WhileHeld,
+        steps: [
+            Step::Press(Action::Keyboard(0xE0)),
+            Step::Tap(Action::Keyboard(0x06)),
+            Step::Release(Action::Keyboard(0xE0)),
+            Step::Delay(u16::MAX),
+            Step::Text(macros::Text::try_from("Best,\n\tW~").unwrap()),
+            Step::MouseMove {
+                x: i16::MIN,
+                y: i16::MAX,
+            },
+            Step::Scroll {
+                vertical: i8::MIN,
+                horizontal: 1,
+            },
+            Step::Tap(Action::Mouse(MouseButton::Back)),
+            Step::Tap(Action::System(SystemControl::Sleep)),
+            Step::Release(widest_action()),
+        ]
+        .into_iter()
+        .collect(),
+    }
+}
+
+#[expect(
+    clippy::unwrap_used,
+    reason = "the largest macro is built step by step up to its byte limit"
+)]
+pub(crate) fn largest_macro() -> Macro {
+    let mut name = macros::Name::new();
+    while name.push('W').is_ok() {}
+    let mut text = macros::Text::new();
+    while text.push('~').is_ok() {}
+    let mut value = Macro {
+        name,
+        mode: macros::Mode::Toggle,
+        steps: macros::Steps::new(),
+    };
+    while value.encoded_len() + wire::encoded_len(&Step::Text(text.clone())) <= MAX_ENCODED_LEN {
+        value.steps.push(Step::Text(text.clone())).unwrap();
+    }
+    while value.encoded_len() < MAX_ENCODED_LEN {
+        let left = MAX_ENCODED_LEN - value.encoded_len();
+        value
+            .steps
+            .push(Step::Delay(if left == 3 { 0x80 } else { 0 }))
+            .unwrap();
+    }
+    value
 }
 
 pub(crate) fn widest_lightbar_entry() -> Entry {
@@ -322,7 +381,7 @@ fn caps_lock_trigger() -> Condition {
     clippy::indexing_slicing,
     reason = "every value a test encodes fits the largest value"
 )]
-fn wire_bytes(value: &impl Encode) -> std::vec::Vec<u8> {
+pub(crate) fn wire_bytes(value: &impl Encode) -> std::vec::Vec<u8> {
     let mut buffer = [0; LARGEST_VALUE];
     let len = wire::encode(value, &mut buffer).unwrap();
     buffer[..len].to_vec()
@@ -341,7 +400,7 @@ fn postcard_bytes(value: &impl Serialize) -> std::vec::Vec<u8> {
     clippy::indexing_slicing,
     reason = "every position and cut lies within the encoded bytes"
 )]
-fn mutations(bytes: &[u8]) -> impl Iterator<Item = std::vec::Vec<u8>> {
+pub(crate) fn mutations(bytes: &[u8]) -> impl Iterator<Item = std::vec::Vec<u8>> {
     let edits = (0..bytes.len()).flat_map(move |position| {
         [1_u8, 0x7F, 0x80, 0xFF].into_iter().map(move |delta| {
             let mut mutated = bytes.to_vec();

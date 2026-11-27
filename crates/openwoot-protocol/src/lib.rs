@@ -21,6 +21,7 @@ pub mod host_lighting;
 pub mod keys;
 pub mod lightbar;
 pub mod lighting;
+pub mod macros;
 mod message;
 pub mod profile;
 pub mod report;

@@ -19,6 +19,9 @@ keyboard they expect.
 - Per-key RGB with every stock effect, layers, overlays, lock indicators, brightness and idle
   dimming; the light bar with profile indicators and host signals; Wooting RGB SDK commands.
 - Profiles stored on the keyboard's NOR flash, switched with the Mode key or Fn + 1 to 4.
+- Macros: a library of 32 macros shared by every profile (keys, media keys and mouse buttons,
+  delays, text typed for the US, UK or Japanese layout, mouse movement and scrolling), played once,
+  while a key is held, or toggled, from any key on any layer.
 - A configuration channel of its own, shared with host software through the `openwoot-protocol`
   crate; the official Wootility still recognises the keyboard and offers to reinstall stock.
 - Diagnostics over USB (`openwoot status`), no debug probe needed.

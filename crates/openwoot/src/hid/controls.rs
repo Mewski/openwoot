@@ -35,6 +35,8 @@ pub struct MouseReport {
     pub buttons: u8,
     pub x: i8,
     pub y: i8,
+    pub wheel: i8,
+    pub pan: i8,
 }
 
 impl SystemControl {
@@ -91,19 +93,21 @@ impl InputReport for ConsumerReport {
 }
 
 impl InputReport for MouseReport {
-    type Bytes = [u8; 4];
+    type Bytes = [u8; 6];
 
     const ID: Option<u8> = Some(MOUSE_REPORT_ID);
-    const LEN: usize = 3;
+    const LEN: usize = 5;
 
     fn to_bytes(&self) -> Self::Bytes {
-        let [x] = self.x.max(MOUSE_AXIS_MIN).to_le_bytes();
-        let [y] = self.y.max(MOUSE_AXIS_MIN).to_le_bytes();
+        let [x, y, wheel, pan] = [self.x, self.y, self.wheel, self.pan]
+            .map(|axis| axis.max(MOUSE_AXIS_MIN).cast_unsigned());
         [
             MOUSE_REPORT_ID,
             self.buttons & ((1 << MOUSE_BUTTONS) - 1),
             x,
             y,
+            wheel,
+            pan,
         ]
     }
 }
@@ -153,10 +157,15 @@ const fn descriptor() -> Builder {
         .usage_page(page::GENERIC_DESKTOP)
         .usage(desktop::X_AXIS)
         .usage(desktop::Y_AXIS)
+        .usage(desktop::WHEEL)
         .logical_minimum(-127)
         .logical_maximum(127)
         .report_size(8)
-        .report_count(2)
+        .report_count(3)
+        .input(MainFlags::DATA.variable().relative())
+        .usage_page(page::CONSUMER)
+        .usage(consumer::AC_PAN)
+        .report_count(1)
         .input(MainFlags::DATA.variable().relative())
         .end_collection()
         .end_collection()

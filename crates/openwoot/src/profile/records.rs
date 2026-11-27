@@ -8,6 +8,9 @@ use openwoot_protocol::{
 use super::Colors;
 use crate::storage::Record;
 
+pub(super) const MACRO_ITEMS: u8 = 0x20;
+pub(super) const MACRO_VERSION: u8 = 1;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct Count(pub u8);
 
@@ -82,7 +85,7 @@ impl Record for LinkedCount {
 
 #[cfg(test)]
 mod tests {
-    use openwoot_protocol::{advanced, gamepad, keys};
+    use openwoot_protocol::{advanced, gamepad, keys, macros::MAX_MACROS};
 
     use super::*;
     use crate::{
@@ -114,7 +117,7 @@ mod tests {
             <Revision as Record>::ITEM,
             <lightbar::Settings as Record>::ITEM,
         ]);
-        assert_unique(&[
+        let global = [
             FORMAT_ITEM,
             <ActiveProfile as Record>::ITEM,
             <global::Settings as Record>::ITEM,
@@ -126,6 +129,13 @@ mod tests {
             <Order as Record>::ITEM,
             <DeviceName as Record>::ITEM,
             <LinkedCount as Record>::ITEM,
-        ]);
+        ];
+        assert_unique(&global);
+        let macros = MACRO_ITEMS..MACRO_ITEMS + MAX_MACROS;
+        assert!(global.iter().all(|item| !macros.contains(item)));
+        assert!(
+            macros.end <= 64,
+            "the set of stored keys holds items below 64"
+        );
     }
 }

@@ -11,22 +11,23 @@ use openwoot_protocol::{
     configuration::{Capabilities, Rejection, Validate},
     decode_message, encode_frame,
     endpoints::{
-        ActivateProfile, CreateProfile, DeleteAppLink, DeleteProfile, EnterUpdateMode,
+        ActivateProfile, ClearMacro, CreateProfile, DeleteAppLink, DeleteProfile, EnterUpdateMode,
         FactoryReset, GetAdvancedKeys, GetAppLink, GetAppLinkCount, GetCapabilities,
         GetDefaultKeymap, GetDeviceName, GetDeviceSettings, GetDiagnostics, GetGamepadMapping,
         GetGamepadSettings, GetGamepadState, GetGlobalLightbar, GetGlobalSettings, GetHostSignals,
         GetKeyColors, GetKeyGeometry, GetKeyOverrides, GetKeySettings, GetKeymap, GetKeymapLink,
-        GetLayout, GetLedFrame, GetLightbar, GetLightbarColors, GetLighting, GetProfileInfo,
-        GetProfileRevision, GetProfileState, GetProfiles, GetSensorValues, GetStorageUsage,
-        GetSwitchModels, GetSwitches, GetVersion, LeaveHostControl, MoveProfile, ResetHostColors,
-        ResetHostKeyColor, ResetHostLightbar, Restart, Revert, Save, SelectLinkedProfile,
-        SetAdvancedKeys, SetAppLink, SetDeviceName, SetDeviceSettings, SetGamepadDetection,
-        SetGamepadMapping, SetGamepadSettings, SetGlobalLightbar, SetGlobalSettings, SetHostColors,
-        SetHostKeyColor, SetHostLightbar, SetHostSignals, SetKeyColors, SetKeyOverrides,
-        SetKeyReports, SetKeySettings, SetKeymap, SetKeymapLink, SetLayout, SetLightbar,
-        SetLighting, SetProfileInfo, SetRawScanning, SetSwitches, SwapProfiles,
+        GetLayout, GetLedFrame, GetLightbar, GetLightbarColors, GetLighting, GetMacro, GetMacros,
+        GetProfileInfo, GetProfileRevision, GetProfileState, GetProfiles, GetSensorValues,
+        GetStorageUsage, GetSwitchModels, GetSwitches, GetVersion, LeaveHostControl, MoveProfile,
+        ResetHostColors, ResetHostKeyColor, ResetHostLightbar, Restart, Revert, Save,
+        SelectLinkedProfile, SetAdvancedKeys, SetAppLink, SetDeviceName, SetDeviceSettings,
+        SetGamepadDetection, SetGamepadMapping, SetGamepadSettings, SetGlobalLightbar,
+        SetGlobalSettings, SetHostColors, SetHostKeyColor, SetHostLightbar, SetHostSignals,
+        SetKeyColors, SetKeyOverrides, SetKeyReports, SetKeySettings, SetKeymap, SetKeymapLink,
+        SetLayout, SetLightbar, SetLighting, SetMacro, SetProfileInfo, SetRawScanning, SetSwitches,
+        SwapProfiles,
     },
-    gamepad, host_lighting, keys, lightbar,
+    gamepad, host_lighting, keys, lightbar, macros,
     profile::{self, Slot},
     stock::Status,
     wire::{self, Encode},
@@ -315,6 +316,16 @@ impl<C: Configuration> Handler<C> {
         {
             return ControlFlow::Break(exchange.answer(response, Ok(&UNSUPPORTED)));
         }
+        if key == GetMacro::REQ_KEY {
+            return ControlFlow::Break(answered(|| {
+                read_macro(configuration, &capabilities, exchange)
+            }));
+        }
+        if key == SetMacro::REQ_KEY {
+            return ControlFlow::Break(answered(|| {
+                set_macro(configuration, &capabilities, exchange)
+            }));
+        }
         dispatch!(key, capabilities, exchange;
             plain GetVersion => |()| version,
             plain EnterUpdateMode => |()| *handover = Some(Handover::UpdateMode(HANDOVER_OPTION)),
@@ -365,6 +376,11 @@ impl<C: Configuration> Handler<C> {
             plain Revert => |()| configuration.revert(),
             plain FactoryReset => |()| configuration.factory_reset(),
             plain GetStorageUsage => |()| configuration.storage_usage(),
+            plain GetMacros => |(), summaries| configuration.macros(summaries),
+            plain ClearMacro => |index| match check_macro(&capabilities, index) {
+                Ok(()) => configuration.clear_macro(index),
+                Err(rejection) => Err(rejection),
+            },
             checked GetProfileInfo => |profile| configuration.profile_info(profile),
             checked SetProfileInfo => |change| {
                 configuration.set_profile_info(change.profile, change.value)
@@ -574,6 +590,48 @@ fn check(
 
 fn linked(capabilities: &Result<Capabilities, Rejection>, profile: Slot) -> Result<(), Rejection> {
     Ok(profile.check_linked(capabilities.as_ref().map_err(|rejection| *rejection)?)?)
+}
+
+fn check_macro(capabilities: &Result<Capabilities, Rejection>, index: u8) -> Result<(), Rejection> {
+    capabilities.as_ref().map_err(|rejection| *rejection)?;
+    Ok(macros::check_index(index)?)
+}
+
+fn read_macro<C: Configuration>(
+    configuration: &mut C,
+    capabilities: &Result<Capabilities, Rejection>,
+    exchange: &mut Exchange<'_, '_>,
+) -> Option<usize> {
+    let Some(index) = wire::decode::<u8>(exchange.request.body) else {
+        return exchange.fail(&WireError::DeserFailed);
+    };
+    let read = check_macro(capabilities, index).and_then(|()| {
+        configuration.read_macro(index, |stored| {
+            exchange.answer(GetMacro::RESP_KEY, Ok(&Ok::<_, Rejection>(stored)))
+        })
+    });
+    read.unwrap_or_else(|rejection| {
+        let refused: Result<Option<macros::Encoded<'_>>, Rejection> = Err(rejection);
+        exchange.answer(GetMacro::RESP_KEY, Ok(&refused))
+    })
+}
+
+fn set_macro<C: Configuration>(
+    configuration: &mut C,
+    capabilities: &Result<Capabilities, Rejection>,
+    exchange: &mut Exchange<'_, '_>,
+) -> Option<usize> {
+    let body = exchange.request.body;
+    let Some((index, rest)) = wire::take::<u8>(body) else {
+        return exchange.fail(&WireError::DeserFailed);
+    };
+    let Some((value, [])) = macros::Encoded::take(rest) else {
+        return exchange.fail(&WireError::DeserFailed);
+    };
+    let answer = check_macro(capabilities, index)
+        .and_then(|()| check(capabilities, &value))
+        .and_then(|()| configuration.set_macro(index, value));
+    exchange.answer(SetMacro::RESP_KEY, Ok(&answer))
 }
 
 fn require_lightbar(capabilities: &Result<Capabilities, Rejection>) -> Result<(), Rejection> {

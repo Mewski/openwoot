@@ -25,6 +25,13 @@ pub fn encode(value: &dyn Encode, buffer: &mut [u8]) -> Option<usize> {
 }
 
 #[must_use]
+pub fn encoded_len(value: &dyn Encode) -> usize {
+    let mut writer = Writer::new(&mut []);
+    value.encode(&mut writer);
+    writer.written()
+}
+
+#[must_use]
 pub fn decode<T: Decode>(bytes: &[u8]) -> Option<T> {
     let mut reader = Reader::new(bytes);
     let value = T::decode(&mut reader);

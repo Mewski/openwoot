@@ -6,6 +6,7 @@ use crate::{
     apps::MAX_LINKS,
     device::Layout,
     lightbar::{MAX_HOLD_MS, MAX_HOST_SIGNALS},
+    macros::{MAX_ENCODED_LEN, MAX_MACROS},
     switches::MAX_TUNED,
     wire::{Decode, Encode},
 };
@@ -101,6 +102,16 @@ pub enum Invalid {
     TunedSwitchesExceedLimit,
     #[error("layout `{0:?}` does not exist on the keyboard")]
     LayoutMissing(Layout),
+    #[error("macro {0} lies outside the {MAX_MACROS} macros of the keyboard")]
+    MacroOutsideRange(u8),
+    #[error("a macro cannot play another macro")]
+    MacroInMacro,
+    #[error("a macro cannot play layer, function or gamepad actions")]
+    ActionNotPlayable,
+    #[error("the macro takes {0} bytes, more than the {MAX_ENCODED_LEN} bytes a macro holds")]
+    MacroTooLong(u16),
+    #[error("a macro cannot type the character `U+{0:04X}`")]
+    CharacterNotTypable(u32),
 }
 
 impl<T: Validate> Validate for Option<T> {

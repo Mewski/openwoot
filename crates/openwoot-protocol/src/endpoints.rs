@@ -4,7 +4,7 @@ use crate::{
     Version, advanced, apps,
     configuration::{Capabilities, Rejection},
     device::{self, Layout, LayoutState},
-    diagnostics, gamepad, geometry, global, host_lighting, keys, lightbar, lighting,
+    diagnostics, gamepad, geometry, global, host_lighting, keys, lightbar, lighting, macros,
     profile::{self, Change, LayerChange, LayerRef, Slot, Summary},
     sensors, switches,
 };
@@ -72,6 +72,9 @@ type HostLightbar = lightbar::Colors;
 type LedFrameReply = Result<host_lighting::Frame, Rejection>;
 type LightbarColorsReply = Result<lightbar::Colors, Rejection>;
 type ProfileStateReply = Result<profile::State, Rejection>;
+type MacrosReply = Result<macros::Summaries, Rejection>;
+type MacroReply = Result<Option<macros::Macro>, Rejection>;
+type MacroChange = macros::Change;
 
 endpoints! {
     list = LIST;
@@ -148,6 +151,10 @@ endpoints! {
     | ResetHostLightbar   | ()                    | Done                 | "openwoot/host-lighting/lightbar/reset" |
     | LeaveHostControl    | ()                    | Done                 | "openwoot/host-lighting/leave"          |
     | GetLedFrame         | ()                    | LedFrameReply        | "openwoot/leds"                         |
+    | GetMacros           | ()                    | MacrosReply          | "openwoot/macros"                       |
+    | GetMacro            | u8                    | MacroReply           | "openwoot/macro"                        |
+    | SetMacro            | MacroChange           | Done                 | "openwoot/macro/set"                    |
+    | ClearMacro          | u8                    | Done                 | "openwoot/macro/clear"                  |
     | Restart             | ()                    | ()                   | "openwoot/restart"                      |
     | Save                | ()                    | Done                 | "openwoot/save"                         |
     | Revert              | ()                    | Done                 | "openwoot/revert"                       |

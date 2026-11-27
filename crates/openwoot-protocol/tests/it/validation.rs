@@ -67,6 +67,7 @@ fn keymaps_must_cover_the_key_matrix_with_actions_the_reports_can_carry() {
             Action::Function(Function::Profile(Slot::new(4))),
             Invalid::ProfileOutsideRange(4),
         ),
+        (Action::Macro(32), Invalid::MacroOutsideRange(32)),
     ] {
         let mut keymap: keys::Keymap = filled(Action::None, key_count());
         keymap[50] = action;

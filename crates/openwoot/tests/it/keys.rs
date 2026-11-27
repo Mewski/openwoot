@@ -4,6 +4,7 @@ mod holds;
 mod latency;
 mod layers;
 mod limits;
+mod macros;
 mod pipeline;
 mod press;
 mod profiles;

@@ -3,7 +3,7 @@ use core::{
     future::pending,
 };
 
-use embassy_futures::select::{Either3, select3};
+use embassy_futures::select::{Either4, select4};
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_time::{Duration, Timer};
 use embassy_usb::driver;
@@ -17,6 +17,7 @@ use openwoot_protocol::{
     keys::{self, Keymap, Layer, Overrides},
     lightbar,
     lighting::{self, KeyColors},
+    macros,
     profile::{Info, Namespace, Selection, Slot, Summary},
     switches,
 };
@@ -90,26 +91,40 @@ where
                     pending::<()>().await;
                 }
             };
-            match select3(keys.profile_request(), shared.brightness_saved(), settled).await {
-                Either3::First(profile) => {
+            match select4(
+                keys.profile_request(),
+                shared.brightness_saved(),
+                settled,
+                keys.macros().wanted(),
+            )
+            .await
+            {
+                Either4::First(profile) => {
                     if let Ok(mut model) = self.model() {
                         let _ = model.switch(Slot::new(profile));
                     }
                     settling = true;
                 }
-                Either3::Second(_) => {
+                Either4::Second(_) => {
                     if let Ok(mut model) = self.model()
                         && shared.take_brightness_save()
                     {
                         let _ = model.save_brightness();
                     }
                 }
-                Either3::Third(()) => {
+                Either4::Third(()) => {
                     if let Ok(mut model) = self.model() {
                         let _ = model.store_active();
                     }
                     settling = false;
                 }
+                Either4::Fourth(index) => match self.model() {
+                    Ok(mut model) => {
+                        let layout = self.layout_of(model.variant()).unwrap_or_default();
+                        model.load_macro(index, layout);
+                    }
+                    Err(_) => keys.macros().missing(index),
+                },
             }
         }
     }
@@ -469,6 +484,27 @@ where
         let mut models = switch_models();
         models.truncate(usize::from(self.capabilities.switch_models));
         Ok(models)
+    }
+
+    fn macros(&mut self, summaries: &mut macros::Summaries) -> Result<(), Rejection> {
+        self.model()?.macros(summaries);
+        Ok(())
+    }
+
+    fn read_macro<R>(
+        &mut self,
+        index: u8,
+        read: impl FnOnce(Option<macros::Encoded<'_>>) -> R,
+    ) -> Result<R, Rejection> {
+        Ok(self.model()?.read_macro(index, read))
+    }
+
+    fn set_macro(&mut self, index: u8, value: macros::Encoded<'_>) -> Result<(), Rejection> {
+        self.model()?.set_macro(index, value)
+    }
+
+    fn clear_macro(&mut self, index: u8) -> Result<(), Rejection> {
+        self.model()?.clear_macro(index)
     }
 
     fn save(&mut self) -> Result<(), Rejection> {

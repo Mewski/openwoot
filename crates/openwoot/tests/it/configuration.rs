@@ -933,13 +933,13 @@ impl Bodies {
     }
 }
 
-type Answered<E> = Result<Option<<E as Endpoint>::Response>, openwoot_protocol::Error>;
+pub(crate) type Answered<E> = Result<Option<<E as Endpoint>::Response>, openwoot_protocol::Error>;
 
 #[expect(
     clippy::unwrap_used,
     reason = "every request a test builds fits the largest report and is answered at once"
 )]
-fn at_once<E, C>(handler: &mut Handler<C>, body: &[u8]) -> Answered<E>
+pub(crate) fn at_once<E, C>(handler: &mut Handler<C>, body: &[u8]) -> Answered<E>
 where
     E: Endpoint,
     E::Response: DeserializeOwned,

@@ -6,6 +6,7 @@ mod descriptors;
 mod diagnostics;
 mod keys;
 mod lighting;
+mod macros;
 mod profile;
 mod reports;
 mod runtime;

@@ -8,6 +8,7 @@ use crate::{
         NkroReport, SystemReport,
     },
     lighting::TRAVEL_FULL,
+    macros::Motion,
     xinput,
 };
 
@@ -157,6 +158,13 @@ impl Output {
         self.mouse.buttons |= 1 << mouse_bit(button);
     }
 
+    pub(super) const fn move_mouse(&mut self, motion: Motion) {
+        self.mouse.x = motion.x;
+        self.mouse.y = motion.y;
+        self.mouse.wheel = motion.wheel;
+        self.mouse.pan = motion.pan;
+    }
+
     pub(super) fn log(&mut self, action: Action, key: Key, travel: u16, pressed: bool) {
         let (code, kind) = key_state_code(action);
         self.log_entry(key, code, kind, travel, pressed);
@@ -201,7 +209,7 @@ const fn system_code(control: SystemControl) -> u8 {
 
 fn key_state_code(action: Action) -> (u8, KeyStateKind) {
     match action {
-        Action::None => (0, KeyStateKind::Function),
+        Action::None | Action::Macro(_) => (0, KeyStateKind::Function),
         Action::Keyboard(usage) => (usage, KeyStateKind::Keyboard),
         Action::Consumer(usage) => {
             let [low, _] = usage.to_le_bytes();

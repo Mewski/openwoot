@@ -60,6 +60,20 @@ impl Decode for u16 {
     }
 }
 
+impl Encode for i16 {
+    fn encode(&self, writer: &mut Writer<'_>) {
+        let zigzag = (self.cast_unsigned() << 1) ^ (self >> 15).cast_unsigned();
+        writer.varint(usize::from(zigzag));
+    }
+}
+
+impl Decode for i16 {
+    fn decode(reader: &mut Reader<'_>) -> Self {
+        let zigzag = reader.u16();
+        (zigzag >> 1).cast_signed() ^ (zigzag & 1).cast_signed().wrapping_neg()
+    }
+}
+
 impl Encode for u32 {
     fn encode(&self, writer: &mut Writer<'_>) {
         writer.varint(usize::try_from(*self).unwrap_or(usize::MAX));
@@ -127,6 +141,10 @@ mod tests {
             agrees_with_postcard(&byte.cast_signed());
         }
         for value in [0_u16, 0x7F, 0x80, 0x3FFF, 0x4000, u16::MAX] {
+            agrees_with_postcard(&value);
+            agrees_with_postcard(&value.cast_signed());
+        }
+        for value in [-1_i16, 1, -64, 63, -65, 64, i16::MIN, i16::MAX] {
             agrees_with_postcard(&value);
         }
         for value in [0_u32, 0x7F, 0x80, 0x1F_FFFF, 0x20_0000, u32::MAX] {

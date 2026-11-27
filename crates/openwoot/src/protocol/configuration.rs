@@ -5,7 +5,7 @@ use openwoot_protocol::{
     diagnostics::StorageUsage,
     gamepad, geometry, global,
     keys::{self, Layer},
-    lightbar, lighting,
+    lightbar, lighting, macros,
     profile::{self, Namespace, Selection, Slot, Summary},
     switches,
 };
@@ -296,6 +296,26 @@ pub trait Configuration {
     }
 
     fn switch_models(&mut self) -> Result<switches::Models, Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    fn macros(&mut self, _summaries: &mut macros::Summaries) -> Result<(), Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    fn read_macro<R>(
+        &mut self,
+        _index: u8,
+        _read: impl FnOnce(Option<macros::Encoded<'_>>) -> R,
+    ) -> Result<R, Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    fn set_macro(&mut self, _index: u8, _value: macros::Encoded<'_>) -> Result<(), Rejection> {
+        Err(Rejection::Unsupported)
+    }
+
+    fn clear_macro(&mut self, _index: u8) -> Result<(), Rejection> {
         Err(Rejection::Unsupported)
     }
 

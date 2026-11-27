@@ -21,6 +21,7 @@ pub(crate) mod desktop {
     pub(crate) const RX: u16 = 0x33;
     pub(crate) const RY: u16 = 0x34;
     pub(crate) const RZ: u16 = 0x35;
+    pub(crate) const WHEEL: u16 = 0x38;
     pub(crate) const HAT_SWITCH: u16 = 0x39;
     pub(crate) const SYSTEM_CONTROL: u16 = 0x80;
     pub(crate) const SYSTEM_POWER_DOWN: u16 = 0x81;
@@ -48,6 +49,7 @@ pub(crate) mod led {
 
 pub(crate) mod consumer {
     pub(crate) const CONSUMER_CONTROL: u16 = 0x01;
+    pub(crate) const AC_PAN: u16 = 0x0238;
     pub(crate) const LAST: u16 = 0x02A2;
 }
 

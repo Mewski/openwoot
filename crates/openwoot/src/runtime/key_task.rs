@@ -40,6 +40,7 @@ pub struct Progress {
     suspended: bool,
     factory_switch: Option<SwitchModel>,
     switches_synced: bool,
+    resets: Option<u32>,
 }
 
 impl<M: RawMutex> KeyTask<'_, M> {
@@ -144,6 +145,14 @@ impl<M: RawMutex> KeyTask<'_, M> {
         keys.set_gamepad_detection(self.host.gamepad_detection());
         keys.set_xinput_player(self.host.xinput_player());
         let travel = scan.travel();
+        let resets = self.host.resets();
+        let reset = progress
+            .resets
+            .replace(resets)
+            .is_some_and(|seen| seen != resets);
+        if reset || self.host.is_suspended() {
+            keys.stop_macro();
+        }
         let passed = scan.with(|scanner| {
             let switched = self.fit_switches::<S, INPUTS, ADDRESSES, COLUMNS>(scanner, progress);
             if switched || !progress.switches_synced {
@@ -205,6 +214,7 @@ impl<M: RawMutex> KeyTask<'_, M> {
                         .map_or(0, |position| travel.get(position))
                 },
             );
+            keys.play(self.shared.macros(), self.reports.drained());
             keys.take_hold_changes(|key, holds| scanner.hold_events(key, holds));
             true
         }) == Some(true);

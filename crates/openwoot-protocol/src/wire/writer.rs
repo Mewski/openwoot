@@ -21,6 +21,10 @@ impl<'a> Writer<'a> {
         (self.len <= self.buffer.len()).then_some(self.len)
     }
 
+    pub(crate) const fn written(&self) -> usize {
+        self.len
+    }
+
     #[inline(never)]
     pub(crate) fn byte(&mut self, byte: u8) -> &mut Self {
         if let Some(slot) = self.buffer.get_mut(self.len) {

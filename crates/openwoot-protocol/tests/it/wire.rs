@@ -18,6 +18,7 @@ use openwoot_protocol::{
         Range, Signal, Solid, Target, Term, Waveform,
     },
     lighting::{self, HueRange, ReactiveColoring},
+    macros::{self, Encoded, Macro, Summary},
     profile::{self, Namespace, Slot},
     sensors::Reading,
     switches,
@@ -26,9 +27,9 @@ use openwoot_protocol::{
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::support::{
-    agrees_with_postcard, decodes_like_postcard, gamepad_settings, key_settings, lightbar_settings,
-    lighting_settings, opaque, switches, white, widest_action, widest_advanced_key,
-    widest_lightbar_entry, widest_override,
+    agrees_with_postcard, decodes_like_postcard, gamepad_settings, key_settings, largest_macro,
+    lightbar_settings, lighting_settings, mutations, opaque, sample_macro, switches, white,
+    widest_action, widest_advanced_key, widest_lightbar_entry, widest_override, wire_bytes,
 };
 
 #[test]
@@ -84,6 +85,11 @@ fn every_rejection_encodes_as_postcard_does() {
         },
         Invalid::TunedSwitchesExceedLimit,
         Invalid::LayoutMissing(Layout::Jis),
+        Invalid::MacroOutsideRange(u8::MAX),
+        Invalid::MacroInMacro,
+        Invalid::ActionNotPlayable,
+        Invalid::MacroTooLong(u16::MAX),
+        Invalid::CharacterNotTypable(0x10_FFFF),
     ];
     let others = [
         Rejection::Unsupported,
@@ -117,6 +123,7 @@ fn every_action_and_advanced_key_encodes_as_postcard_does() {
         Action::Function(Function::ToggleModeProfile),
         Action::Function(Function::ToggleKeyDisable),
         Action::Function(Function::LayerLock),
+        Action::Macro(31),
         widest_action(),
     ];
     for action in actions {
@@ -351,6 +358,42 @@ fn app_links_and_profile_parts_encode_as_postcard_does() {
     });
 }
 
+fn taken_like_postcard(bytes: &[u8]) {
+    let taken = Encoded::take(bytes).map(|(value, rest)| {
+        (
+            postcard::from_bytes::<Macro>(value.as_bytes()).ok(),
+            rest.len(),
+        )
+    });
+    let expected = postcard::take_from_bytes::<Macro>(bytes)
+        .ok()
+        .map(|(value, rest)| (Some(value), rest.len()));
+    assert_eq!(taken, expected, "{bytes:02x?}");
+}
+
+#[test]
+fn macros_encode_as_postcard_does_and_their_wire_form_ends_where_postcard_ends_them() {
+    for build in [sample_macro, largest_macro, Macro::default] {
+        let value = build();
+        agrees_with_postcard(&value);
+        agrees_with_postcard(&Summary::from(&value));
+        agrees_with_postcard(&macros::Change {
+            index: 31,
+            value: value.clone(),
+        });
+        let encoded = wire_bytes(&value);
+        for bytes in mutations(&encoded) {
+            taken_like_postcard(&bytes);
+        }
+        let summary = Encoded::parse(&encoded).map(|value| value.summary());
+        assert_eq!(summary, Some(Summary::from(&value)));
+    }
+    let summaries: macros::Summaries = [Some(Summary::from(&sample_macro())), None]
+        .into_iter()
+        .collect();
+    agrees_with_postcard(&summaries);
+}
+
 #[test]
 fn random_bytes_decode_as_postcard_decodes_them() {
     let mut seed = 0x0B5E_55ED_u32;
@@ -381,6 +424,9 @@ fn random_bytes_decode_as_postcard_decodes_them() {
             decodes_like_postcard::<profile::Selection>(&bytes);
             decodes_like_postcard::<Result<u32, Rejection>>(&bytes);
             decodes_like_postcard::<usize>(&bytes);
+            decodes_like_postcard::<Macro>(&bytes);
+            decodes_like_postcard::<macros::Change>(&bytes);
+            taken_like_postcard(&bytes);
         }
     }
 }

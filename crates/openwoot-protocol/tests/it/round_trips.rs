@@ -22,10 +22,52 @@ use openwoot_protocol::{
 };
 
 use crate::support::{
-    DONE, capabilities, filled, gamepad_settings, key_count, key_settings, lightbar_settings,
-    lighting_settings, opaque, round_trip, switches, white, widest_action, widest_advanced_key,
-    widest_lightbar_entry, widest_override,
+    DONE, capabilities, filled, gamepad_settings, key_count, key_settings, largest_macro,
+    lightbar_settings, lighting_settings, opaque, round_trip, sample_macro, switches, white,
+    widest_action, widest_advanced_key, widest_lightbar_entry, widest_override,
 };
+
+#[test]
+fn macros_survive_a_round_trip_and_the_largest_fits_one_frame_each_way() {
+    use openwoot_protocol::{
+        configuration::Invalid,
+        endpoints::{ClearMacro, GetMacro, GetMacros, SetMacro},
+        macros::{self, MAX_MACROS, Summary},
+    };
+
+    round_trip!(GetMacro, 31, Ok(Some(largest_macro())));
+    round_trip!(GetMacro, 0, Ok::<_, Rejection>(None));
+    round_trip!(
+        SetMacro,
+        macros::Change {
+            index: 31,
+            value: largest_macro(),
+        },
+        DONE,
+    );
+    round_trip!(
+        SetMacro,
+        macros::Change {
+            index: 2,
+            value: sample_macro(),
+        },
+        Err(Rejection::Invalid(Invalid::MacroTooLong(u16::MAX))),
+    );
+    round_trip!(
+        ClearMacro,
+        MAX_MACROS,
+        Err(Rejection::Invalid(Invalid::MacroOutsideRange(MAX_MACROS))),
+    );
+    let widest = Summary {
+        steps: u16::MAX,
+        ..Summary::from(&largest_macro())
+    };
+    round_trip!(
+        GetMacros,
+        (),
+        Ok::<macros::Summaries, Rejection>(filled(Some(widest), usize::from(MAX_MACROS))),
+    );
+}
 
 #[test]
 fn keymaps_and_key_settings_survive_a_round_trip() {

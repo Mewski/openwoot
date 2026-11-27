@@ -10,7 +10,7 @@ use std::{
     task::{Context, Poll, Wake, Waker},
 };
 
-use embassy_futures::{join::join3, yield_now};
+use embassy_futures::{join::join3, poll_once, yield_now};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, MockDriver};
 use embassy_usb_driver::{Event, Speed as BusSpeed};
@@ -21,9 +21,10 @@ use openwoot::{
         InputReport, KEY_STATE_DESCRIPTOR, KeyStateReport, MouseReport, NKRO_DESCRIPTOR,
         NkroReport, PLACEHOLDER_DESCRIPTOR, PLACEHOLDER_LEN, SystemReport,
     },
-    keys::{Key, Keys, Notice, Output, RapidTrigger, Shared, Switch, Tuning},
+    keys::{Key, Keyboard, Keys, Notice, Output, RapidTrigger, Shared, Switch, Tuning},
     layout::Standard,
     lighting::{HostControl, KeyEvents, LedMatrix},
+    macros::Header,
     profile,
     protocol::{self, Handler},
     runtime::{self, Device, KeyNotices, KeyReports, KeyTask, LedWindow, Progress, Usb},
@@ -33,13 +34,15 @@ use openwoot::{
 use openwoot_protocol::{
     configuration::Rejection,
     decode_response,
+    device::Layout,
     diagnostics::Usb as UsbReadout,
     encode_request,
     endpoints::{GetGamepadState, GetVersion},
     gamepad::{self, Player},
     keys::{Action, Layer},
     lighting::Effects,
-    report,
+    macros::{self, Encoded, Macro, Step},
+    report, wire,
 };
 
 use crate::{
@@ -71,6 +74,7 @@ const COLUMNS: usize = 17;
 const KEY_A: Key = Key::new(3, 1);
 const KEY_MUTE: Key = Key::new(3, 2);
 const USAGE_A: u8 = 0x04;
+const USAGE_B: u8 = 0x05;
 const MUTE: u16 = 0xE2;
 const PRESSED: u16 = 2000;
 const FULL: u16 = 1400;
@@ -845,6 +849,82 @@ fn a_tap_while_the_host_sleeps_unarmed_is_not_replayed_after_resume() {
     matrix.cycle();
     wire.settle();
     assert_eq!(host.take_sent(KEYBOARD_IN), [nkro(&[])]);
+}
+
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "the macro a test plays fits the buffer"
+)]
+fn serve_macro(shared: &Shared<Mutual>, value: &Macro) {
+    let Poll::Ready(index) = poll_once(pin!(shared.macros().wanted())) else {
+        return;
+    };
+    let mut buffer = [0; 4096];
+    let len = wire::encode(value, &mut buffer).unwrap();
+    let value = Encoded::parse(&buffer[..len]).unwrap();
+    let header = Header {
+        mode: value.mode(),
+        layout: Layout::Ansi,
+        steps: value.step_count(),
+    };
+    shared.macros().fill(index, header, value.encoded_steps());
+}
+
+fn holds(output: &Output, usage: u8) -> bool {
+    matches!(output.keyboard(), Keyboard::NKeyRollover(report) if report.is_pressed(usage))
+}
+
+#[test]
+fn a_bus_suspend_or_reset_stops_a_playing_macro_and_releases_its_keys() {
+    let host = Host::default();
+    let state = HostState::new();
+    let key_reports = KeyReports::new();
+    let peers = Peers::new();
+    let mut resources = Resources::new();
+    let mut update_mode = Recorder::default();
+    let firmware = pin!(firmware(
+        &host,
+        Face::default(),
+        &state,
+        &key_reports,
+        &mut resources,
+        &mut update_mode
+    ));
+    let mut wire = Wire::configured(&host, firmware);
+    let mut matrix = Matrix::new(peers.task(&state, &key_reports));
+    matrix.keys.set_action(KEY_A, Layer::Base, Action::Macro(0));
+    let holding = Macro {
+        name: macros::Name::new(),
+        mode: macros::Mode::Toggle,
+        steps: [
+            Step::Press(Action::Keyboard(USAGE_B)),
+            Step::Delay(u16::MAX),
+        ]
+        .into_iter()
+        .collect(),
+    };
+    for (interruption, recovery) in [(Event::Suspend, Some(Event::Resume)), (Event::Reset, None)] {
+        matrix.press(KEY_A, FULL);
+        matrix.cycle();
+        serve_macro(&peers.shared, &holding);
+        matrix.press(KEY_A, 0);
+        matrix.cycle();
+        wire.settle();
+        assert!(holds(matrix.keys.output(), USAGE_B), "{interruption:?}");
+        wire.bus(&[interruption]);
+        matrix.cycle();
+        assert!(!holds(matrix.keys.output(), USAGE_B), "{interruption:?}");
+        match recovery {
+            Some(event) => wire.bus(&[event]),
+            None => {
+                wire.request(setup(0, SET_CONFIGURATION, 1, 0, 0));
+            }
+        }
+        matrix.cycle();
+        wire.settle();
+        assert!(!holds(matrix.keys.output(), USAGE_B), "{interruption:?}");
+    }
 }
 
 #[test]

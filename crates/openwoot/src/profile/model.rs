@@ -11,6 +11,7 @@ use openwoot_protocol::{
     keys::{self, Keymap, Layer, Override, Overrides, ScanMode},
     lightbar,
     lighting::{self, KeyColors},
+    macros::{self, MAX_MACROS},
     profile::{Info, MAX_LINKED, Namespace, Selection, Slot, Summary},
     switches,
     wire::{self, Decode, Encode, Writer, encode},
@@ -19,11 +20,13 @@ use openwoot_protocol::{
 use super::{
     Changes, Colors, Count, DeviceName, Factory, KeyPart, LinkedCount, Order, Preset, Revision,
     Shared,
+    records::{MACRO_ITEMS, MACRO_VERSION},
 };
 use crate::{
     keys::{ActiveProfile, Keymaps, Parts, Profile, default_gamepad_settings},
     layout::LAYERS,
     lighting::{Lightbar, ProfileState},
+    macros::Header,
     storage::{LayoutOverride, Record, RecordKey, Scope, Settings, Stored},
 };
 
@@ -561,6 +564,64 @@ where
         }
         remove_key(&mut self.storage, app_link_key(scope, count - 1))?;
         self.bump_revision(profile.get())
+    }
+
+    pub fn macros(&mut self, summaries: &mut macros::Summaries) {
+        summaries.clear();
+        for index in 0..MAX_MACROS {
+            let summary = self.read_macro(index, |stored| stored.map(|value| value.summary()));
+            if summaries.push(summary).is_err() {
+                break;
+            }
+        }
+    }
+
+    pub fn read_macro<R>(
+        &mut self,
+        index: u8,
+        read: impl FnOnce(Option<macros::Encoded<'_>>) -> R,
+    ) -> R {
+        let stored = macro_key(index)
+            .and_then(|key| load_key(&mut self.storage, key))
+            .filter(|stored| stored.version == MACRO_VERSION)
+            .and_then(|stored| macros::Encoded::parse(stored.body));
+        read(stored)
+    }
+
+    pub fn set_macro(&mut self, index: u8, value: macros::Encoded<'_>) -> Result<(), Rejection> {
+        let key = macro_key(index).ok_or(Invalid::MacroOutsideRange(index))?;
+        let bytes = value.as_bytes();
+        if self.read_macro(index, |stored| {
+            stored.is_some_and(|stored| stored.as_bytes() == bytes)
+        }) {
+            return Ok(());
+        }
+        store_key(&mut self.storage, key, MACRO_VERSION, &|body| {
+            body.get_mut(..bytes.len())?.copy_from_slice(bytes);
+            Some(bytes.len())
+        })
+    }
+
+    pub fn clear_macro(&mut self, index: u8) -> Result<(), Rejection> {
+        let key = macro_key(index).ok_or(Invalid::MacroOutsideRange(index))?;
+        remove_key(&mut self.storage, key)
+    }
+
+    pub fn load_macro(&mut self, index: u8, layout: device::Layout) {
+        let playback = self.keys.macros();
+        let loaded = self.read_macro(index, |stored| {
+            stored.map(|value| {
+                let header = Header {
+                    mode: value.mode(),
+                    layout,
+                    steps: value.step_count(),
+                };
+                playback.fill(index, header, value.encoded_steps());
+            })
+        });
+        if loaded.is_none() {
+            playback.missing(index);
+        }
     }
 
     pub fn save_brightness(&mut self) -> Result<(), Rejection> {
@@ -1768,6 +1829,10 @@ fn encode_switches<M: RawMutex>(keys: &crate::keys::Shared<M>, buffer: &mut [u8]
 
 const fn app_link_key(scope: Scope, index: u8) -> RecordKey {
     RecordKey::new(scope, APP_LINK_ITEMS + index)
+}
+
+fn macro_key(index: u8) -> Option<RecordKey> {
+    (index < MAX_MACROS).then(|| RecordKey::new(Scope::Global, MACRO_ITEMS + index))
 }
 
 fn decode_sequence<T: Decode>(
