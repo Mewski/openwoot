@@ -1,9 +1,12 @@
-use openwoot_protocol::{keys::Layer, lighting::KeyColors};
-use serde::{Deserialize, Serialize};
+use openwoot_protocol::{
+    keys::Layer,
+    lighting::KeyColors,
+    wire::{Decode, Encode},
+};
 
 use crate::layout::LAYERS;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Encode, Decode)]
 pub struct Colors(pub [Option<KeyColors>; LAYERS]);
 
 impl Colors {

@@ -20,9 +20,7 @@ libm = { workspace = true }
 openwoot-drivers = { workspace = true }
 openwoot-image = { workspace = true }
 openwoot-protocol = { workspace = true }
-postcard = { workspace = true }
 sequential-storage = { workspace = true }
-serde = { workspace = true }
 spin = { workspace = true }
 static_cell = { workspace = true }
 thiserror = { workspace = true }
@@ -31,6 +29,8 @@ thiserror = { workspace = true }
 critical-section = { workspace = true, features = ["std"] }
 embassy-time = { workspace = true, features = ["generic-queue-8", "mock-driver"] }
 embassy-usb-driver = { workspace = true }
+postcard = { workspace = true }
+serde = { workspace = true }
 
 [lints]
 workspace = true

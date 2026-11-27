@@ -8,9 +8,12 @@ The configuration channel between the openwoot firmware and host software, `no_s
   `diagnostics::Report`). The table also lists the two standard endpoints of `postcard-rpc`
   (`postcard-rpc/ping`, `postcard-rpc/schemas/get`); the firmware serves neither and answers
   them with `UnknownKey`.
-- Messages: a `postcard-rpc` header (key, sequence number) and a `postcard` body. Host side:
-  `encode_request` and `decode_response`; firmware side: `decode_message`, `Message::reply_header`
-  and `encode_message`.
+- Messages: a `postcard-rpc` header (key, sequence number) and a body in the `postcard` format.
+  Host side: `encode_request` and `decode_response` (postcard); firmware side: `decode_message`,
+  `Message::reply_header` and `encode_frame`, with bodies coded by `wire`.
+- `wire`: the firmware's codec of the postcard format, `Encode` and `Decode` derived for every
+  protocol type (macros from `openwoot-derive`) over `Writer` and `Reader`; it writes and accepts
+  exactly the bytes postcard 1.2 does (tests compare the two).
 - `report`: each message travels in one HID report of interface 2 (usage page `0xff55`) as `"OW"`,
   the frame length (`u16`, little endian) and the frame, zero padded to the smallest report
   (ids 1 to 6: 32, 62, 254, 510, 1022, 2046 bytes, `report::SIZES`) that holds it.

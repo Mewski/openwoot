@@ -2,8 +2,21 @@ use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
 use super::Invalid;
+use crate::wire::{Decode, Encode};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, thiserror::Error)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Schema,
+    Encode,
+    Decode,
+    thiserror::Error,
+)]
 pub enum Rejection {
     #[error(transparent)]
     Invalid(#[from] Invalid),

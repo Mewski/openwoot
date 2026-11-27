@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     configuration::{Capabilities, Invalid, Validate},
     profile::Slot,
+    wire::{Decode, Encode},
 };
 
 pub const MAX_LINKS: u8 = 16;
@@ -13,7 +14,7 @@ pub const TEXT_LEN: usize = 260;
 
 pub type Text = String<TEXT_LEN>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Link {
     pub name: Text,
     pub app: App,
@@ -23,26 +24,28 @@ pub struct Link {
     clippy::large_enum_variant,
     reason = "the protocol has no heap, so a custom app is held in place as in the stock message"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub enum App {
     Custom(Custom),
     Steam(u32),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Custom {
     pub matching: Matching,
     pub filters: Vec<Filter, MAX_FILTERS>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub enum Matching {
     #[default]
     Any,
     All,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub enum Filter {
     ProcessName(Text),
     ProcessDirectory(Text),
@@ -50,13 +53,13 @@ pub enum Filter {
     ProcessPath(Text),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct LinkRef {
     pub profile: Slot,
     pub index: u8,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct LinkChange {
     pub profile: Slot,
     pub index: u8,

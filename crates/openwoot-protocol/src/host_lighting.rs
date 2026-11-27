@@ -6,15 +6,16 @@ use crate::{
     keys::Position,
     lightbar,
     lighting::{KeyColors, Rgb},
+    wire::{Decode, Encode},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct KeyColor {
     pub key: Position,
     pub color: Rgb,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Frame {
     pub keys: KeyColors,
     pub lightbar: lightbar::Colors,

@@ -20,7 +20,6 @@ pub use layout_variant::{InDeviceInfo, LayoutOverride, LayoutVariantSource, Opti
 pub use nor_identity::NorIdentity;
 pub use nor_layout::{NorLayout, SECTOR_SIZE, SettingsRegion};
 pub use partition::{Partition, PartitionError};
-pub(crate) use record::encode;
 pub use record::{Record, RecordKey, Scope, Stored};
 pub use settings::{Error, Settings};
 pub use store::Storage;

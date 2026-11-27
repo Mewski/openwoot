@@ -3,15 +3,17 @@ use core::fmt;
 use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
+use crate::wire::{Decode, Encode};
+
 pub const PROTOCOL_VERSION: u16 = 1;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Version {
     pub protocol: u16,
     pub firmware: FirmwareVersion,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct FirmwareVersion {
     pub major: u16,
     pub minor: u16,

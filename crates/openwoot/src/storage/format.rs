@@ -1,5 +1,5 @@
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
-use serde::{Deserialize, Serialize};
+use openwoot_protocol::wire::{Decode, Encode};
 
 use super::{
     partition::Partition,
@@ -21,7 +21,7 @@ pub enum FormatReason {
     Unrecognised,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 struct Format {
     generation: u16,
 }

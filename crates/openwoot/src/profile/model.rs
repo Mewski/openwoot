@@ -13,8 +13,8 @@ use openwoot_protocol::{
     lighting::{self, KeyColors},
     profile::{Info, MAX_LINKED, Namespace, Selection, Slot, Summary},
     switches,
+    wire::{self, Decode, Encode, Writer, encode},
 };
-use serde::{Serialize, de::DeserializeOwned};
 
 use super::{
     Changes, Colors, Count, DeviceName, Factory, KeyPart, LinkedCount, Order, Preset, Revision,
@@ -24,7 +24,7 @@ use crate::{
     keys::{ActiveProfile, Keymaps, Parts, Profile, default_gamepad_settings},
     layout::LAYERS,
     lighting::{Lightbar, ProfileState},
-    storage::{LayoutOverride, Record, RecordKey, Scope, Settings, Stored, encode},
+    storage::{LayoutOverride, Record, RecordKey, Scope, Settings, Stored},
 };
 
 const APP_LINK_ITEMS: u8 = 0x30;
@@ -78,37 +78,37 @@ where
             Parts::SETTINGS,
             keys::Settings::ITEM,
             keys::Settings::VERSION,
-            keys::Settings::encode,
+            keys::Settings::encode_part,
         ),
         (
             Parts::KEYMAPS,
             Keymaps::ITEM,
             Keymaps::VERSION,
-            Keymaps::encode,
+            Keymaps::encode_part,
         ),
         (
             Parts::OVERRIDES,
             Overrides::ITEM,
             Overrides::VERSION,
-            Overrides::encode,
+            Overrides::encode_part,
         ),
         (
             Parts::ADVANCED,
             advanced::Keys::ITEM,
             advanced::Keys::VERSION,
-            advanced::Keys::encode,
+            advanced::Keys::encode_part,
         ),
         (
             Parts::GAMEPAD_MAPPING,
             gamepad::Mapping::ITEM,
             gamepad::Mapping::VERSION,
-            gamepad::Mapping::encode,
+            gamepad::Mapping::encode_part,
         ),
         (
             Parts::GAMEPAD_SETTINGS,
             gamepad::Settings::ITEM,
             gamepad::Settings::VERSION,
-            gamepad::Settings::encode,
+            gamepad::Settings::encode_part,
         ),
     ];
 
@@ -518,7 +518,7 @@ where
         let key = app_link_key(self.order.scope(profile.get()), index);
         load_key(&mut self.storage, key)
             .filter(|stored| stored.version == APP_LINK_VERSION)
-            .and_then(|stored| postcard::from_bytes::<apps::Link>(stored.body).ok())
+            .and_then(|stored| wire::decode_prefix::<apps::Link>(stored.body))
             .map(|stored| *link = stored)
             .ok_or(Rejection::AppLinkMissing(index))
     }
@@ -1722,7 +1722,7 @@ fn fill<M: RawMutex, T: Record + Validate + Clone>(
 }
 
 fn encode_colors<M: RawMutex>(shared: &Shared<M>, buffer: &mut [u8]) -> Option<usize> {
-    let mut length = 0;
+    let mut writer = Writer::new(buffer);
     for layer in 0..LAYERS {
         let count = shared.read(|appearance| {
             appearance
@@ -1731,50 +1731,46 @@ fn encode_colors<M: RawMutex>(shared: &Shared<M>, buffer: &mut [u8]) -> Option<u
                 .get(layer)
                 .map(|colors| colors.as_ref().map(|entries| entries.len()))
         })??;
-        length = push_encoded(buffer, length, &count.is_some())?;
+        count.is_some().encode(&mut writer);
         let Some(count) = count else {
             continue;
         };
-        length = push_encoded(buffer, length, &count)?;
+        count.encode(&mut writer);
         for index in 0..count {
-            let color = shared.read(|appearance| {
-                appearance
-                    .colors
-                    .0
-                    .get(layer)?
-                    .as_ref()?
-                    .get(index)
-                    .copied()
-            })??;
-            length = push_encoded(buffer, length, &color)?;
+            shared
+                .read(|appearance| {
+                    appearance
+                        .colors
+                        .0
+                        .get(layer)?
+                        .as_ref()?
+                        .get(index)
+                        .copied()
+                })??
+                .encode(&mut writer);
         }
     }
-    Some(length)
+    writer.finish()
 }
 
 fn encode_switches<M: RawMutex>(keys: &crate::keys::Shared<M>, buffer: &mut [u8]) -> Option<usize> {
-    let mut length = push_encoded(buffer, 0, &keys.switches(|settings| settings.default))?;
+    let mut writer = Writer::new(buffer);
+    keys.switches(|settings| settings.default)
+        .encode(&mut writer);
     let count = keys.switches(|settings| settings.keys.len());
-    length = push_encoded(buffer, length, &count)?;
+    count.encode(&mut writer);
     for index in 0..count {
-        let switch = keys.switches(|settings| settings.keys.get(index).copied())?;
-        length = push_encoded(buffer, length, &switch)?;
+        keys.switches(|settings| settings.keys.get(index).copied())?
+            .encode(&mut writer);
     }
-    Some(length)
-}
-
-fn push_encoded(buffer: &mut [u8], length: usize, value: &impl Serialize) -> Option<usize> {
-    let written = postcard::to_slice(value, buffer.get_mut(length..)?)
-        .ok()?
-        .len();
-    length.checked_add(written)
+    writer.finish()
 }
 
 const fn app_link_key(scope: Scope, index: u8) -> RecordKey {
     RecordKey::new(scope, APP_LINK_ITEMS + index)
 }
 
-fn decode_sequence<T: DeserializeOwned>(
+fn decode_sequence<T: Decode>(
     stored: Stored<'_>,
     version: u8,
     mut item: impl FnMut(usize, T),
@@ -1784,7 +1780,7 @@ fn decode_sequence<T: DeserializeOwned>(
     }
     let mut rest = stored.body;
     for index in 0..LAYERS {
-        let Ok((value, remaining)) = postcard::take_from_bytes::<T>(rest) else {
+        let Some((value, remaining)) = wire::take::<T>(rest) else {
             return false;
         };
         item(index, value);

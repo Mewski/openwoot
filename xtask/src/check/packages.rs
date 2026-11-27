@@ -10,6 +10,7 @@ use crate::workspace::{self, Workspace};
 pub(super) enum Kind {
     Firmware,
     Protocol,
+    Derive,
     Drivers,
     Image,
     Pac,
@@ -26,13 +27,14 @@ impl Kind {
     pub(super) const fn is_shared(self) -> bool {
         matches!(
             self,
-            Self::Firmware | Self::Protocol | Self::Drivers | Self::Image
+            Self::Firmware | Self::Protocol | Self::Derive | Self::Drivers | Self::Image
         )
     }
 
     const fn allowed_dependencies(self) -> &'static [Self] {
         match self {
-            Self::Protocol | Self::Drivers | Self::Image | Self::Pac => &[],
+            Self::Derive | Self::Drivers | Self::Image | Self::Pac => &[],
+            Self::Protocol => &[Self::Derive],
             Self::Firmware => &[Self::Protocol, Self::Drivers, Self::Image],
             Self::ChipHal => &[Self::Firmware, Self::Pac, Self::Image],
             Self::Board => &[
@@ -63,6 +65,7 @@ impl fmt::Display for Kind {
         formatter.write_str(match self {
             Self::Firmware => "firmware",
             Self::Protocol => "protocol",
+            Self::Derive => "derive",
             Self::Drivers => "drivers",
             Self::Image => "image",
             Self::Pac => "PAC",
@@ -90,6 +93,7 @@ pub(super) fn classify(workspace: &Workspace) -> Result<Vec<Member<'_>>> {
             let kind = match package.name.as_str() {
                 "openwoot" => Kind::Firmware,
                 "openwoot-protocol" => Kind::Protocol,
+                "openwoot-derive" => Kind::Derive,
                 "openwoot-drivers" => Kind::Drivers,
                 "openwoot-image" => Kind::Image,
                 "openwoot-host" => Kind::Host,
@@ -289,6 +293,13 @@ mod tests {
             [Kind::Protocol, Kind::Image, Kind::Host]
         );
         assert_eq!(Kind::Drivers.allowed_dependencies(), []);
+        assert_eq!(Kind::Derive.allowed_dependencies(), []);
+        assert_eq!(Kind::Protocol.allowed_dependencies(), [Kind::Derive]);
+        assert!(
+            !Kind::Firmware
+                .allowed_dependencies()
+                .contains(&Kind::Derive)
+        );
         assert_eq!(Kind::Xtask.allowed_dependencies(), [Kind::Image]);
     }
 

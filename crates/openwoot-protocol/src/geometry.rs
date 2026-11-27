@@ -2,14 +2,17 @@ use heapless::Vec;
 use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
-use crate::configuration::MAX_KEYS;
+use crate::{
+    configuration::MAX_KEYS,
+    wire::{Decode, Encode},
+};
 
 pub const UNIT: u16 = 100;
 pub const ISO_ENTER_STEP: u16 = UNIT / 4;
 
 pub type Keys = Vec<Option<Key>, MAX_KEYS>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Key {
     pub x: u16,
     pub y: u16,
@@ -18,7 +21,9 @@ pub struct Key {
     pub shape: Shape,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub enum Shape {
     #[default]
     Rectangle,

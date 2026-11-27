@@ -3,6 +3,7 @@ members = ["boards/*", "boards/*/firmware", "crates/*", "xtask"]
 default-members = [
     "crates/openwoot",
     "crates/openwoot-cli",
+    "crates/openwoot-derive",
     "crates/openwoot-drivers",
     "crates/openwoot-gui",
     "crates/openwoot-host",
@@ -68,6 +69,7 @@ objc2-core-graphics = { version = "=0.3.2", default-features = false, features =
 ] }
 object = { version = "=0.41.0", default-features = false, features = ["elf", "read_core", "std"] }
 openwoot = { path = "crates/openwoot" }
+openwoot-derive = { path = "crates/openwoot-derive" }
 openwoot-drivers = { path = "crates/openwoot-drivers" }
 openwoot-gd32f3 = { path = "crates/openwoot-gd32f3" }
 openwoot-gd32f4 = { path = "crates/openwoot-gd32f4" }
@@ -78,6 +80,8 @@ postcard = { version = "=1.2.0", default-features = false }
 postcard-rpc = { version = "=0.12.1", default-features = false }
 postcard-schema = { version = "=0.2.6", features = ["derive"] }
 predicates = "=3.1.4"
+proc-macro2 = "=1.0.107"
+quote = "=1.0.47"
 rustc-demangle = "=0.1.28"
 sequential-storage = "=8.0.2"
 serde = { version = "=1.0.229", default-features = false, features = ["derive"] }
@@ -88,6 +92,7 @@ steamlocate = "=2.1.1"
 svd-encoder = "=0.14.8"
 svd-parser = "=0.14.10"
 svd-rs = "=0.14.13"
+syn = "=2.0.119"
 thiserror = { version = "=2.0.21", default-features = false }
 toml = { version = "=1.2.2", default-features = false, features = ["parse", "serde", "std"] }
 tray-icon = { version = "=0.26.1", default-features = false, features = ["ksni"] }

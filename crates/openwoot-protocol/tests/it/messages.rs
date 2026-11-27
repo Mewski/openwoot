@@ -1,9 +1,10 @@
 use openwoot_protocol::{
-    Body, ERROR_KEY, Endpoint, Error, FirmwareVersion, PROTOCOL_VERSION, VarHeader, VarKey, VarSeq,
+    ERROR_KEY, Endpoint, Error, FirmwareVersion, PROTOCOL_VERSION, VarHeader, VarKey, VarSeq,
     Version, WireError, decode_message, decode_response, encode_frame, encode_message,
     encode_request,
     endpoints::{EnterUpdateMode, GetVersion},
     report::{MAGIC, MAX_LEN, SIZES},
+    wire,
 };
 
 const VERSION: Version = Version {
@@ -124,14 +125,14 @@ fn a_reply_with_another_key_or_sequence_number_size_is_not_taken() {
 }
 
 #[test]
-fn a_body_behind_its_trait_object_frames_the_same_report_as_its_type() {
+fn a_body_framed_through_the_wire_codec_matches_the_postcard_frame() {
     let header = VarHeader {
         key: VarKey::Key8(GetVersion::RESP_KEY),
         seq_no: VarSeq::Seq2(7),
     };
     let mut typed = [0; MAX_LEN];
     let typed = encode_message(&header, &VERSION, &mut typed).unwrap();
-    let body: &dyn Body = &VERSION;
+    let body: &dyn wire::Encode = &VERSION;
     let mut erased = [0; MAX_LEN];
     assert_eq!(encode_frame(&header, body, &mut erased), Ok(typed));
 }
@@ -153,9 +154,6 @@ fn a_body_beyond_the_report_is_too_long_for_the_frame() {
         Err(Error::FrameTooLong)
     );
     let mut buffer = [0; MAX_LEN];
-    let length = VERSION.encode(&mut buffer).unwrap();
-    assert_eq!(
-        VERSION.encode(&mut buffer[..length - 1]),
-        Err(Error::FrameTooLong)
-    );
+    let length = wire::encode(&VERSION, &mut buffer).unwrap();
+    assert_eq!(wire::encode(&VERSION, &mut buffer[..length - 1]), None);
 }

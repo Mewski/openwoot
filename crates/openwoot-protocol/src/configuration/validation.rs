@@ -7,13 +7,26 @@ use crate::{
     device::Layout,
     lightbar::{MAX_HOLD_MS, MAX_HOST_SIGNALS},
     switches::MAX_TUNED,
+    wire::{Decode, Encode},
 };
 
 pub trait Validate {
     fn validate(&self, capabilities: &Capabilities) -> Result<(), Invalid>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, thiserror::Error)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Schema,
+    Encode,
+    Decode,
+    thiserror::Error,
+)]
 pub enum Invalid {
     #[error("expected {expected} keys, found {found}")]
     KeyCountDiffersFromMatrix { expected: u16, found: u16 },

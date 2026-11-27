@@ -9,3 +9,4 @@ mod reports;
 mod round_trips;
 mod support;
 mod validation;
+mod wire;

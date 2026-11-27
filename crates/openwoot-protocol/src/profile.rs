@@ -6,15 +6,29 @@ use crate::{
     configuration::{Capabilities, Invalid, Validate},
     keys::Layer,
     lighting::Rgb,
+    wire::{Decode, Encode},
 };
 
 pub const NAME_LEN: usize = 32;
 pub const MAX_LINKED: u8 = 10;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Schema,
+    Encode,
+    Decode,
+)]
 pub struct Slot(u8);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Summary {
     pub count: u8,
     pub active: Slot,
@@ -22,58 +36,60 @@ pub struct Summary {
     pub selected: Option<Slot>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub enum Namespace {
     #[default]
     Onboard,
     Linked,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Selection {
     pub profile: Option<Slot>,
     pub activate: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Info {
     pub name: String<NAME_LEN>,
     pub color: Rgb,
     pub icon: u8,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct LayerRef {
     pub profile: Slot,
     pub layer: Layer,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Change<T> {
     pub profile: Slot,
     pub value: T,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct LayerChange<T> {
     pub profile: Slot,
     pub layer: Layer,
     pub value: T,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Swap {
     pub first: Slot,
     pub second: Slot,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Move {
     pub from: Slot,
     pub to: Slot,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct State {
     pub active: Slot,
     pub host_control: bool,

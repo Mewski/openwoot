@@ -7,7 +7,7 @@ use core::{
 
 use embedded_hal_async::delay::DelayNs;
 use openwoot_protocol::{
-    Body, ERROR_KEY, Endpoint, Key, Message, VarKey, Version, WireError, apps,
+    ERROR_KEY, Endpoint, Key, Message, VarKey, Version, WireError, apps,
     configuration::{Capabilities, Rejection, Validate},
     decode_message, encode_frame,
     endpoints::{
@@ -29,8 +29,8 @@ use openwoot_protocol::{
     gamepad, host_lighting, keys, lightbar,
     profile::{self, Slot},
     stock::Status,
+    wire::{self, Encode},
 };
-use serde::{Serialize, de::DeserializeOwned};
 
 use super::{
     Configuration, StockIdentity, Untimed,
@@ -235,7 +235,7 @@ macro_rules! dispatch {
     (@serve $kind:ident $endpoint:ident, $capabilities:ident, $exchange:ident,
         $request:pat, (), $call:expr) => {{
         let answer: Result<<$endpoint as Endpoint>::Response, WireError> =
-            match decode::<<$endpoint as Endpoint>::Request>($exchange.request.body) {
+            match wire::decode::<<$endpoint as Endpoint>::Request>($exchange.request.body) {
                 Some(request) => dispatch!(@$kind $capabilities, request, $request, $call),
                 None => Err(WireError::DeserFailed),
             };
@@ -245,7 +245,7 @@ macro_rules! dispatch {
         $request:pat, ($value:ident), $call:expr) => {{
         let mut value = <<$endpoint as Endpoint>::Response as Filled>::Value::empty();
         let filled: Result<Result<(), Rejection>, WireError> =
-            match decode::<<$endpoint as Endpoint>::Request>($exchange.request.body) {
+            match wire::decode::<<$endpoint as Endpoint>::Request>($exchange.request.body) {
                 Some(request) => {
                     let $value = &mut value;
                     dispatch!(@$kind $capabilities, request, $request, $call)
@@ -523,7 +523,7 @@ struct Exchange<'m, 'r> {
 }
 
 impl Exchange<'_, '_> {
-    fn answer(&mut self, key: Key, answer: Result<&dyn Body, &WireError>) -> Option<usize> {
+    fn answer(&mut self, key: Key, answer: Result<&dyn Encode, &WireError>) -> Option<usize> {
         match answer {
             Ok(body) => self
                 .encode(key, body)
@@ -536,7 +536,7 @@ impl Exchange<'_, '_> {
         self.encode(ERROR_KEY, error)
     }
 
-    fn encode(&mut self, key: Key, body: &dyn Body) -> Option<usize> {
+    fn encode(&mut self, key: Key, body: &dyn Encode) -> Option<usize> {
         encode_frame(&self.request.reply_header(key), body, self.response)
             .ok()
             .map(<[u8]>::len)
@@ -557,15 +557,8 @@ fn answered<R>(serve: impl FnOnce() -> R) -> R {
     serve()
 }
 
-fn decode<T: DeserializeOwned>(body: &[u8]) -> Option<T> {
-    match postcard::take_from_bytes(body) {
-        Ok((request, [])) => Some(request),
-        _ => None,
-    }
-}
-
-fn reply_body<T: Serialize>(answer: &Result<T, WireError>) -> Result<&dyn Body, &WireError> {
-    answer.as_ref().map(|answer| answer as &dyn Body)
+fn reply_body<T: Encode>(answer: &Result<T, WireError>) -> Result<&dyn Encode, &WireError> {
+    answer.as_ref().map(|answer| answer as &dyn Encode)
 }
 
 fn reply(response: &[u8], length: Option<usize>) -> Option<&[u8]> {

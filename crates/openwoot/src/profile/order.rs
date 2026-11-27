@@ -1,12 +1,14 @@
 use heapless::Vec;
-use openwoot_protocol::profile::Slot;
-use serde::{Deserialize, Serialize};
+use openwoot_protocol::{
+    profile::Slot,
+    wire::{Decode, Encode},
+};
 
 use crate::storage::{Record, Scope};
 
 const SLOTS: u8 = 16;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct Order(Vec<u8, { SLOTS as usize }>);
 
 impl Order {

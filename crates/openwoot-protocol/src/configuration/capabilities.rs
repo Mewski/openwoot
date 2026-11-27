@@ -3,12 +3,15 @@ use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
 use super::Invalid;
-use crate::device::Layout;
+use crate::{
+    device::Layout,
+    wire::{Decode, Encode},
+};
 
 pub const MAX_KEYS: usize = 128;
 pub const LAYOUTS: usize = 3;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Capabilities {
     pub key_rows: u8,
     pub key_columns: u8,

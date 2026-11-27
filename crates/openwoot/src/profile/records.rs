@@ -1,19 +1,23 @@
-use openwoot_protocol::{device, global, lightbar, lighting, profile::Info, switches};
-use serde::{Deserialize, Serialize};
+use openwoot_protocol::{
+    device, global, lightbar, lighting,
+    profile::Info,
+    switches,
+    wire::{Decode, Encode},
+};
 
 use super::Colors;
 use crate::storage::Record;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct Count(pub u8);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct LinkedCount(pub u8);
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode)]
 pub struct Revision(pub u32);
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Encode, Decode)]
 pub struct DeviceName(pub device::Name);
 
 impl Record for lighting::Settings {

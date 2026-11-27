@@ -2,11 +2,14 @@ use heapless::Vec;
 use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
-use crate::configuration::{Capabilities, Invalid, MAX_KEYS, Validate};
+use crate::{
+    configuration::{Capabilities, Invalid, MAX_KEYS, Validate},
+    wire::{Decode, Encode},
+};
 
 pub const CURVE_POINTS: usize = 4;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub enum Control {
     ButtonA,
     ButtonB,
@@ -46,13 +49,13 @@ pub enum Control {
     HatRight,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Mapping {
     pub bindings: Vec<Option<Control>, MAX_KEYS>,
     pub exclusive: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Settings {
     pub curve: [CurvePoint; CURVE_POINTS],
     pub normalization: Normalization,
@@ -60,26 +63,28 @@ pub struct Settings {
     pub left_stick_up_bias: StickBias,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct StickBias {
     pub enabled: bool,
     pub percent: u8,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct CurvePoint {
     pub travel: u8,
     pub output: u8,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub enum Normalization {
     #[default]
     Circular,
     Square,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub enum Player {
     One,
     Two,
@@ -87,7 +92,9 @@ pub enum Player {
     Four,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub struct State {
     pub player: Option<Player>,
     pub detection: bool,

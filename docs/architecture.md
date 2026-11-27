@@ -11,6 +11,7 @@ boards/<board>          board support crate (compiled for size): board facts, me
    ├── openwoot-drivers chip drivers (LED matrix, NOR flash), generic over embedded-hal-async
    └── openwoot         the firmware: generic over the traits it defines (`protocol::UpdateMode`, `scan::Sensing`, ...), no hardware access
           ├── openwoot-protocol  configuration protocol shared with host software
+          │      └── openwoot-derive  derive macros of the wire codec
           └── openwoot-image     image descriptor, memory.x reader, image checks
 openwoot-cli (host)  ── openwoot-host
 openwoot-gui (host)  ── openwoot-host, openwoot-protocol
@@ -21,7 +22,8 @@ xtask (host)         ── openwoot-image
 | Crate | Holds today |
 | --- | --- |
 | `crates/openwoot` | `hid` (report descriptors and typed reports), `xinput` (the XInput report, LED command and interface descriptors), `usb` (the stock-like USB face, `Negotiated`: descriptors of the negotiated speed, `HostState`: what the host set), `protocol` (configuration channel on interface 2, the stock identification responder, `UpdateMode`: what the channel needs to hand over to the bootloader), `diagnostics` (counters, bus transfer counts and the `GetDiagnostics` readout), `analog` (the hall-sensor model), `scan` (the scan state machine), `keys` (the key engine; `keys::Key` is a key by row and column of the key matrix, with its one-byte key code: row in the upper three bits, column in the lower five), `layout` (keymaps and the standard key functions), `lighting` (the lighting engine, effects, light bar and signals), `profile` (profiles, the configuration model, editions), `storage` (settings in the external flash), `runtime` (the tasks' logic and `Firmware::new` that builds them at start-up) |
-| `crates/openwoot-protocol` | the configuration protocol: postcard-rpc endpoints (`GetVersion`, `EnterUpdateMode`, `GetDiagnostics`, the configuration model), HID report framing, the frame magic and the largest frame, `stock` (the stock feature-command framing) |
+| `crates/openwoot-protocol` | the configuration protocol: postcard-rpc endpoints (`GetVersion`, `EnterUpdateMode`, `GetDiagnostics`, the configuration model), HID report framing, the frame magic and the largest frame, `stock` (the stock feature-command framing), `wire` (the firmware's codec of the postcard format, derived per type) |
+| `crates/openwoot-derive` | the `wire::Encode` and `wire::Decode` derive macros |
 | `crates/openwoot-drivers` | `Is31fl3741` over `embedded_hal_async::i2c::I2c`, `SpiNor` over `embedded_hal_async::spi::SpiDevice` |
 | `crates/openwoot-image` | `Descriptor` (the image descriptor), `Image` (checks of an image), `MemoryLayout` (reads `memory.x`) |
 | `crates/openwoot-gd32f4`, `crates/openwoot-gd32f3` | re-export of the PAC, `app_descriptor!` (places the descriptor in flash), clocks, GPIO, time driver, interrupts, executors, update-mode hand-over, USB driver with `usb::negotiated_speed()`, `flash::read` (read-only view of the chip's flash) |

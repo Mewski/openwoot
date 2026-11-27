@@ -1,6 +1,8 @@
 use heapless::Vec;
-use openwoot_protocol::{advanced, gamepad, keys};
-use serde::Serialize;
+use openwoot_protocol::{
+    advanced, gamepad, keys,
+    wire::{Encode, Writer},
+};
 
 use crate::{
     keys::{Keymaps, Profile, ProfileSource},
@@ -9,79 +11,76 @@ use crate::{
 };
 
 pub(super) trait KeyPart: Record {
-    fn write(source: &impl ProfileSource, body: &mut Body<'_>) -> Option<()>;
+    fn write(source: &impl ProfileSource, writer: &mut Writer<'_>) -> Option<()>;
 
-    fn encode(source: &impl ProfileSource, buffer: &mut [u8]) -> Option<usize> {
-        let mut body = Body { buffer, length: 0 };
-        Self::write(source, &mut body)?;
-        Some(body.length)
+    fn encode_part(source: &impl ProfileSource, buffer: &mut [u8]) -> Option<usize> {
+        let mut writer = Writer::new(buffer);
+        Self::write(source, &mut writer)?;
+        writer.finish()
     }
 }
 
-pub(super) struct Body<'a> {
-    buffer: &'a mut [u8],
-    length: usize,
-}
-
 impl KeyPart for keys::Settings {
-    fn write(source: &impl ProfileSource, body: &mut Body<'_>) -> Option<()> {
-        body.push(&source.read(|profile| profile.settings)?)
+    fn write(source: &impl ProfileSource, writer: &mut Writer<'_>) -> Option<()> {
+        source.read(|profile| profile.settings)?.encode(writer);
+        Some(())
     }
 }
 
 impl KeyPart for Keymaps {
-    fn write(source: &impl ProfileSource, body: &mut Body<'_>) -> Option<()> {
+    fn write(source: &impl ProfileSource, writer: &mut Writer<'_>) -> Option<()> {
         (0..LAYERS).try_for_each(|layer| {
-            body.push_sequence(source, |profile| profile.keymaps.0.get(layer))
+            write_sequence(source, writer, |profile| profile.keymaps.0.get(layer))
         })
     }
 }
 
 impl KeyPart for keys::Overrides {
-    fn write(source: &impl ProfileSource, body: &mut Body<'_>) -> Option<()> {
-        body.push_sequence(source, |profile| Some(&profile.overrides))
+    fn write(source: &impl ProfileSource, writer: &mut Writer<'_>) -> Option<()> {
+        write_sequence(source, writer, |profile| Some(&profile.overrides))
     }
 }
 
 impl KeyPart for advanced::Keys {
-    fn write(source: &impl ProfileSource, body: &mut Body<'_>) -> Option<()> {
-        body.push_sequence(source, |profile| Some(&profile.advanced))
+    fn write(source: &impl ProfileSource, writer: &mut Writer<'_>) -> Option<()> {
+        write_sequence(source, writer, |profile| Some(&profile.advanced))
     }
 }
 
 impl KeyPart for gamepad::Mapping {
-    fn write(source: &impl ProfileSource, body: &mut Body<'_>) -> Option<()> {
-        body.push_sequence(source, |profile| Some(&profile.gamepad_mapping.bindings))?;
-        body.push(&source.read(|profile| profile.gamepad_mapping.exclusive)?)
+    fn write(source: &impl ProfileSource, writer: &mut Writer<'_>) -> Option<()> {
+        write_sequence(source, writer, |profile| {
+            Some(&profile.gamepad_mapping.bindings)
+        })?;
+        source
+            .read(|profile| profile.gamepad_mapping.exclusive)?
+            .encode(writer);
+        Some(())
     }
 }
 
 impl KeyPart for gamepad::Settings {
-    fn write(source: &impl ProfileSource, body: &mut Body<'_>) -> Option<()> {
-        body.push(&source.read(|profile| profile.gamepad_settings)?)
+    fn write(source: &impl ProfileSource, writer: &mut Writer<'_>) -> Option<()> {
+        source
+            .read(|profile| profile.gamepad_settings)?
+            .encode(writer);
+        Some(())
     }
 }
 
-impl Body<'_> {
-    fn push(&mut self, value: &impl Serialize) -> Option<()> {
-        let rest = self.buffer.get_mut(self.length..)?;
-        let written = postcard::to_slice(value, rest).ok()?.len();
-        self.length = self.length.checked_add(written)?;
+fn write_sequence<T: Copy + Encode, const N: usize>(
+    source: &impl ProfileSource,
+    writer: &mut Writer<'_>,
+    sequence: impl Fn(&Profile) -> Option<&Vec<T, N>>,
+) -> Option<()> {
+    let length = source.read(|profile| sequence(profile).map(|entries| entries.len()))??;
+    length.encode(writer);
+    (0..length).try_for_each(|index| {
+        source
+            .read(|profile| sequence(profile)?.get(index).copied())??
+            .encode(writer);
         Some(())
-    }
-
-    fn push_sequence<T: Copy + Serialize, const N: usize>(
-        &mut self,
-        source: &impl ProfileSource,
-        sequence: impl Fn(&Profile) -> Option<&Vec<T, N>>,
-    ) -> Option<()> {
-        let length = source.read(|profile| sequence(profile).map(|entries| entries.len()))??;
-        self.push(&length)?;
-        (0..length).try_for_each(|index| {
-            let entry = source.read(|profile| sequence(profile)?.get(index).copied())??;
-            self.push(&entry)
-        })
-    }
+    })
 }
 
 #[cfg(test)]
@@ -92,6 +91,7 @@ mod tests {
         advanced::Behaviour,
         gamepad::Control,
         keys::{Action, Distance, Index, Layer, Override},
+        wire,
     };
 
     use super::*;
@@ -144,9 +144,9 @@ mod tests {
     fn assert_encodes_like_the_whole_part<T: KeyPart>(source: &Counted, part: &T) {
         let mut pieces = [0; 2048];
         let mut whole = [0; 2048];
-        let length = T::encode(source, &mut pieces).unwrap();
-        let expected = postcard::to_slice(part, &mut whole).unwrap();
-        assert_eq!(pieces.get(..length), Some(&*expected));
+        let length = T::encode_part(source, &mut pieces).unwrap();
+        let expected = wire::encode(part, &mut whole).unwrap();
+        assert_eq!(pieces.get(..length), whole.get(..expected));
     }
 
     #[test]
@@ -177,6 +177,6 @@ mod tests {
             largest: Cell::new(0),
         };
         let mut body = [0; 8];
-        assert_eq!(Keymaps::encode(&source, &mut body), None);
+        assert_eq!(Keymaps::encode_part(&source, &mut body), None);
     }
 }

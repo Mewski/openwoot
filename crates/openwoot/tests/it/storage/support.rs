@@ -1,5 +1,6 @@
 use openwoot::storage::{self, NorLayout, Opened, Partition, Record, Scope, Settings};
 use openwoot_image::Region;
+use openwoot_protocol::wire::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use super::model::{Nor, SECTOR};
@@ -8,13 +9,13 @@ pub(crate) const SETTINGS_SECTORS: u32 = 4;
 pub(crate) const PROFILES: u8 = 6;
 const DEVICE_INFO_PATTERN: u8 = 0x5A;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
 pub(crate) struct Blob {
     seed: u32,
     bytes: [[u8; 32]; 6],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
 pub(crate) struct Brightness(pub(crate) u8);
 
 impl Record for Blob {

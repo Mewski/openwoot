@@ -10,25 +10,47 @@ use openwoot::{
     storage::{LayoutOverride, Record, RecordKey, Scope, Settings},
 };
 use openwoot_protocol::{
-    advanced,
-    apps::{self, App, Link},
+    advanced::{self, Behaviour, Interrupt, ModTap},
+    apps::{App, Link, Text},
     configuration::Rejection,
     device,
     diagnostics::Usb,
-    gamepad, global,
+    gamepad::{self, Control},
+    global,
     heapless::Vec,
-    keys::{Keymap, Layer, Overrides},
+    keys::{
+        Action, Distance, Index, Keymap, Layer, Override, Overrides, RapidTrigger,
+        RapidTriggerOverride,
+    },
     lightbar::{self, Entry, Range, Solid, Target, Title},
-    lighting::{self, Color},
+    lighting::{self, Color, Idle, KeyColors, Rgb},
     profile::{Info, Namespace, Slot},
     switches,
 };
+use serde::Serialize;
 
 use super::{
-    FACTORY, Mutual, ProbedModel, ProfileModel, open, open_probed, probed_storage, storage,
-    switch_capabilities,
+    FACTORY, Mutual, ProbedModel, ProfileModel, chosen, factory_switches, open, open_probed,
+    probed_storage, storage, switch_capabilities,
 };
-use crate::storage::Nor;
+use crate::{
+    lighting::{COLUMNS, ROWS},
+    storage::Nor,
+};
+
+struct StoredParts {
+    settings: openwoot_protocol::keys::Settings,
+    keymaps: [Keymap; 4],
+    overrides: Overrides,
+    advanced: advanced::Keys,
+    mapping: gamepad::Mapping,
+    gamepad: gamepad::Settings,
+    lighting: lighting::Settings,
+    colors: [Option<KeyColors>; 4],
+    info: Info,
+    revision: u32,
+    lightbar: lightbar::Settings,
+}
 
 const GAMEPAD: device::Settings = device::Settings {
     mode: device::Mode::Gamepad,
@@ -296,7 +318,7 @@ fn managing_profiles_counts_each_record_once() {
     note("create and delete");
     let linked = model.create(Namespace::Linked).unwrap();
     let link = Link {
-        name: apps::Text::try_from("game").unwrap(),
+        name: Text::try_from("game").unwrap(),
         app: App::Steam(7),
     };
     model.set_app_link(linked, 0, &link).unwrap();
@@ -476,4 +498,196 @@ fn light_bar_titles_stay_with_their_entries() {
     model.lightbar(Slot::new(1), &mut read).unwrap();
     assert_eq!(read, profile_bar);
     assert_eq!(model.global_lightbar(), &global);
+}
+
+#[test]
+fn records_in_the_postcard_format_of_earlier_firmware_load_unchanged() {
+    let (factory_keys, factory_shared) = (keys::Shared::new(), profile::Shared::new());
+    let mut factory = open(&factory_keys, &factory_shared, None);
+    let active = stored_parts(&mut factory, Slot::new(1), 1);
+    let inactive = stored_parts(&mut factory, Slot::new(0), 2);
+    let global = global::Settings {
+        idle: Some(Idle {
+            dim_after_minutes: 3,
+            off_after_minutes: 9,
+            off_enabled: true,
+        }),
+        num_lock_inverted: true,
+        release_rebound_filter: true,
+    };
+    let entries: lightbar::Entries = [titled("Everywhere")].into_iter().collect();
+    let mut switches = factory_switches();
+    switches.keys[0] = Some(chosen(0, 79));
+    let name = device::Name::try_from("Stored keyboard").unwrap();
+    let link = Link {
+        name: Text::try_from("Game").unwrap(),
+        app: App::Steam(730),
+    };
+    let mut settings = storage();
+    put_parts(&mut settings, Scope::Profile(1), &active);
+    put_parts(&mut settings, Scope::Profile(0), &inactive);
+    put::<keys::ActiveProfile>(&mut settings, Scope::Global, &1_u8);
+    put::<profile::Count>(&mut settings, Scope::Global, &2_u8);
+    put::<profile::LinkedCount>(&mut settings, Scope::Global, &1_u8);
+    put::<profile::Order>(&mut settings, Scope::Global, &[0_u8, 1, 2, 3][..]);
+    put::<global::Settings>(&mut settings, Scope::Global, &global);
+    put::<device::Settings>(&mut settings, Scope::Global, &GAMEPAD);
+    put::<lightbar::Entries>(&mut settings, Scope::Global, &entries);
+    put::<switches::Settings>(&mut settings, Scope::Global, &switches);
+    put::<profile::DeviceName>(&mut settings, Scope::Global, &name);
+    put::<LayoutOverride>(&mut settings, Scope::Global, &1_u8);
+    let stored = settings.store_with(RecordKey::new(Scope::Linked(0), 0x30), 1, &|body| {
+        postcard::to_slice(&link, body).ok().map(|body| body.len())
+    });
+    assert_eq!(stored, Ok(()));
+
+    let (keys, shared) = (keys::Shared::new(), profile::Shared::new());
+    let mut model = Model::new(&keys, &shared, Some(&mut settings), &FACTORY, 0, 4).with_linked(2);
+    model.load();
+    assert_eq!(model.summary().active, Slot::new(1));
+    assert_parts(&mut model, Slot::new(1), &active);
+    assert_parts(&mut model, Slot::new(0), &inactive);
+    assert_eq!(model.global_settings(), global);
+    assert_eq!(model.device_settings(), GAMEPAD);
+    assert_eq!(model.global_lightbar(), &entries);
+    assert_eq!(model.switches(), switches);
+    assert_eq!(model.device_name(), name);
+    assert_eq!(model.chosen_variant(), 1);
+    let mut read = Link {
+        name: Text::new(),
+        app: App::Steam(0),
+    };
+    assert_eq!(model.app_link(Slot::linked(0), 0, &mut read), Ok(()));
+    assert_eq!(read, link);
+}
+
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "the factory model answers every part, and the edited entries lie within the board's key matrix"
+)]
+fn stored_parts(factory: &mut ProfileModel<'_>, profile: Slot, mark: u8) -> StoredParts {
+    let mut settings = factory.settings(profile).unwrap();
+    settings.actuation = Distance::from_fraction(0x4000 + u16::from(mark));
+    settings.rapid_trigger_enabled = !settings.rapid_trigger_enabled;
+    let mut keymaps = Layer::ALL.map(|_| Keymap::new());
+    for (layer, keymap) in Layer::ALL.into_iter().zip(&mut keymaps) {
+        factory.keymap(profile, layer, keymap).unwrap();
+    }
+    keymaps[2][5] = Action::Consumer(0x00E9);
+    keymaps[3][usize::from(mark)] = Action::Gamepad(Control::ButtonY);
+    let mut overrides = Overrides::new();
+    factory.overrides(profile, &mut overrides).unwrap();
+    overrides[7] = Override {
+        actuation: Some(Distance::from_fraction(0x1234)),
+        rapid_trigger: RapidTriggerOverride::With(RapidTrigger {
+            press: Distance::from_fraction(0x0100),
+            release: None,
+            continuous: true,
+        }),
+    };
+    let mut mapping = empty_mapping();
+    factory.gamepad_mapping(profile, &mut mapping).unwrap();
+    mapping.bindings[3] = Some(Control::ButtonY);
+    mapping.exclusive = !mapping.exclusive;
+    let mut gamepad = factory.gamepad_settings(profile).unwrap();
+    gamepad.single_direction_axes = !gamepad.single_direction_axes;
+    let mut lighting = factory.lighting(profile).unwrap();
+    lighting.brightness = 70 + mark;
+    let tint = Rgb {
+        red: 255,
+        green: mark,
+        blue: 9,
+    };
+    StoredParts {
+        settings,
+        keymaps,
+        overrides,
+        advanced: [advanced::Key {
+            key: Index::new(mark),
+            layer: Layer::One,
+            behaviour: Behaviour::ModTap(ModTap {
+                tap: Action::Keyboard(0x29),
+                hold: Action::Keyboard(0xE0),
+                hold_time_ms: 300,
+                interrupt: Interrupt::Hold,
+            }),
+        }]
+        .into_iter()
+        .collect(),
+        mapping,
+        gamepad,
+        lighting,
+        colors: [
+            None,
+            Some(core::iter::repeat_n(tint, ROWS * COLUMNS).collect()),
+            None,
+            None,
+        ],
+        info: Info {
+            name: "Stored".try_into().unwrap(),
+            color: tint,
+            icon: mark,
+        },
+        revision: 40 + u32::from(mark),
+        lightbar: lightbar::Settings {
+            enabled: true,
+            entries: [titled("Stored")].into_iter().collect(),
+            use_global: false,
+            brightness: Some(60),
+        },
+    }
+}
+
+fn put<R: Record>(settings: &mut Settings<Nor>, scope: Scope, value: &(impl Serialize + ?Sized)) {
+    let stored = settings.store_with(RecordKey::of::<R>(scope), R::VERSION, &|body| {
+        postcard::to_slice(value, body).ok().map(|body| body.len())
+    });
+    assert_eq!(stored, Ok(()));
+}
+
+fn put_parts(settings: &mut Settings<Nor>, scope: Scope, parts: &StoredParts) {
+    put::<openwoot_protocol::keys::Settings>(settings, scope, &parts.settings);
+    put::<keys::Keymaps>(settings, scope, &parts.keymaps);
+    put::<Overrides>(settings, scope, &parts.overrides);
+    put::<advanced::Keys>(settings, scope, &parts.advanced);
+    put::<gamepad::Mapping>(settings, scope, &parts.mapping);
+    put::<gamepad::Settings>(settings, scope, &parts.gamepad);
+    put::<lighting::Settings>(settings, scope, &parts.lighting);
+    put::<profile::Colors>(settings, scope, &parts.colors);
+    put::<Info>(settings, scope, &parts.info);
+    put::<profile::Revision>(settings, scope, &parts.revision);
+    put::<lightbar::Settings>(settings, scope, &parts.lightbar);
+}
+
+fn assert_parts(model: &mut ProfileModel<'_>, profile: Slot, parts: &StoredParts) {
+    assert_eq!(model.settings(profile), Ok(parts.settings));
+    for ((layer, keymap), colors) in Layer::ALL
+        .into_iter()
+        .zip(&parts.keymaps)
+        .zip(&parts.colors)
+    {
+        let mut read = Keymap::new();
+        assert_eq!(model.keymap(profile, layer, &mut read), Ok(()));
+        assert_eq!(&read, keymap, "{layer:?}");
+        let mut read = None;
+        assert_eq!(model.key_colors(profile, layer, &mut read), Ok(()));
+        assert_eq!(&read, colors, "{layer:?}");
+    }
+    let mut overrides = Overrides::new();
+    assert_eq!(model.overrides(profile, &mut overrides), Ok(()));
+    assert_eq!(overrides, parts.overrides);
+    let mut advanced = advanced::Keys::new();
+    assert_eq!(model.advanced(profile, &mut advanced), Ok(()));
+    assert_eq!(advanced, parts.advanced);
+    let mut mapping = empty_mapping();
+    assert_eq!(model.gamepad_mapping(profile, &mut mapping), Ok(()));
+    assert_eq!(mapping, parts.mapping);
+    assert_eq!(model.gamepad_settings(profile), Ok(parts.gamepad));
+    assert_eq!(model.lighting(profile), Ok(parts.lighting.clone()));
+    assert_eq!(model.info(profile), Ok(parts.info.clone()));
+    assert_eq!(model.revision(profile), Ok(parts.revision));
+    let mut lightbar = empty_lightbar();
+    assert_eq!(model.lightbar(profile, &mut lightbar), Ok(()));
+    assert_eq!(lightbar, parts.lightbar);
 }

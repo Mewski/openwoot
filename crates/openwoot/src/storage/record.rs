@@ -1,5 +1,5 @@
+use openwoot_protocol::wire::{self, Decode, Encode};
 use sequential_storage::map::{self, SerializationError, Value};
-use serde::{Serialize, de::DeserializeOwned};
 
 pub(super) const KEY_LEN: usize = 2;
 pub(super) const VERSION_LEN: usize = 1;
@@ -8,7 +8,7 @@ pub(super) const MAX_VALUE_LEN: usize = 2048;
 const GLOBAL_SLOT: u8 = 0xFF;
 const LINKED_SLOTS: u8 = 0x80;
 
-pub trait Record: Serialize + DeserializeOwned {
+pub trait Record: Encode + Decode {
     const ITEM: u8;
     const VERSION: u8;
 }
@@ -70,7 +70,7 @@ impl Stored<'_> {
     #[must_use]
     pub fn decode<R: Record>(&self) -> Option<R> {
         if self.version == R::VERSION {
-            postcard::from_bytes(self.body).ok()
+            wire::decode_prefix(self.body)
         } else {
             None
         }
@@ -126,12 +126,6 @@ impl<'a> Value<'a> for Encoder<'_> {
     }
 }
 
-pub(crate) fn encode(value: &impl Serialize, body: &mut [u8]) -> Option<usize> {
-    postcard::to_slice(value, body)
-        .ok()
-        .map(|encoded| encoded.len())
-}
-
 fn split(buffer: &mut [u8]) -> Result<(&mut u8, &mut [u8]), SerializationError> {
     let (version, body) = buffer
         .split_first_mut()
@@ -142,11 +136,9 @@ fn split(buffer: &mut [u8]) -> Result<(&mut u8, &mut [u8]), SerializationError> 
 
 #[cfg(test)]
 mod tests {
-    use serde::Deserialize;
-
     use super::*;
 
-    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    #[derive(Debug, PartialEq, Encode, Decode)]
     struct Brightness(u8);
 
     impl Record for Brightness {
@@ -169,7 +161,7 @@ mod tests {
         let mut buffer = [0; 8];
         let len = Encoder {
             version: Brightness::VERSION,
-            encode: &|body| encode(&Brightness(200), body),
+            encode: &|body| wire::encode(&Brightness(200), body),
         }
         .serialize_into(&mut buffer)
         .unwrap();
@@ -186,7 +178,7 @@ mod tests {
         assert!(
             Encoder {
                 version: Brightness::VERSION,
-                encode: &|body| encode(&Brightness(1), body),
+                encode: &|body| wire::encode(&Brightness(1), body),
             }
             .serialize_into(&mut [0; 1])
             .is_err()
@@ -207,11 +199,7 @@ mod tests {
         let mut buffer = [0; 8];
         let encoder = Encoder {
             version: 3,
-            encode: &|body: &mut [u8]| {
-                postcard::to_slice(&Brightness(9), body)
-                    .ok()
-                    .map(|body| body.len())
-            },
+            encode: &|body: &mut [u8]| wire::encode(&Brightness(9), body),
         };
         let len = encoder.serialize_into(&mut buffer).unwrap();
         assert_eq!(buffer[..len], [3, 9]);

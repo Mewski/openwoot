@@ -4,7 +4,7 @@ use embassy_futures::block_on;
 use embedded_storage_async::nor_flash::{
     MultiwriteNorFlash, NorFlash, NorFlashError, NorFlashErrorKind,
 };
-use openwoot_protocol::diagnostics::StorageUsage;
+use openwoot_protocol::{diagnostics::StorageUsage, wire};
 use sequential_storage::{
     self as store,
     cache::{
@@ -17,9 +17,7 @@ use sequential_storage::{
 use super::{
     nor_layout::MAXIMUM_SETTINGS_SECTORS,
     partition::{Partition, PartitionError},
-    record::{
-        Encoder, KEY_LEN, MAX_VALUE_LEN, Record, RecordKey, Scope, Stored, VERSION_LEN, encode,
-    },
+    record::{Encoder, KEY_LEN, MAX_VALUE_LEN, Record, RecordKey, Scope, Stored, VERSION_LEN},
     stored_keys::StoredKeys,
     usage::Tally,
 };
@@ -93,7 +91,7 @@ impl<F: MultiwriteNorFlash> Settings<F> {
 
     pub fn store<R: Record>(&mut self, scope: Scope, record: &R) -> Result<(), Error> {
         self.store_with(RecordKey::of::<R>(scope), R::VERSION, &|body| {
-            encode(record, body)
+            wire::encode(record, body)
         })
     }
 

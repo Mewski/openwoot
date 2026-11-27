@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     configuration::{Capabilities, Invalid, Validate},
     keys::{Action, Distance, Index, Layer},
+    wire::{Decode, Encode},
 };
 
 pub const MAX_ENTRIES: usize = 40;
@@ -12,14 +13,14 @@ pub const STROKES: usize = 4;
 
 pub type Keys = Vec<Key, MAX_ENTRIES>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Key {
     pub key: Index,
     pub layer: Layer,
     pub behaviour: Behaviour,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub enum Behaviour {
     DynamicKeystroke(DynamicKeystroke),
     ModTap(ModTap),
@@ -28,13 +29,15 @@ pub enum Behaviour {
     Socd(Socd),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct DynamicKeystroke {
     pub strokes: [Stroke; STROKES],
     pub bottom_out: Option<Distance>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub struct Stroke {
     pub action: Action,
     pub on_press: StrokeEvent,
@@ -43,7 +46,9 @@ pub struct Stroke {
     pub on_release: StrokeEvent,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub enum StrokeEvent {
     #[default]
     Nothing,
@@ -52,7 +57,7 @@ pub enum StrokeEvent {
     Tap,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct ModTap {
     pub tap: Action,
     pub hold: Action,
@@ -60,7 +65,9 @@ pub struct ModTap {
     pub interrupt: Interrupt,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub enum Interrupt {
     #[default]
     Auto,
@@ -69,20 +76,20 @@ pub enum Interrupt {
     Tap,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct DepthPriority {
     pub other: Index,
     pub both_bottomed_out: Resolution,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Socd {
     pub other: Index,
     pub resolution: Resolution,
     pub both_when_bottomed_out: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub enum Resolution {
     Both,
     Neither,

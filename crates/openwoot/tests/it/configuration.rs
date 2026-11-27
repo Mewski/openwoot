@@ -10,8 +10,8 @@ use openwoot::{
     usb::HostState,
 };
 use openwoot_protocol::{
-    Body, Endpoint, FirmwareVersion, PROTOCOL_VERSION, VarHeader, VarKey, VarSeq, Version,
-    WireError, advanced,
+    Endpoint, FirmwareVersion, PROTOCOL_VERSION, VarHeader, VarKey, VarSeq, Version, WireError,
+    advanced,
     configuration::{Capabilities, Invalid, Rejection},
     decode_response,
     device::{Layout, NAME_LEN, Name},
@@ -913,13 +913,11 @@ struct Bodies {
 impl Bodies {
     #[expect(
         clippy::unwrap_used,
-        clippy::indexing_slicing,
         reason = "every request a test builds fits the largest report"
     )]
     fn of<R: Serialize>(request: &R) -> Self {
         let mut encoded = [0; report::MAX_LEN];
-        let length = request.encode(&mut encoded).unwrap();
-        let well_formed = encoded[..length].to_vec();
+        let well_formed = postcard::to_slice(request, &mut encoded).unwrap().to_vec();
         let malformed = match well_formed.split_last() {
             Some((_, truncated)) => truncated.to_vec(),
             None => vec![0xFF; 4],

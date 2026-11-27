@@ -2,7 +2,10 @@ use heapless::Vec;
 use postcard_schema::Schema;
 use serde::{Deserialize, Serialize};
 
-use crate::configuration::{Capabilities, Invalid, MAX_KEYS, Validate};
+use crate::{
+    configuration::{Capabilities, Invalid, MAX_KEYS, Validate},
+    wire::{Decode, Encode},
+};
 
 pub const MAX_MODELS: usize = 64;
 pub const MODEL_COUNT: u8 = 49;
@@ -10,19 +13,19 @@ pub const MAX_TUNED: usize = 30;
 
 pub type Models = Vec<Model, MAX_MODELS>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Switch {
     pub model: u8,
     pub travel_offset: u8,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Settings {
     pub default: Option<Switch>,
     pub keys: Vec<Option<Switch>, MAX_KEYS>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Model {
     pub travel: u8,
     pub group: u8,

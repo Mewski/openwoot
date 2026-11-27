@@ -5,6 +5,8 @@
     reason = "postcard-rpc checks every schema of the endpoint table for unique keys at compile time"
 )]
 
+extern crate self as openwoot_protocol;
+
 pub mod advanced;
 pub mod apps;
 pub mod configuration;
@@ -26,11 +28,12 @@ pub mod sensors;
 pub mod stock;
 pub mod switches;
 mod version;
+pub mod wire;
 
 pub use error::Error;
 pub use heapless;
 pub use message::{
-    Body, Message, decode_message, decode_response, encode_frame, encode_message, encode_request,
+    Message, decode_message, decode_response, encode_frame, encode_message, encode_request,
 };
 pub use postcard_rpc::{
     Endpoint, Key,

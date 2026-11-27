@@ -1,6 +1,8 @@
 use embedded_storage_async::nor_flash::MultiwriteNorFlash;
-use openwoot_protocol::configuration::LAYOUTS;
-use serde::{Deserialize, Serialize};
+use openwoot_protocol::{
+    configuration::LAYOUTS,
+    wire::{Decode, Encode},
+};
 
 use super::{
     device_info::DeviceInfo,
@@ -22,7 +24,7 @@ pub struct OptionBit {
     pub user_option: fn() -> u8,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct LayoutOverride(pub u8);
 
 impl LayoutOverride {

@@ -1,10 +1,20 @@
+use core::fmt::Debug;
+
 use openwoot::{
     diagnostics::{Diagnostics, Hardware},
-    storage::{Error, Opened, Partition, Record, RecordKey, Scope, Settings},
+    keys::{ActiveProfile, Keymaps},
+    profile::{Colors, Count, DeviceName, LinkedCount, Order, Revision},
+    storage::{
+        Error, LayoutOverride, Opened, Partition, Record, RecordKey, Scope, Settings, Stored,
+    },
 };
 use openwoot_protocol::{
+    device,
     diagnostics::{Storage, Usb},
     heapless,
+    keys::{Action, Keymap},
+    lighting::{KeyColors, Rgb},
+    wire::{self, Decode, Encode},
 };
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +25,7 @@ use super::{
 
 const LARGEST_BODY: usize = 2048;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
 struct Lighting {
     brightness: u8,
     effect: u8,
@@ -26,7 +36,7 @@ impl Record for Lighting {
     const VERSION: u8 = 2;
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
 struct Text(heapless::Vec<u8, 4096>);
 
 impl Record for Text {
@@ -316,4 +326,61 @@ fn a_record_of_the_largest_size_is_stored_and_read_back() {
             .map(|stored| stored.map(|stored| stored.body.len())),
         Ok(Some(LARGEST_BODY))
     );
+}
+
+#[test]
+fn firmware_records_keep_the_bytes_of_their_fields_in_postcard() {
+    let keymap: Keymap = [
+        Action::Keyboard(0x04),
+        Action::None,
+        Action::Consumer(0x0300),
+    ]
+    .into_iter()
+    .collect();
+    let keymaps = Keymaps([keymap.clone(), Keymap::new(), keymap, Keymap::new()]);
+    agrees_with_postcard(&keymaps, &keymaps.0);
+    let tint = Rgb {
+        red: 1,
+        green: 128,
+        blue: 255,
+    };
+    let colors = Colors([
+        Some(core::iter::repeat_n(tint, 5).collect()),
+        None,
+        Some(KeyColors::new()),
+        None,
+    ]);
+    agrees_with_postcard(&colors, &colors.0);
+    let mut order = Order::identity(4);
+    order.swap(3, 1);
+    agrees_with_postcard(&order, &[0_u8, 3, 2, 1][..]);
+    agrees_with_postcard(&Count(5), &5_u8);
+    agrees_with_postcard(&LinkedCount(2), &2_u8);
+    agrees_with_postcard(&ActiveProfile(3), &3_u8);
+    agrees_with_postcard(&LayoutOverride(1), &1_u8);
+    agrees_with_postcard(&Revision(u32::MAX), &u32::MAX);
+    agrees_with_postcard(&Revision(300), &300_u32);
+    let name = device::Name::try_from("Stored keyboard").unwrap();
+    agrees_with_postcard(&DeviceName(name.clone()), &name);
+}
+
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "every record of the test fits the largest body"
+)]
+fn agrees_with_postcard<R>(record: &R, fields: &(impl Serialize + ?Sized))
+where
+    R: Record + PartialEq + Debug,
+{
+    let mut expected = [0; LARGEST_BODY];
+    let expected = postcard::to_slice(fields, &mut expected).unwrap();
+    let mut encoded = [0; LARGEST_BODY];
+    let len = wire::encode(record, &mut encoded).unwrap();
+    assert_eq!(&encoded[..len], expected, "{record:?}");
+    let stored = Stored {
+        version: R::VERSION,
+        body: expected,
+    };
+    assert_eq!(stored.decode::<R>().as_ref(), Some(record));
 }

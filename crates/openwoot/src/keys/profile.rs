@@ -3,8 +3,8 @@ use openwoot_protocol::{
     advanced,
     gamepad::{self, CurvePoint, Normalization, StickBias},
     keys::{self, Keymap, Overrides},
+    wire::{Decode, Encode},
 };
-use serde::{Deserialize, Serialize};
 
 use super::default_settings;
 use crate::{layout::LAYERS, storage::Record};
@@ -41,10 +41,10 @@ pub struct Profile {
     pub gamepad_settings: gamepad::Settings,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Encode, Decode)]
 pub struct Keymaps(pub [Keymap; LAYERS]);
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode)]
 pub struct ActiveProfile(pub u8);
 
 impl Parts {

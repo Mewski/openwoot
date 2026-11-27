@@ -6,6 +6,7 @@ use crate::{
     configuration::{Capabilities, Invalid, MAX_KEYS, Validate},
     gamepad::Control,
     profile::Slot,
+    wire::{Decode, Encode},
 };
 
 pub const LAYERS: usize = 4;
@@ -13,16 +14,31 @@ pub const LAYERS: usize = 4;
 pub type Keymap = Vec<Action, MAX_KEYS>;
 pub type Overrides = Vec<Override, MAX_KEYS>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Schema,
+    Encode,
+    Decode,
+)]
 pub struct Index(u8);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Position {
     pub row: u8,
     pub column: u8,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub enum Layer {
     #[default]
     Base,
@@ -31,7 +47,9 @@ pub enum Layer {
     Three,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub enum Action {
     #[default]
     None,
@@ -44,14 +62,14 @@ pub enum Action {
     Function(Function),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub enum SystemControl {
     PowerDown,
     Sleep,
     WakeUp,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub enum MouseButton {
     Left,
     Right,
@@ -60,7 +78,7 @@ pub enum MouseButton {
     Forward,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub enum Function {
     BrightnessUp,
     BrightnessDown,
@@ -71,17 +89,32 @@ pub enum Function {
     LayerLock,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Schema,
+    Encode,
+    Decode,
+)]
 pub struct Distance(u16);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct RapidTrigger {
     pub press: Distance,
     pub release: Option<Distance>,
     pub continuous: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub enum RapidTriggerOverride {
     #[default]
     Profile,
@@ -90,13 +123,15 @@ pub enum RapidTriggerOverride {
     With(RapidTrigger),
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub struct Override {
     pub actuation: Option<Distance>,
     pub rapid_trigger: RapidTriggerOverride,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Settings {
     pub actuation: Distance,
     pub rapid_trigger_enabled: bool,
@@ -106,7 +141,9 @@ pub struct Settings {
     pub keyboard_in_gamepad_mode: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub enum TapDuration {
     OneMillisecond,
     TwentyMilliseconds,
@@ -114,7 +151,9 @@ pub enum TapDuration {
     FortyMilliseconds,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub enum ScanMode {
     Single,
     #[default]

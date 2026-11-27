@@ -6,6 +6,7 @@ use crate::{
     configuration::{Capabilities, Invalid, Validate},
     keys::Position,
     lighting::{Color, Rgb},
+    wire::{Decode, Encode},
 };
 
 pub const MAX_ENTRIES: usize = 4;
@@ -22,7 +23,7 @@ pub type Title = String<TITLE_LEN>;
 pub type HostSignals = Vec<HostSignal, MAX_HOST_SIGNALS>;
 pub type HostSignalIds = Vec<u32, MAX_HOST_SIGNALS>;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Settings {
     pub enabled: bool,
     pub entries: Entries,
@@ -30,26 +31,28 @@ pub struct Settings {
     pub brightness: Option<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Entry {
     pub title: Title,
     pub condition: Option<Condition>,
     pub effect: Effect,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Condition {
     pub logic: Logic,
     pub groups: Vec<Group, MAX_GROUPS>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Group {
     pub logic: Logic,
     pub terms: Vec<Term, MAX_TERMS>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub enum Logic {
     #[default]
     Single,
@@ -57,13 +60,13 @@ pub enum Logic {
     Any,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub enum Term {
     Trigger { signal: Signal, duration_ms: u16 },
     Compare(Comparison),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Comparison {
     pub signal: Signal,
     pub comparator: Comparator,
@@ -71,7 +74,7 @@ pub struct Comparison {
     pub hold_ms: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub enum Comparator {
     Equal,
     NotEqual,
@@ -81,19 +84,19 @@ pub enum Comparator {
     LessOrEqual,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub enum Operand {
     Signal(Signal),
     Constant(f32),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub enum Signal {
     Builtin(Builtin),
     Host(u32),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub enum Builtin {
     ActiveProfile,
     AnalogLevel,
@@ -108,7 +111,7 @@ pub enum Builtin {
     ProfileColor,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub enum Effect {
     Meter(Meter),
     ProfileIndicator(ProfileIndicator),
@@ -118,7 +121,7 @@ pub enum Effect {
     Custom(Custom),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Meter {
     pub signal: Signal,
     pub maximum: f32,
@@ -129,14 +132,16 @@ pub struct Meter {
     pub reverse: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct ProfileIndicator {
     pub range: Range,
     pub background: Background,
     pub segments: u8,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub enum Background {
     #[default]
     ProfileColor,
@@ -146,13 +151,13 @@ pub enum Background {
     DimmedProfileColor,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Mirror {
     pub range: Range,
     pub source: KeyRect,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Blink {
     pub from: Color,
     pub to: Color,
@@ -161,44 +166,46 @@ pub struct Blink {
     pub target: Target,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode,
+)]
 pub enum Waveform {
     #[default]
     Square,
     Triangle,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Solid {
     pub color: Color,
     pub target: Target,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Custom {
     pub colors: Vec<Rgb, MAX_LEDS>,
     pub range: Range,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub enum Target {
     Lightbar(Range),
     Keys(KeyRect),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct Range {
     pub first: u8,
     pub last: u8,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct KeyRect {
     pub first: Position,
     pub last: Position,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Schema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, Schema, Encode, Decode)]
 pub struct HostSignal {
     pub id: u32,
     pub value: f32,
