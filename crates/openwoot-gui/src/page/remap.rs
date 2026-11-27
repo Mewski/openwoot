@@ -25,20 +25,21 @@ use openwoot_protocol::{
     endpoints::{
         GetAdvancedKeys, GetDefaultKeymap, GetKeymap, GetKeymapLink, SetKeymap, SetKeymapLink,
     },
-    keys::{Action, Function, Keymap, LAYERS, Layer},
+    keys::{Action, Keymap, LAYERS, Layer},
     profile::{Change, LayerChange, LayerRef},
 };
 
+pub(super) use self::{
+    catalog::capitalized,
+    keycap::{MACRO_ICON, binding, chip, face as keycap_face, glyph, preset_chip, text_chip},
+    layers::{column as layers_column, layer_label, pill as layer_pill},
+    picker::{ActionPicker, PickerEvent, Target},
+    quick_bind::{modifier_usages, usage_of_key},
+};
 use self::{
     factory::{Defaults, Factory},
     letter_layout::LetterLayout,
     link::LinkState,
-};
-pub(super) use self::{
-    keycap::{binding, chip, face as keycap_face, glyph, preset_chip, text_chip},
-    layers::{column as layers_column, layer_label, pill as layer_pill},
-    picker::{ActionPicker, PickerEvent, Target},
-    quick_bind::usage_of_key,
 };
 use super::{Page, advanced::Kind};
 use crate::{
@@ -129,7 +130,7 @@ impl LayerCommand {
 
 impl RemapPage {
     pub(crate) fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let picker = cx.new(|cx| ActionPicker::new(window, cx));
+        let picker = cx.new(|cx| ActionPicker::new(&store, window, cx));
         let subscriptions = vec![
             cx.subscribe_in(&store, window, |this, _, event, window, cx| match event {
                 StoreEvent::Connected | StoreEvent::ProfileChanged | StoreEvent::Reloaded => {
@@ -178,8 +179,6 @@ impl RemapPage {
             return;
         };
         let profile = keyboard.active;
-        self.picker
-            .update(cx, |picker, cx| picker.set_keyboard(&keyboard, cx));
         let keymaps = Layer::ALL.map(|layer| {
             self.store.update(cx, |store, cx| {
                 store.fetch::<GetKeymap, _>(LayerRef { profile, layer }, cx)
@@ -730,17 +729,12 @@ impl RemapPage {
             },
             Action::None => KeyFace::default(),
             action => {
-                let profile_name = match action {
-                    Action::Function(Function::Profile(slot)) => keyboard
-                        .profiles
-                        .get(usize::from(slot.get()))
-                        .map(|info| info.name.as_str()),
-                    _ => None,
-                };
+                let legend = keyboard.legend(action);
                 KeyFace {
-                    legend: usage::legend(action).into(),
-                    glyph: glyph(action, caps.legend, theme.primary),
-                    tooltip: catalog::help(action, profile_name).map(SharedString::from),
+                    glyph: glyph(action, legend.clone(), caps.legend, theme.primary),
+                    legend,
+                    tooltip: catalog::help(action, keyboard.action_name(action))
+                        .map(SharedString::from),
                     ..KeyFace::default()
                 }
             }
@@ -756,9 +750,9 @@ impl RemapPage {
             .map(|key| {
                 let action = self.action(self.layer, key)?;
                 (self.editable(key) && action != Action::None).then(|| {
-                    let dragged =
-                        Dragged::new(Moved(key), SharedString::from(usage::legend(action)));
-                    match glyph(action, caps.legend, accent) {
+                    let legend = keyboard.legend(action);
+                    let dragged = Dragged::new(Moved(key), legend.clone());
+                    match glyph(action, legend, caps.legend, accent) {
                         Some(glyph) => dragged.glyph(glyph),
                         None => dragged,
                     }
@@ -1175,6 +1169,8 @@ fn dropped_message(dropped: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use openwoot_protocol::keys::Function;
+
     use super::*;
 
     fn keymap(actions: &[Action]) -> Keymap {

@@ -4,6 +4,7 @@ mod firmware;
 mod gamepad;
 mod lightbar;
 mod lighting;
+mod macros;
 mod performance;
 mod profiles;
 mod quick;
@@ -25,6 +26,7 @@ pub(crate) enum Page {
     RapidTrigger,
     Remap,
     Advanced,
+    Macros,
     Gamepad,
     Lighting,
     Lightbar,
@@ -49,6 +51,7 @@ impl Page {
             Self::RapidTrigger => "Rapid Trigger",
             Self::Remap => "Remap",
             Self::Advanced => "Advanced Keys",
+            Self::Macros => "Macros",
             Self::Gamepad => "Gamepad",
             Self::Lighting => "RGB Settings",
             Self::Lightbar => "Light Indicator",
@@ -67,6 +70,7 @@ impl Page {
             Self::RapidTrigger => Catalog::Zap,
             Self::Remap => Catalog::Keyboard,
             Self::Advanced => Catalog::Layers,
+            Self::Macros => remap::MACRO_ICON,
             Self::Gamepad => Catalog::Gamepad2,
             Self::Lighting => Catalog::Palette,
             Self::Lightbar => Catalog::Lightbulb,
@@ -85,6 +89,7 @@ impl Page {
             | Self::RapidTrigger
             | Self::Remap
             | Self::Advanced
+            | Self::Macros
             | Self::Gamepad
             | Self::Lighting
             | Self::Lightbar
@@ -102,6 +107,7 @@ impl Page {
             Self::Lightbar => {
                 keyboard.is_some_and(|keyboard| keyboard.capabilities.lightbar_leds > 0)
             }
+            Self::Macros => keyboard.is_some_and(|keyboard| keyboard.macros.is_available()),
             _ => true,
         }
     }
@@ -124,6 +130,9 @@ impl Page {
             Self::Remap => cx.new(|cx| remap::RemapPage::new(store, window, cx)).into(),
             Self::Advanced => cx
                 .new(|cx| advanced::AdvancedPage::new(store, window, cx))
+                .into(),
+            Self::Macros => cx
+                .new(|cx| macros::MacrosPage::new(store, window, cx))
                 .into(),
             Self::Gamepad => cx
                 .new(|cx| gamepad::GamepadPage::new(store, window, cx))

@@ -1,3 +1,4 @@
+use gpui_kit::SharedString;
 use openwoot_protocol::{
     keys::{Action, Function, Layer},
     profile::Slot,
@@ -29,6 +30,7 @@ pub(crate) enum Category {
     Extended,
     Functions,
     Profiles,
+    Macros,
     Media,
     Mouse,
     Gamepad,
@@ -49,11 +51,12 @@ enum Rank {
 }
 
 impl Category {
-    pub(crate) const ALL: [Self; 8] = [
+    pub(crate) const ALL: [Self; 9] = [
         Self::Basic,
         Self::Extended,
         Self::Functions,
         Self::Profiles,
+        Self::Macros,
         Self::Media,
         Self::Mouse,
         Self::Gamepad,
@@ -66,6 +69,7 @@ impl Category {
             Self::Extended => "Extended Characters",
             Self::Functions => "Functions",
             Self::Profiles => "Profiles",
+            Self::Macros => "Macros",
             Self::Media => "Media and Audio control",
             Self::Mouse => "Mouse",
             Self::Gamepad => "Gamepad",
@@ -74,7 +78,7 @@ impl Category {
     }
 }
 
-pub(crate) fn entries(profile_slots: u8) -> Vec<Entry> {
+pub(crate) fn entries(profile_slots: u8, macros: impl IntoIterator<Item = u8>) -> Vec<Entry> {
     let entry = |category| move |action| Entry { action, category };
     let basic = BASIC
         .iter()
@@ -111,6 +115,10 @@ pub(crate) fn entries(profile_slots: u8) -> Vec<Entry> {
             Action::Function(Function::NextProfile),
         ])
         .map(entry(Category::Profiles));
+    let macros = macros
+        .into_iter()
+        .map(Action::Macro)
+        .map(entry(Category::Macros));
     let media = MEDIA
         .iter()
         .map(|code| Action::Consumer(*code))
@@ -142,6 +150,7 @@ pub(crate) fn entries(profile_slots: u8) -> Vec<Entry> {
         .chain(extended)
         .chain(functions)
         .chain(profiles)
+        .chain(macros)
         .chain(media)
         .chain(mouse)
         .chain(gamepad)
@@ -149,7 +158,11 @@ pub(crate) fn entries(profile_slots: u8) -> Vec<Entry> {
         .collect()
 }
 
-pub(crate) fn search(entries: &[Entry], query: &str) -> Vec<Entry> {
+pub(crate) fn search(
+    entries: &[Entry],
+    query: &str,
+    named: impl Fn(Action) -> Option<SharedString>,
+) -> Vec<Entry> {
     let query = query.trim().to_lowercase();
     if query.is_empty() {
         return entries.to_vec();
@@ -158,7 +171,8 @@ pub(crate) fn search(entries: &[Entry], query: &str) -> Vec<Entry> {
         .iter()
         .enumerate()
         .filter_map(|(position, entry)| {
-            rank(entry.action, &query).map(|rank| (entry.category, rank, position, *entry))
+            rank(entry.action, named(entry.action).as_deref(), &query)
+                .map(|rank| (entry.category, rank, position, *entry))
         })
         .collect();
     ranked.sort_by_key(|(category, rank, position, _)| (*category, *rank, *position));
@@ -182,7 +196,7 @@ pub(crate) fn refusal(action: Action, layer: Layer) -> Option<String> {
     }
 }
 
-pub(crate) fn help(action: Action, profile_name: Option<&str>) -> Option<String> {
+pub(crate) fn help(action: Action, name: Option<&str>) -> Option<String> {
     Some(match action {
         Action::Layer(layer) => format!(
             "While pressed, access Fn layer {} mapped keys.",
@@ -198,9 +212,13 @@ pub(crate) fn help(action: Action, profile_name: Option<&str>) -> Option<String>
             "Toggle between the default profile and the last used onboard profile.".to_owned()
         }
         Action::Function(Function::NextProfile) => "Cycle through all active profiles.".to_owned(),
-        Action::Function(Function::Profile(_)) => match profile_name {
+        Action::Function(Function::Profile(_)) => match name {
             Some(name) => format!("{}: {name}", usage::name(action)),
             None => usage::name(action).into_owned(),
+        },
+        Action::Macro(_) => match name {
+            Some(name) => format!("{}: {name}", usage::name(action)),
+            None => format!("{} is empty", usage::name(action)),
         },
         Action::Consumer(_)
         | Action::System(_)
@@ -211,25 +229,26 @@ pub(crate) fn help(action: Action, profile_name: Option<&str>) -> Option<String>
     })
 }
 
-fn capitalized(text: &str) -> String {
+pub(crate) fn capitalized(text: &str) -> String {
     let mut characters = text.chars();
     characters.next().map_or_else(String::new, |first| {
         first.to_uppercase().chain(characters).collect()
     })
 }
 
-fn rank(action: Action, query: &str) -> Option<Rank> {
+fn rank(action: Action, named: Option<&str>, query: &str) -> Option<Rank> {
     let short = usage::legend(action).to_lowercase();
-    let long = usage::name(action).to_lowercase();
-    if short == query || long == query {
-        Some(Rank::Exact)
-    } else if short.starts_with(query)
-        || long
-            .split(|character: char| character.is_whitespace() || character == '/')
+    let mut long = vec![usage::name(action).to_lowercase()];
+    long.extend(named.map(str::to_lowercase));
+    let worded = |text: &String| {
+        text.split(|character: char| character.is_whitespace() || character == '/')
             .any(|word| word.starts_with(query))
-    {
+    };
+    if short == query || long.iter().any(|text| text == query) {
+        Some(Rank::Exact)
+    } else if short.starts_with(query) || long.iter().any(worded) {
         Some(Rank::Prefix)
-    } else if short.contains(query) || long.contains(query) {
+    } else if short.contains(query) || long.iter().any(|text| text.contains(query)) {
         Some(Rank::Contains)
     } else {
         None
@@ -256,10 +275,20 @@ mod tests {
         }
     }
 
+    const MACROS: [u8; 2] = [0, 5];
+
+    fn offered(profiles: u8) -> Vec<Entry> {
+        entries(profiles, MACROS)
+    }
+
+    fn unnamed(_: Action) -> Option<SharedString> {
+        None
+    }
+
     #[test]
     fn every_offered_action_is_accepted_by_the_firmware() {
         let capabilities = capabilities(4);
-        for entry in entries(capabilities.profiles) {
+        for entry in offered(capabilities.profiles) {
             assert_eq!(
                 entry.action.validate(&capabilities),
                 Ok(()),
@@ -271,7 +300,7 @@ mod tests {
 
     #[test]
     fn every_category_offers_something_and_nothing_is_offered_twice() {
-        let offered = entries(4);
+        let offered = offered(4);
         for category in Category::ALL {
             assert!(
                 offered.iter().any(|entry| entry.category == category),
@@ -292,7 +321,7 @@ mod tests {
 
     #[test]
     fn every_named_usage_is_offered() {
-        let offered = entries(4);
+        let offered = offered(4);
         for (code, _, _) in usage::KEYBOARD {
             assert!(
                 offered
@@ -314,7 +343,7 @@ mod tests {
     #[test]
     fn profile_slots_follow_the_capabilities() {
         let profiles = |slots| {
-            entries(slots)
+            entries(slots, [])
                 .into_iter()
                 .filter(|entry| matches!(entry.action, Action::Function(Function::Profile(_))))
                 .count()
@@ -326,7 +355,7 @@ mod tests {
     #[test]
     fn categories_follow_wootility() {
         let category = |action| {
-            entries(4)
+            offered(4)
                 .into_iter()
                 .find(|entry| entry.action == action)
                 .map(|entry| entry.category)
@@ -344,12 +373,23 @@ mod tests {
             Some(Category::Functions)
         );
         assert_eq!(category(Action::Consumer(0x00E9)), Some(Category::Media));
+        assert_eq!(category(Action::Macro(5)), Some(Category::Macros));
         assert_eq!(category(Action::Keyboard(0x7C)), Some(Category::OtherKeys));
     }
 
     #[test]
+    fn only_stored_macros_are_offered() {
+        let macros: Vec<Action> = offered(4)
+            .into_iter()
+            .filter(|entry| entry.category == Category::Macros)
+            .map(|entry| entry.action)
+            .collect();
+        assert_eq!(macros, [Action::Macro(0), Action::Macro(5)]);
+    }
+
+    #[test]
     fn search_groups_results_by_category_and_ranks_inside_each() {
-        let found = search(&entries(4), "f1");
+        let found = search(&offered(4), "f1", unnamed);
         assert_eq!(
             found.first().map(|entry| entry.action),
             Some(Action::Keyboard(0x3A))
@@ -359,13 +399,13 @@ mod tests {
                 .iter()
                 .any(|entry| entry.action == Action::Keyboard(0x43))
         );
-        let volume = search(&entries(4), "volume up");
+        let volume = search(&offered(4), "volume up", unnamed);
         assert!(
             volume
                 .iter()
                 .any(|entry| entry.action == Action::Consumer(0x00E9))
         );
-        let categories: Vec<Category> = search(&entries(4), "a")
+        let categories: Vec<Category> = search(&offered(4), "a", unnamed)
             .iter()
             .map(|entry| entry.category)
             .collect();
@@ -374,7 +414,36 @@ mod tests {
                 .windows(2)
                 .all(|pair| pair.first() <= pair.last())
         );
-        assert_eq!(search(&entries(4), "zzzz"), Vec::new());
+        assert_eq!(search(&offered(4), "zzzz", unnamed), Vec::new());
+    }
+
+    #[test]
+    fn macros_are_found_by_name_and_by_number() {
+        let named = |action| match action {
+            Action::Macro(5) => Some(SharedString::from("Copy line")),
+            _ => None,
+        };
+        let found = |query| {
+            search(&offered(4), query, named)
+                .into_iter()
+                .map(|entry| entry.action)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(found("line"), [Action::Macro(5)]);
+        assert_eq!(found("macro 1"), [Action::Macro(0)]);
+        assert!(found("macro").contains(&Action::Macro(0)));
+    }
+
+    #[test]
+    fn macro_help_names_the_macro_or_its_empty_slot() {
+        assert_eq!(
+            help(Action::Macro(2), Some("Greeting")).as_deref(),
+            Some("Macro 3: Greeting")
+        );
+        assert_eq!(
+            help(Action::Macro(2), None).as_deref(),
+            Some("Macro 3 is empty")
+        );
     }
 
     #[test]

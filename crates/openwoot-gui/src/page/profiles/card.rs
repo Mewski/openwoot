@@ -323,7 +323,7 @@ pub(super) fn section_header(
         }))
 }
 
-pub(super) fn count_chip(used: usize, capacity: usize, cx: &App) -> Div {
+pub(in crate::page) fn count_chip(used: usize, capacity: usize, cx: &App) -> Div {
     let theme = cx.theme();
     h_flex()
         .flex_none()

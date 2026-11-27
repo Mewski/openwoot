@@ -40,6 +40,7 @@ use openwoot_protocol::{
     profile::{self, Change, LayerRef, NAME_LEN, Namespace, Slot},
 };
 
+pub(super) use self::card::count_chip;
 pub(crate) use self::icon::avatar;
 use self::{
     card::{Card, Face, Moving, Origin, Place, Status},

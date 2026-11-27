@@ -18,16 +18,22 @@ use gpui_kit::{
     px,
 };
 use openwoot_protocol::{
-    configuration::{Capabilities, Validate as _},
+    configuration::Validate as _,
     keys::{Action, Layer},
+    macros::Step,
 };
 
 use super::{
     catalog::{self, Category, Entry},
-    keycap::{self, Look},
+    keycap::{self, Look, MACRO_ICON},
     quick_bind,
 };
-use crate::{keyboard::Dragged, panel, store::Keyboard, theme, usage};
+use crate::{
+    keyboard::Dragged,
+    panel,
+    store::{Keyboard, Store},
+    theme,
+};
 
 const HEADER_HEIGHT: f32 = 40.0;
 const BADGE_WIDTH: f32 = 26.0;
@@ -43,6 +49,7 @@ const SEARCH_GAP: f32 = 16.0;
 const HEADER_RADIUS: f32 = 4.0;
 const GRID_GAP: f32 = 8.0;
 const GRID_INSET: f32 = 16.0;
+const NO_MACROS: &str = "Create a macro on the Macros page to bind it here.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PickerEvent {
@@ -53,6 +60,12 @@ pub(crate) enum PickerEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Target {
     pub(crate) current: Action,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Purpose {
+    Binding,
+    Step,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -69,8 +82,8 @@ pub(crate) struct ActionPicker {
     open: BTreeSet<Section>,
     layer: Layer,
     target: Option<Target>,
-    capabilities: Option<Capabilities>,
-    profile_names: Vec<SharedString>,
+    keyboard: Option<Keyboard>,
+    purpose: Purpose,
     listening: Option<Listening>,
     focus: FocusHandle,
     code_problem: Option<SharedString>,
@@ -87,7 +100,7 @@ struct Listening {
 impl EventEmitter<PickerEvent> for ActionPicker {}
 
 impl ActionPicker {
-    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(store: &Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search for a character"));
         let code = cx.new(|cx| InputState::new(window, cx).placeholder("0x65"));
         let subscriptions = vec![
@@ -102,23 +115,42 @@ impl ActionPicker {
                     cx.notify();
                 }
             }),
+            cx.observe(store, |this, store, cx| {
+                let keyboard = store.read(cx).keyboard();
+                let changed = match (&this.keyboard, keyboard) {
+                    (Some(known), Some(current)) => {
+                        known.capabilities != current.capabilities
+                            || known.profiles != current.profiles
+                            || known.macros != current.macros
+                    }
+                    (None, None) => false,
+                    (Some(_), None) | (None, Some(_)) => true,
+                };
+                if changed {
+                    this.keyboard = keyboard.cloned();
+                    this.entries = this.offered();
+                    cx.notify();
+                }
+            }),
         ];
-        Self {
+        let mut picker = Self {
             search,
             code,
             query: SharedString::default(),
-            entries: catalog::entries(0),
+            entries: Vec::new(),
             open: BTreeSet::from([Section::Category(Category::Basic)]),
             layer: Layer::Base,
             target: None,
-            capabilities: None,
-            profile_names: Vec::new(),
+            keyboard: store.read(cx).keyboard().cloned(),
+            purpose: Purpose::Binding,
             listening: None,
             focus: cx.focus_handle(),
             code_problem: None,
             flush: false,
             _subscriptions: subscriptions,
-        }
+        };
+        picker.entries = picker.offered();
+        picker
     }
 
     pub(crate) const fn flush(mut self) -> Self {
@@ -126,18 +158,10 @@ impl ActionPicker {
         self
     }
 
-    pub(crate) fn set_keyboard(&mut self, keyboard: &Keyboard, cx: &mut Context<Self>) {
-        let slots = keyboard.capabilities.profiles;
-        if self.capabilities.as_ref().map(|known| known.profiles) != Some(slots) {
-            self.entries = catalog::entries(slots);
-        }
-        self.capabilities = Some(keyboard.capabilities.clone());
-        self.profile_names = keyboard
-            .profiles
-            .iter()
-            .map(|info| SharedString::from(info.name.as_str().to_owned()))
-            .collect();
-        cx.notify();
+    pub(crate) fn for_steps(mut self) -> Self {
+        self.purpose = Purpose::Step;
+        self.entries = self.offered();
+        self
     }
 
     pub(crate) fn set_layer(&mut self, layer: Layer, cx: &mut Context<Self>) {
@@ -174,12 +198,55 @@ impl ActionPicker {
     }
 
     pub(crate) fn refusal(&self, action: Action) -> Option<String> {
-        catalog::refusal(action, self.layer).or_else(|| {
-            self.capabilities
+        let invalid = |keyboard: &Keyboard| match self.purpose {
+            Purpose::Binding => action.validate(&keyboard.capabilities).err(),
+            Purpose::Step => Step::Tap(action).validate(&keyboard.capabilities).err(),
+        };
+        let layered = match self.purpose {
+            Purpose::Binding => catalog::refusal(action, self.layer),
+            Purpose::Step => None,
+        };
+        layered.or_else(|| {
+            self.keyboard
                 .as_ref()
-                .and_then(|capabilities| action.validate(capabilities).err())
-                .map(|invalid| capitalized(&invalid.to_string()))
+                .and_then(invalid)
+                .map(|invalid| catalog::capitalized(&invalid.to_string()))
         })
+    }
+
+    fn offered(&self) -> Vec<Entry> {
+        let slots = self
+            .keyboard
+            .as_ref()
+            .map_or(0, |keyboard| keyboard.capabilities.profiles);
+        match self.purpose {
+            Purpose::Binding => {
+                let macros: Vec<u8> = self
+                    .keyboard
+                    .iter()
+                    .flat_map(|keyboard| keyboard.macros.iter().map(|(index, _)| index))
+                    .collect();
+                catalog::entries(slots, macros)
+            }
+            Purpose::Step => catalog::entries(slots, [])
+                .into_iter()
+                .filter(|entry| self.keyboard.is_some() && self.refusal(entry.action).is_none())
+                .collect(),
+        }
+    }
+
+    fn legend(&self, action: Action) -> SharedString {
+        match &self.keyboard {
+            Some(keyboard) => keyboard.legend(action),
+            None => crate::usage::legend(action).into(),
+        }
+    }
+
+    fn name(&self, action: Action) -> Option<SharedString> {
+        self.keyboard
+            .as_ref()
+            .and_then(|keyboard| keyboard.action_name(action))
+            .map(|name| SharedString::from(name.to_owned()))
     }
 
     fn toggle(&mut self, section: Section, cx: &mut Context<Self>) {
@@ -280,17 +347,34 @@ impl ActionPicker {
     fn sections(&self, cx: &mut Context<Self>) -> Div {
         let mut list = v_flex();
         for category in Category::ALL {
+            let entries: Vec<Entry> = self
+                .entries
+                .iter()
+                .filter(|entry| entry.category == category)
+                .copied()
+                .collect();
+            let hint = (entries.is_empty() && category == Category::Macros)
+                .then_some(NO_MACROS)
+                .filter(|_| self.purpose == Purpose::Binding);
+            if entries.is_empty() && hint.is_none() {
+                continue;
+            }
             let section = Section::Category(category);
             let open = self.open.contains(&section);
             list = list.child(self.header(section, open, cx));
             if open {
-                let entries: Vec<Entry> = self
-                    .entries
-                    .iter()
-                    .filter(|entry| entry.category == category)
-                    .copied()
-                    .collect();
-                list = list.child(self.grid(&entries, cx));
+                list = match hint {
+                    Some(hint) => list.child(
+                        div()
+                            .px(px(GRID_INSET))
+                            .pt(px(GRID_GAP))
+                            .pb(px(GRID_INSET))
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(hint),
+                    ),
+                    None => list.child(self.grid(&entries, cx)),
+                };
             }
         }
         let open = self.open.contains(&Section::Code);
@@ -299,7 +383,7 @@ impl ActionPicker {
     }
 
     fn results(&self, cx: &mut Context<Self>) -> Div {
-        let found = catalog::search(&self.entries, &self.query);
+        let found = catalog::search(&self.entries, &self.query, |action| self.name(action));
         if found.is_empty() {
             return no_results(cx);
         }
@@ -398,22 +482,18 @@ impl ActionPicker {
             current,
             disabled: refusal.is_some(),
         };
-        let profile_name = match action {
-            Action::Function(openwoot_protocol::keys::Function::Profile(slot)) => self
-                .profile_names
-                .get(usize::from(slot.get()))
-                .map(SharedString::as_str),
-            _ => None,
-        };
+        let name = self.name(action);
         let tooltip: Option<SharedString> = refusal
             .clone()
-            .or_else(|| catalog::help(action, profile_name))
+            .or_else(|| catalog::help(action, name.as_deref()))
             .map(SharedString::from);
         let caps = theme::keycaps();
         let accent = cx.theme().primary;
+        let legend = self.legend(action);
         let tile = keycap::tile(
             ElementId::Name(format!("pick-{action:?}").into()),
             action,
+            legend.clone(),
             look,
             cx,
         )
@@ -423,8 +503,8 @@ impl ActionPicker {
         if refusal.is_some() {
             return tile;
         }
-        let mut dragged = Dragged::new(action, SharedString::from(usage::legend(action)));
-        if let Some(glyph) = keycap::glyph(action, caps.legend, accent) {
+        let mut dragged = Dragged::new(action, legend.clone());
+        if let Some(glyph) = keycap::glyph(action, legend, caps.legend, accent) {
             dragged = dragged.glyph(glyph);
         }
         tile.on_drag(dragged, |dragged, _, _, cx| cx.new(|_| dragged.clone()))
@@ -512,6 +592,7 @@ const fn mark(category: Category) -> Mark {
         Category::Extended => Mark::Letter("#"),
         Category::Functions => Mark::Icon(Catalog::Settings),
         Category::Profiles => Mark::Icon(Catalog::UserRound),
+        Category::Macros => Mark::Icon(MACRO_ICON),
         Category::Media => Mark::Icon(Catalog::Play),
         Category::Mouse => Mark::Icon(Catalog::Mouse),
         Category::Gamepad => Mark::Icon(Catalog::Gamepad2),
@@ -564,11 +645,4 @@ fn no_results(cx: &Context<ActionPicker>) -> Div {
                         ),
                 ),
         )
-}
-
-fn capitalized(text: &str) -> String {
-    let mut characters = text.chars();
-    characters.next().map_or_else(String::new, |first| {
-        first.to_uppercase().chain(characters).collect()
-    })
 }

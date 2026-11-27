@@ -21,7 +21,6 @@ use crate::{
     page::Page,
     panel,
     store::{Keyboard, Store},
-    usage,
 };
 
 const PROMPT: &str = "To adjust actuation point, please select one or more keys first";
@@ -100,7 +99,7 @@ impl ActuationPage {
         let legend = keyboard
             .legends
             .get(key)
-            .map_or_default(|action| SharedString::from(usage::legend(*action)));
+            .map_or_default(|action| keyboard.legend(*action));
         let Some(tuning) = self.tuning.read(cx).key(key) else {
             return KeyFace {
                 legend,

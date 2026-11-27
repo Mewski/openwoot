@@ -8,7 +8,7 @@ use super::{
     travel::TravelFeed,
     tuning::{Tuning, millimetres_text},
 };
-use crate::{store::Keyboard, usage};
+use crate::store::Keyboard;
 
 const METER_LENGTH: f32 = 100.0;
 const METER_WIDTH: f32 = 4.0;
@@ -36,7 +36,7 @@ pub(crate) fn pressed_key(
         name: keyboard
             .legends
             .get(key)
-            .map_or_default(|action| SharedString::from(usage::legend(*action))),
+            .map_or_default(|action| keyboard.legend(*action)),
         travel: fraction,
         actuation: f32::from(actuation.fraction()) / f32::from(u16::MAX),
         reached: effective::reaches(travel, actuation),

@@ -401,12 +401,14 @@ impl AdvancedPage {
                 .child("Assign");
         };
         let action = self.action_of(self.layer, key);
+        let legend = self.legend(action, cx);
         let (danger, foreground) = (theme.danger, theme.danger_foreground);
         slot.bg(theme::palette().raised)
             .text_color(caps.legend)
             .cursor_pointer()
             .child(keycap_face(
                 action,
+                legend,
                 px(SLOT_SIZE),
                 caps.legend,
                 theme.primary,

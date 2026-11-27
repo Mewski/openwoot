@@ -1,3 +1,5 @@
+mod library;
+
 use std::{rc::Rc, time::Duration};
 
 use async_channel::Receiver;
@@ -7,21 +9,25 @@ use openwoot_protocol::{
     configuration::{Capabilities, Rejection},
     device::{self, Layout, LayoutState},
     endpoints::{
-        ActivateProfile, CreateProfile, DeleteAppLink, DeleteProfile, GetAppLink, GetAppLinkCount,
-        GetCapabilities, GetDeviceName, GetKeyGeometry, GetKeymap, GetLayout, GetProfileInfo,
-        GetProfiles, GetSwitchModels, GetSwitches, Revert, Save, SelectLinkedProfile, SetAppLink,
-        SetProfileInfo,
+        ActivateProfile, ClearMacro, CreateProfile, DeleteAppLink, DeleteProfile, GetAppLink,
+        GetAppLinkCount, GetCapabilities, GetDeviceName, GetKeyGeometry, GetKeymap, GetLayout,
+        GetMacros, GetProfileInfo, GetProfiles, GetSwitchModels, GetSwitches, Revert, Save,
+        SelectLinkedProfile, SetAppLink, SetMacro, SetProfileInfo,
     },
     geometry,
-    keys::{self, Action, Distance, Layer},
+    keys::{self, Action, Distance, Function, Layer},
+    macros::{self, Macro},
     profile::{self, Change, LayerRef, Namespace, Selection, Slot},
     switches,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
+pub(crate) use self::library::Library;
+use self::library::Write;
 use crate::{
     device::{Device, Failure, Presence},
     history::{History, Replay},
+    usage,
 };
 
 const PROFILE_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -64,6 +70,7 @@ pub(crate) struct Keyboard {
     pub(crate) switches: Option<switches::Settings>,
     pub(crate) models: switches::Models,
     pub(crate) unsaved: bool,
+    pub(crate) macros: Library,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -416,6 +423,47 @@ impl Store {
             .map_or_else(Vec::new, |linked| linked.links.clone())
     }
 
+    pub(crate) fn set_macro(
+        &mut self,
+        index: u8,
+        before: Option<&Macro>,
+        after: Option<Macro>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), Failure>> {
+        record_macro(&mut self.history, index, before, after.as_ref());
+        cx.notify();
+        self.write_macro(index, after, cx)
+    }
+
+    pub(crate) fn write_macro(
+        &self,
+        index: u8,
+        value: Option<Macro>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), Failure>> {
+        let summary = value.as_ref().map(macros::Summary::from);
+        let device = self.device.clone();
+        cx.spawn(async move |this, cx| {
+            let written = match Write::of(index, value) {
+                Write::Set(change) => device.configure::<SetMacro, ()>(*change).await,
+                Write::Clear(index) => device.configure::<ClearMacro, ()>(index).await,
+            };
+            this.update(cx, |store, cx| {
+                match &written {
+                    Ok(()) => {
+                        if let Some(keyboard) = &mut store.keyboard {
+                            keyboard.macros.set(index, summary);
+                        }
+                    }
+                    Err(error) => cx.emit(StoreEvent::Failed(error.to_string().into())),
+                }
+                cx.notify();
+            })
+            .ok();
+            written
+        })
+    }
+
     pub(crate) fn delete_profile(&mut self, profile: Slot, cx: &mut Context<Self>) -> Task<()> {
         self.history.clear();
         let call = self.device.configure::<DeleteProfile, ()>(profile);
@@ -762,6 +810,24 @@ impl Keyboard {
         .unwrap_or_default()
     }
 
+    pub(crate) fn legend(&self, action: Action) -> SharedString {
+        match action {
+            Action::Macro(index) => self.macros.legend(index),
+            _ => SharedString::from(usage::legend(action)),
+        }
+    }
+
+    pub(crate) fn action_name(&self, action: Action) -> Option<&str> {
+        match action {
+            Action::Function(Function::Profile(slot)) => self
+                .profiles
+                .get(usize::from(slot.get()))
+                .map(|info| info.name.as_str()),
+            Action::Macro(index) => self.macros.name(index),
+            _ => None,
+        }
+    }
+
     fn set_keymap(&mut self, layer: Layer, keymap: keys::Keymap) {
         if layer == Layer::Base {
             self.legends = keymap;
@@ -887,6 +953,10 @@ async fn load_snapshot(
         legends,
         fn_keymaps,
     } = load_profiles(&device).await?;
+    let macros = device
+        .configure::<GetMacros, macros::Summaries>(())
+        .await
+        .map_or_else(|_| Library::default(), |summaries| Library::of(&summaries));
     Ok(Keyboard {
         name: name.into(),
         device_name,
@@ -903,6 +973,7 @@ async fn load_snapshot(
         switches,
         models,
         unsaved: false,
+        macros,
     })
 }
 
@@ -997,9 +1068,27 @@ fn app_links_writer(profile: Slot, links: Vec<apps::Link>) -> Replay {
     Rc::new(move |store, cx| store.write_app_links(profile, links.clone(), cx))
 }
 
+fn record_macro(history: &mut History, index: u8, before: Option<&Macro>, after: Option<&Macro>) {
+    history.record_replays(
+        SetMacro::PATH,
+        Scope::Runtime,
+        &(index, before),
+        &(index, after),
+        macro_writer(index, before.cloned()),
+        macro_writer(index, after.cloned()),
+    );
+}
+
+fn macro_writer(index: u8, value: Option<Macro>) -> Replay {
+    Rc::new(move |store, cx| store.write_macro(index, value.clone(), cx))
+}
+
 #[cfg(test)]
 mod tests {
-    use openwoot_protocol::keys::Function;
+    use openwoot_protocol::{
+        heapless,
+        macros::{Mode, Name, Step},
+    };
 
     use super::*;
 
@@ -1078,5 +1167,59 @@ mod tests {
             found(&legends, &fn_keymaps, profile(0)),
             Vec::<Vec<Action>>::new()
         );
+    }
+
+    fn recorded(name: &str, steps: &[Step]) -> Macro {
+        Macro {
+            name: Name::try_from(name).unwrap(),
+            mode: Mode::Once,
+            steps: heapless::Vec::from_slice(steps).unwrap(),
+        }
+    }
+
+    fn undo_steps(mut history: History) -> usize {
+        let mut steps = 0;
+        while history.undo().is_some() {
+            steps += 1;
+        }
+        steps
+    }
+
+    #[test]
+    fn creating_editing_and_deleting_macros_can_each_be_undone_and_redone() {
+        let created = recorded("Copy", &[Step::Tap(KEY_A)]);
+        let edited = recorded("Copy", &[Step::Tap(KEY_A), Step::Delay(50)]);
+        let mut history = History::default();
+        record_macro(&mut history, 2, None, Some(&created));
+        record_macro(&mut history, 5, Some(&created), Some(&edited));
+        record_macro(&mut history, 7, Some(&edited), None);
+        assert!(history.undo().is_some());
+        assert!(history.can_redo());
+        assert!(history.redo().is_some());
+        assert_eq!(undo_steps(history), 3);
+    }
+
+    #[test]
+    fn quick_edits_of_one_macro_merge_but_edits_of_other_slots_never_do() {
+        let first = recorded("Copy", &[Step::Tap(KEY_A)]);
+        let second = recorded("Copy", &[Step::Tap(KEY_B)]);
+        let third = recorded("Copy", &[Step::Tap(ONE)]);
+        let mut same_slot = History::default();
+        record_macro(&mut same_slot, 1, Some(&first), Some(&second));
+        record_macro(&mut same_slot, 1, Some(&second), Some(&third));
+        assert_eq!(undo_steps(same_slot), 1);
+        let mut other_slots = History::default();
+        record_macro(&mut other_slots, 1, Some(&first), Some(&second));
+        record_macro(&mut other_slots, 2, Some(&second), Some(&third));
+        assert_eq!(undo_steps(other_slots), 2);
+    }
+
+    #[test]
+    fn an_unchanged_macro_leaves_no_undo_step() {
+        let value = recorded("Copy", &[Step::Tap(KEY_A)]);
+        let mut history = History::default();
+        record_macro(&mut history, 0, Some(&value), Some(&value));
+        record_macro(&mut history, 0, None, None);
+        assert!(!history.can_undo());
     }
 }

@@ -191,7 +191,10 @@ impl AdvancedPage {
         let kind = Kind::of(&entry.behaviour);
         let id = format!("entry-{}-{}", entry.layer.number(), entry.key.get());
         let keys: Vec<Div> = super::rules::bindings(&entry)
-            .map(|(key, _)| chip(self.action_of(Layer::Base, usize::from(key.get())), cx))
+            .map(|(key, _)| {
+                let action = self.action_of(Layer::Base, usize::from(key.get()));
+                chip(action, self.legend(action, cx), cx)
+            })
             .collect();
         h_flex()
             .id(SharedString::from(format!("{id}-row")))
@@ -243,9 +246,9 @@ impl AdvancedPage {
     fn summary(&self, entry: &advanced::Key, cx: &Context<Self>) -> Div {
         let bindings = |actions: &[Action]| {
             h_flex().gap(px(ROW_GAP)).children(
-                actions
-                    .iter()
-                    .map(|action| binding(*action, px(SUMMARY_BINDING), cx)),
+                actions.iter().map(|action| {
+                    binding(*action, self.legend(*action, cx), px(SUMMARY_BINDING), cx)
+                }),
             )
         };
         let text = |label: String| {

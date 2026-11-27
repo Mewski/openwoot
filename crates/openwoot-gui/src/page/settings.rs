@@ -6,7 +6,11 @@ mod sleep;
 use gpui_kit::{
     Context, Div, Entity, IntoElement, ParentElement as _, Render, Styled as _, Subscription,
     Window,
-    component::{WindowExt as _, h_flex, notification::Notification, v_flex},
+    component::{
+        ActiveTheme as _, Sizable as _, WindowExt as _, h_flex, notification::Notification,
+        spinner::Spinner, v_flex,
+    },
+    div,
     prelude::FluentBuilder as _,
     px,
 };
@@ -39,6 +43,9 @@ const NUM_LOCK: [(bool, &str); 2] = [
     (true, "Inverted: Input numbers when the indicator is off"),
 ];
 const RESTART_FAILED: &str = "Could not restart the keyboard.";
+const RESETTING: &str = "Resetting the keyboard";
+const RESET_WAIT: &str = "Erasing the settings takes a few seconds. Keep the keyboard connected.";
+const RESET_DONE: &str = "The keyboard is back to its factory settings";
 
 pub(crate) struct SettingsPage {
     store: Entity<Store>,
@@ -46,6 +53,7 @@ pub(crate) struct SettingsPage {
     global: Option<global::Settings>,
     layout: Option<LayoutState>,
     sleep: Sleep,
+    resetting: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -63,6 +71,7 @@ impl SettingsPage {
             global: None,
             layout: None,
             sleep: Sleep::of(None),
+            resetting: false,
             _subscriptions: subscriptions,
         };
         page.load(window, cx);
@@ -256,8 +265,8 @@ impl SettingsPage {
         .detach();
     }
 
-    fn confirm_factory_reset(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let store = self.store.clone();
+    fn confirm_factory_reset(window: &mut Window, cx: &mut Context<Self>) {
+        let page = cx.entity().downgrade();
         panel::confirm(
             panel::Confirmation::new(
                 "Are you sure you want to reset?",
@@ -265,25 +274,46 @@ impl SettingsPage {
                 "Reset",
             )
             .danger(),
-            move |_, cx| {
-                store.update(cx, |store, cx| {
-                    let reset = store.apply::<FactoryReset>((), Scope::Runtime, cx);
-                    cx.spawn(async move |store, cx| {
-                        if reset.await.is_ok()
-                            && let Ok(reload) = store.update(cx, |store, cx| {
-                                store.forget_changes(cx);
-                                store.reload(cx)
-                            })
-                        {
-                            reload.await;
-                        }
-                    })
-                    .detach();
-                });
+            move |window, cx| {
+                page.update(cx, |page, cx| page.factory_reset(window, cx))
+                    .ok();
             },
             window,
             cx,
         );
+    }
+
+    fn factory_reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.resetting {
+            return;
+        }
+        self.resetting = true;
+        cx.notify();
+        let reset = self.store.update(cx, |store, cx| {
+            store.apply::<FactoryReset>((), Scope::Runtime, cx)
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let done = reset.await.is_ok();
+            if done
+                && let Ok(reload) = this.update(cx, |page, cx| {
+                    page.store.update(cx, |store, cx| {
+                        store.forget_changes(cx);
+                        store.reload(cx)
+                    })
+                })
+            {
+                reload.await;
+            }
+            this.update_in(cx, |page, window, cx| {
+                page.resetting = false;
+                if done {
+                    window.push_notification(Notification::success(RESET_DONE), cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn restart_callout(id: &'static str, cx: &mut Context<Self>) -> Div {
@@ -475,23 +505,37 @@ impl SettingsPage {
         )
     }
 
-    fn reset_section(cx: &mut Context<Self>) -> Div {
-        entry(
+    fn reset_section(&self, cx: &mut Context<Self>) -> Div {
+        let section = entry(
             "Reset all keyboard settings",
             Some("Resetting all keyboard settings will restore the keyboard to its factory settings.".into()),
             None,
             cx,
-        )
-        .child(
-            h_flex().child(
-                ActionButton::new("factory-reset", "Reset all Keyboard Settings")
-                    .danger()
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.confirm_factory_reset(window, cx)),
-                    ),
-            ),
-        )
-        .child(callout(Tone::Danger, "This action cannot be reversed.", cx))
+        );
+        if self.resetting {
+            let theme = cx.theme();
+            return section
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .text_color(theme.group_box_foreground)
+                        .child(Spinner::new().small())
+                        .child(div().text_sm().child(RESETTING)),
+                )
+                .child(callout(Tone::Info, RESET_WAIT, cx));
+        }
+        section
+            .child(
+                h_flex().child(
+                    ActionButton::new("factory-reset", "Reset all Keyboard Settings")
+                        .danger()
+                        .on_click(
+                            cx.listener(|_, _, window, cx| Self::confirm_factory_reset(window, cx)),
+                        ),
+                ),
+            )
+            .child(callout(Tone::Danger, "This action cannot be reversed.", cx))
     }
 }
 
@@ -515,7 +559,7 @@ impl Render for SettingsPage {
             sections.push(self.layout_section(&layouts, cx));
         }
         sections.push(Self::restart_section(cx));
-        sections.push(Self::reset_section(cx));
+        sections.push(self.reset_section(cx));
         sheet("settings-sheet", Page::Settings.title(), sections, cx)
     }
 }

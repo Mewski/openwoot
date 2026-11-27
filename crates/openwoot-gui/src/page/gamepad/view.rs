@@ -29,7 +29,7 @@ use crate::{
     slider::Slider,
     store::Keyboard,
     switch::Switch,
-    theme, usage,
+    theme,
 };
 
 const VIEWS: [(View, &str); 3] = [
@@ -686,9 +686,7 @@ fn key_legend(keyboard: &Keyboard, key: usize) -> SharedString {
     keyboard
         .legends
         .get(key)
-        .map_or_else(SharedString::default, |action| {
-            SharedString::from(usage::legend(*action).into_owned())
-        })
+        .map_or_else(SharedString::default, |action| keyboard.legend(*action))
 }
 
 #[cfg(test)]

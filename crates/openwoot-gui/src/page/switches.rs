@@ -37,7 +37,7 @@ use crate::{
     panel::{self, Stage},
     store::{Keyboard, Scope, Store, StoreEvent},
     switch::Switch as Toggle,
-    theme, usage,
+    theme,
 };
 
 const FIRST_BRAND: &str = "Wooting";
@@ -354,7 +354,7 @@ impl SwitchesPage {
         let legend = keyboard
             .legends
             .get(key)
-            .map_or_default(|action| SharedString::from(usage::legend(*action)));
+            .map_or_default(|action| keyboard.legend(*action));
         let Some(settings) = &keyboard.switches else {
             return KeyFace {
                 legend,

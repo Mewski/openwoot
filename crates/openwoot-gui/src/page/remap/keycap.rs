@@ -2,7 +2,7 @@ use gpui_kit::{
     AnyElement, App, Div, ElementId, FontWeight, Hsla, InteractiveElement as _, IntoElement,
     ParentElement as _, Pixels, SharedString, Stateful, Styled as _,
     assets::IconName as Catalog,
-    component::{ActiveTheme as _, Icon, h_flex},
+    component::{ActiveTheme as _, Icon, h_flex, v_flex},
     div,
     prelude::FluentBuilder as _,
     px,
@@ -10,6 +10,8 @@ use gpui_kit::{
 use openwoot_protocol::keys::{Action, Function, MouseButton, SystemControl};
 
 use crate::{keyboard::Glyph, theme, usage};
+
+pub(crate) const MACRO_ICON: Catalog = Catalog::ListVideo;
 
 pub(crate) const TILE: f32 = 44.0;
 const TILE_RADIUS: f32 = 4.8;
@@ -25,6 +27,8 @@ const PRESET_CHIP_LINE: f32 = 14.4;
 const LARGE_BINDING: f32 = 60.0;
 const LARGE_BINDING_TEXT: f32 = 16.0;
 const ICON_SHARE: f32 = 0.42;
+const MACRO_ICON_SHARE: f32 = 0.7;
+const MACRO_TEXT_SHARE: f32 = 0.55;
 const DISABLED_OPACITY: f32 = 0.4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +37,7 @@ enum Art {
     Signed(Catalog, &'static str),
     Pair(Catalog, Catalog),
     Mouse(MouseButton),
+    Macro,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -41,10 +46,15 @@ pub(crate) struct Look {
     pub(crate) disabled: bool,
 }
 
-pub(crate) fn glyph(action: Action, ink: Hsla, accent: Hsla) -> Option<Glyph> {
+pub(crate) fn glyph(
+    action: Action,
+    legend: SharedString,
+    ink: Hsla,
+    accent: Hsla,
+) -> Option<Glyph> {
     let art = art(action)?;
     Some(Glyph::new(move |height| {
-        draw(art, height * ICON_SHARE, ink, accent)
+        draw(art, &legend, height * ICON_SHARE, ink, accent)
     }))
 }
 
@@ -60,6 +70,7 @@ pub(crate) fn alert(color: Hsla) -> Glyph {
 pub(crate) fn tile(
     id: impl Into<ElementId>,
     action: Action,
+    legend: SharedString,
     look: Look,
     cx: &App,
 ) -> Stateful<Div> {
@@ -94,13 +105,14 @@ pub(crate) fn tile(
                     .hover(move |style| style.bg(hover).border_color(hover_border))
             }
         })
-        .child(face(action, px(TILE), caps.legend, theme.primary))
+        .child(face(action, legend, px(TILE), caps.legend, theme.primary))
 }
 
-pub(crate) fn chip(action: Action, cx: &App) -> Div {
+pub(crate) fn chip(action: Action, legend: SharedString, cx: &App) -> Div {
     let caps = theme::keycaps();
     chip_frame(cx).child(face(
         action,
+        legend,
         px(CHIP_HEIGHT * 2.0),
         caps.legend,
         cx.theme().primary,
@@ -128,10 +140,16 @@ pub(crate) fn preset_chip(action: Action, cx: &App) -> Div {
         .line_height(px(PRESET_CHIP_LINE))
         .font_weight(FontWeight::BOLD)
         .text_color(caps.legend)
-        .child(face(action, px(PRESET_CHIP), caps.legend, theme.primary))
+        .child(face(
+            action,
+            usage::legend(action).into(),
+            px(PRESET_CHIP),
+            caps.legend,
+            theme.primary,
+        ))
 }
 
-pub(crate) fn binding(action: Action, size: Pixels, cx: &App) -> Div {
+pub(crate) fn binding(action: Action, legend: SharedString, size: Pixels, cx: &App) -> Div {
     let caps = theme::keycaps();
     let text = if size >= px(LARGE_BINDING) {
         LARGE_BINDING_TEXT
@@ -152,17 +170,23 @@ pub(crate) fn binding(action: Action, size: Pixels, cx: &App) -> Div {
         .text_center()
         .text_color(caps.legend)
         .when(action != Action::None, |this| {
-            this.child(face(action, size, caps.legend, cx.theme().primary))
+            this.child(face(action, legend, size, caps.legend, cx.theme().primary))
         })
 }
 
-pub(crate) fn face(action: Action, height: Pixels, ink: Hsla, accent: Hsla) -> AnyElement {
+pub(crate) fn face(
+    action: Action,
+    legend: SharedString,
+    height: Pixels,
+    ink: Hsla,
+    accent: Hsla,
+) -> AnyElement {
     match art(action) {
-        Some(art) => draw(art, height * ICON_SHARE, ink, accent),
+        Some(art) => draw(art, &legend, height * ICON_SHARE, ink, accent),
         None => div()
             .px_0p5()
             .text_center()
-            .child(SharedString::from(usage::legend(action)))
+            .child(legend)
             .into_any_element(),
     }
 }
@@ -192,6 +216,7 @@ const fn art(action: Action) -> Option<Art> {
         Action::Function(Function::BrightnessUp) => Art::Signed(Catalog::Lightbulb, "+"),
         Action::Function(Function::BrightnessDown) => Art::Signed(Catalog::Lightbulb, "−"),
         Action::Mouse(button) => Art::Mouse(button),
+        Action::Macro(_) => Art::Macro,
         _ => return None,
     })
 }
@@ -223,7 +248,7 @@ const fn consumer_art(code: u16) -> Option<Art> {
     })
 }
 
-fn draw(art: Art, size: Pixels, ink: Hsla, accent: Hsla) -> AnyElement {
+fn draw(art: Art, legend: &SharedString, size: Pixels, ink: Hsla, accent: Hsla) -> AnyElement {
     match art {
         Art::Icon(icon) => Icon::new(icon)
             .size(size)
@@ -245,6 +270,23 @@ fn draw(art: Art, size: Pixels, ink: Hsla, accent: Hsla) -> AnyElement {
             .child(Icon::new(second).size(size * 0.8).text_color(ink))
             .into_any_element(),
         Art::Mouse(button) => mouse(button, size, ink, accent),
+        Art::Macro => v_flex()
+            .items_center()
+            .child(
+                Icon::new(MACRO_ICON)
+                    .size(size * MACRO_ICON_SHARE)
+                    .text_color(accent),
+            )
+            .child(
+                div()
+                    .whitespace_nowrap()
+                    .text_size(size * MACRO_TEXT_SHARE)
+                    .line_height(size * MACRO_TEXT_SHARE * 1.2)
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(ink)
+                    .child(legend.clone()),
+            )
+            .into_any_element(),
     }
 }
 
@@ -350,5 +392,11 @@ mod tests {
             art(Action::Layer(openwoot_protocol::keys::Layer::One)),
             None
         );
+    }
+
+    #[test]
+    fn macros_are_drawn_with_the_macro_icon_and_their_legend() {
+        assert_eq!(art(Action::Macro(0)), Some(Art::Macro));
+        assert_eq!(art(Action::Macro(31)), Some(Art::Macro));
     }
 }

@@ -361,7 +361,7 @@ impl AdvancedPage {
         let listening = self.slot == Some(slot);
         let dragging = cx.has_active_drag();
         let accent = cx.theme().primary;
-        binding(action, size, cx)
+        binding(action, self.legend(action, cx), size, cx)
             .id(ElementId::Name(format!("binding-slot-{slot:?}").into()))
             .relative()
             .cursor_pointer()

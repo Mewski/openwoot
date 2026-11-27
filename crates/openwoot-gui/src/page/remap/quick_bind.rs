@@ -48,14 +48,19 @@ pub(crate) fn usage_of_character(character: char) -> Option<u8> {
 }
 
 pub(crate) fn pressed_modifier(before: Modifiers, after: Modifiers) -> Option<u8> {
+    let held: Vec<u8> = modifier_usages(before).collect();
+    modifier_usages(after).find(|usage| !held.contains(usage))
+}
+
+pub(crate) fn modifier_usages(modifiers: Modifiers) -> impl Iterator<Item = u8> {
     [
-        (before.control, after.control, 0xE0),
-        (before.shift, after.shift, 0xE1),
-        (before.alt, after.alt, 0xE2),
-        (before.platform, after.platform, 0xE3),
+        (modifiers.control, 0xE0),
+        (modifiers.shift, 0xE1),
+        (modifiers.alt, 0xE2),
+        (modifiers.platform, 0xE3),
     ]
     .into_iter()
-    .find_map(|(was, is, code)| (!was && is).then_some(code))
+    .filter_map(|(held, usage)| held.then_some(usage))
 }
 
 fn character_usage(key: &str) -> Option<u8> {
@@ -145,5 +150,20 @@ mod tests {
         assert_eq!(pressed_modifier(none, shift), Some(0xE1));
         assert_eq!(pressed_modifier(shift, shift_and_command), Some(0xE3));
         assert_eq!(pressed_modifier(shift, none), None);
+    }
+
+    #[test]
+    fn held_modifiers_map_to_their_left_usages_in_report_order() {
+        let held = Modifiers {
+            control: true,
+            alt: true,
+            platform: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            modifier_usages(held).collect::<Vec<_>>(),
+            [0xE0, 0xE2, 0xE3]
+        );
+        assert_eq!(modifier_usages(Modifiers::default()).count(), 0);
     }
 }

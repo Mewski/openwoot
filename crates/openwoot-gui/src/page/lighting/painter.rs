@@ -9,7 +9,6 @@ use crate::{
     color_picker::{ColorPicker, hsla_of},
     keyboard::{KeyFace, KeyboardView},
     store::Keyboard,
-    usage,
 };
 
 const INHERITED_OPACITY: f32 = 0.45;
@@ -31,8 +30,7 @@ impl LightingPage {
                 .unwrap_or(key_colors::BLACK);
             let fill = hsla_of(color);
             KeyFace {
-                legend: usage::legend(keyboard.legends.get(index).copied().unwrap_or_default())
-                    .into(),
+                legend: keyboard.legend(keyboard.legends.get(index).copied().unwrap_or_default()),
                 fill: Some(if inherited {
                     fill.opacity(INHERITED_OPACITY)
                 } else {

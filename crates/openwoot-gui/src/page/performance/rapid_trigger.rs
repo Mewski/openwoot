@@ -1,6 +1,6 @@
 use gpui_kit::{
     App, AppContext as _, Context, Div, Entity, FontWeight, IntoElement, ParentElement as _,
-    Render, SharedString, Styled as _, Subscription, Window,
+    Render, Styled as _, Subscription, Window,
     component::{ActiveTheme as _, h_flex, v_flex},
     div,
     prelude::FluentBuilder as _,
@@ -20,7 +20,6 @@ use crate::{
     panel,
     store::{Keyboard, Store},
     switch::Switch,
-    usage,
 };
 
 const PROMPT: &str = "To adjust rapid trigger, please select one or more keys first";
@@ -77,7 +76,7 @@ impl RapidTriggerPage {
         let legend = keyboard
             .legends
             .get(key)
-            .map_or_default(|action| SharedString::from(usage::legend(*action)));
+            .map_or_default(|action| keyboard.legend(*action));
         let Some(own) = self
             .tuning
             .read(cx)

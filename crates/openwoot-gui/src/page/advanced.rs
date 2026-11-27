@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Div, Entity, FocusHandle, IntoElement,
-    ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Subscription, Window,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Window,
     assets::IconName as Catalog,
     component::{
         ActiveTheme as _, Icon, WindowExt as _,
@@ -147,7 +148,7 @@ impl Tab {
 
 impl AdvancedPage {
     pub(crate) fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let picker = cx.new(|cx| ActionPicker::new(window, cx).flush());
+        let picker = cx.new(|cx| ActionPicker::new(&store, window, cx).flush());
         let hold_time = cx.new(|_| {
             SliderState::new()
                 .min(HOLD_TIME_MIN_MS)
@@ -332,8 +333,6 @@ impl AdvancedPage {
             return;
         };
         let profile = keyboard.active;
-        self.picker
-            .update(cx, |picker, cx| picker.set_keyboard(&keyboard, cx));
         let entries = self.store.update(cx, |store, cx| {
             store.fetch::<GetAdvancedKeys, _>(profile, cx)
         });
@@ -472,6 +471,13 @@ impl AdvancedPage {
         } else {
             legend.into_owned()
         }
+    }
+
+    fn legend(&self, action: Action, cx: &App) -> SharedString {
+        self.store.read(cx).keyboard().map_or_else(
+            || SharedString::from(usage::legend(action)),
+            |keyboard| keyboard.legend(action),
+        )
     }
 
     fn index_name(&self, index: Index) -> String {
@@ -996,9 +1002,10 @@ impl AdvancedPage {
             Some(Action::None) | None => base,
             Some(action) => action,
         };
+        let legend = keyboard.legend(shown);
         let mut face = KeyFace {
-            legend: usage::legend(shown).into(),
-            glyph: super::remap::glyph(shown, caps.legend, theme.primary),
+            glyph: super::remap::glyph(shown, legend.clone(), caps.legend, theme.primary),
+            legend,
             dimmed: matches!(own, Some(Action::None) | None),
             ..KeyFace::default()
         };

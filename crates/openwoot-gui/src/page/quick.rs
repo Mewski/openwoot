@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::{
     App, AppContext as _, Axis, Context, Div, Entity, FontWeight, Hsla, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Subscription, Window,
+    IntoElement, ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _,
+    Subscription, Window,
     component::{ActiveTheme as _, h_flex, v_flex},
     div,
     prelude::FluentBuilder as _,
@@ -33,7 +33,6 @@ use crate::{
     panel,
     store::{Keyboard, Store, StoreEvent},
     switch::Switch,
-    usage,
 };
 
 const SCAN_INTERVAL: Duration = Duration::from_secs(1);
@@ -225,7 +224,7 @@ impl QuickPage {
         let legend = keyboard
             .legends
             .get(key)
-            .map_or_default(|action| SharedString::from(usage::legend(*action)));
+            .map_or_default(|action| keyboard.legend(*action));
         let fill = self
             .colors
             .as_ref()

@@ -442,6 +442,13 @@ fn describe(action: Action, length: Length) -> Cow<'static, str> {
             let (short, long) = control(gamepad);
             Cow::Borrowed(length.pick(short, long))
         }
+        Action::Macro(index) => {
+            let number = u16::from(index) + 1;
+            Cow::Owned(match length {
+                Length::Short => format!("M{number}"),
+                Length::Long => format!("Macro {number}"),
+            })
+        }
         Action::Layer(layer) => Cow::Borrowed(match layer {
             Layer::Base => length.pick("Base", "Base layer"),
             Layer::One => length.pick(
@@ -589,5 +596,11 @@ mod tests {
         let sixth = Action::Function(Function::Profile(Slot::new(5)));
         assert_eq!(legend(sixth), "P6");
         assert_eq!(name(sixth), "Switch to Profile 6");
+    }
+
+    #[test]
+    fn macros_are_named_by_their_slot_from_one() {
+        assert_eq!(legend(Action::Macro(0)), "M1");
+        assert_eq!(name(Action::Macro(31)), "Macro 32");
     }
 }

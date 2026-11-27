@@ -43,13 +43,14 @@ const SHORTCUTS_HELP: &str = "Use this shortcut to quickly swap to this profile.
 const UNDO_HELP: &str = "to Undo";
 const REDO_HELP: &str = "to Redo";
 const USAGE_Z: u8 = 0x1D;
-const CONFIGURATION: [Page; 7] = [
+const CONFIGURATION: [Page; 8] = [
     Page::Actuation,
     Page::RapidTrigger,
     Page::Lighting,
     Page::Lightbar,
     Page::Remap,
     Page::Advanced,
+    Page::Macros,
     Page::Gamepad,
 ];
 const RADIUS: f32 = 8.0;
