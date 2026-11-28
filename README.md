@@ -58,6 +58,6 @@ factory bootloader is never written by any of these steps. Details: [docs/flashi
 | [docs/adding-a-board.md](docs/adding-a-board.md) | what a new board needs |
 | [AGENTS.md](AGENTS.md) | rules of the tree for contributors and coding agents |
 
-## Licence
+## License
 
-MIT, see [LICENSE](LICENSE).
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
